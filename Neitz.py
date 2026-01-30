@@ -172,3 +172,89 @@ class Neitz:
         mx = float(np.max(np.abs(sta)))
         self.sta_norm = sta / mx if mx > 0 else sta
         return self.sta_norm
+    
+    def find_first_stim_onset_by_peak(
+        self,
+        *,
+        prom: float = None,        # peak prominence on stim channel
+        height: float = None,      # peak height on stim channel
+        onset_frac: float = 0.2,   # onset defined at 20% of peak above baseline
+        search_from_s: float = 0.0 # ignore anything before this time (seconds)
+    ):
+        """
+        For stim traces that look like narrow pulses (your plot), find the FIRST pulse
+        using find_peaks, then compute an onset time by walking left to a fraction of peak.
+        """
+        self._require("stim_ch")
+        self._require("time_vec")
+        self._require("fs")
+
+        t = self.time_vec
+        y = np.asarray(self.stim_ch)
+
+        # optional: restrict search window
+        if search_from_s > 0:
+            i0 = int(np.searchsorted(t, search_from_s))
+            y_search = y[i0:]
+            offset = i0
+        else:
+            y_search = y
+            offset = 0
+
+        # baseline for thresholding onset
+        baseline = np.percentile(y_search, 5)
+
+        # find peaks (in stim units)
+        peaks, props = find_peaks(y_search, prominence=prom, height=height)
+        if len(peaks) == 0:
+            raise RuntimeError("No stim peaks found. Tune prom/height or check stim channel.")
+
+        p = int(peaks[0])          # FIRST peak only
+        p_abs = p + offset         # index in full trace
+
+        # onset: last sample BEFORE rising edge crosses baseline + frac*(peak-baseline)
+        thresh = baseline + onset_frac * (y_search[p] - baseline)
+
+        i = p
+        while i > 0 and y_search[i] >= thresh:
+            i -= 1
+        onset_abs = i + offset
+
+        self.stim_peak_idx = p_abs
+        self.stim_on_idx = onset_abs
+        self.t_on = float(t[onset_abs])
+        return self.t_on
+
+    def firing_rate_pre_post_first_pulse(
+        self,
+        *,
+        pre_s: float = 0.2,
+        post_s: float = 0.2,
+        latency_s: float = 0.0,
+        prom: float = None,
+        height: float = None,
+        onset_frac: float = 0.2,
+        search_from_s: float = 0.0,
+    ):
+        """
+        Uses FIRST stim pulse onset only, then computes pre/post firing rates.
+        """
+        self._require("time_vec")
+        if not hasattr(self, "peaks"):
+            self.find_spikes()
+
+        t_on = self.find_first_stim_onset_by_peak(
+            prom=prom, height=height, onset_frac=onset_frac, search_from_s=search_from_s
+        ) + float(latency_s)
+
+        spike_t = self.time_vec[self.peaks]
+        n_pre = np.sum((spike_t >= (t_on - pre_s)) & (spike_t < t_on))
+        n_post = np.sum((spike_t >= t_on) & (spike_t < (t_on + post_s)))
+
+        return {
+            "t_on_s": t_on,
+            "pre_rate_hz": float(n_pre / pre_s),
+            "post_rate_hz": float(n_post / post_s),
+            "n_pre": int(n_pre),
+            "n_post": int(n_post),
+        }
