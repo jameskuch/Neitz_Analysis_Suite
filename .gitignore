@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Editor/IDE
+.vscode/
+.idea/
+
+# Generated outputs
+*.png
+
+# Old / scratch notebooks (kept locally, not in repo)
+STA_test.ipynb
+testingbed.ipynb
