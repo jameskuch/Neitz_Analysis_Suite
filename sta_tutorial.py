@@ -76,7 +76,6 @@ def example_2_multiple_trials_one_fig(
     abf_names: list[str] | None = None,
     csv_name: str | None = None,
     duration_s: float = 1.0,
-    overlay: bool = True,
     show: bool = True,
 ):
     """Load multiple trials and show contrast in one figure (flicker view, no spikes)."""
@@ -84,10 +83,8 @@ def example_2_multiple_trials_one_fig(
         abf_names = [f"2026_02_04_{i:04d}.abf" for i in range(5, 10)]
     return Neitz.load_trials_and_plot_flicker(
         abf_names,
-        filepath=FILEPATH,
         csv_name=csv_name or CSV_NAME,
         duration_s=duration_s,
-        overlay=overlay,
         show=show,
         **NEITZ_KW,
     )
@@ -107,7 +104,6 @@ def example_3_multiple_trials_sta(
         abf_names = [f"2026_02_04_{i:04d}.abf" for i in range(5, 10)]
     return Neitz.load_trials_sta_and_plot(
         abf_names,
-        filepath=FILEPATH,
         csv_name=csv_name or CSV_NAME,
         smooth_ms=smooth_ms,
         show=show,
@@ -123,7 +119,7 @@ if __name__ == "__main__":
     example_1_single_trial_one_fig()
 
     print("Example 2: Multiple trials in one figure")
-    example_2_multiple_trials_one_fig(overlay=True)
+    example_2_multiple_trials_one_fig()
 
     print("Example 3: Multiple trials → STA → figure")
     example_3_multiple_trials_sta(smooth_ms=1.0)
