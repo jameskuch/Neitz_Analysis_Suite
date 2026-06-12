@@ -34,8 +34,11 @@ from neitz.io import load_recording
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
 
-DEFAULT_GLOBS = ["ipRGC barak/**/*.abf", "SaraipRGC/**/*.abf", "**/*.abf"]
-DEFAULT_DIR = os.getcwd()
+# default browse location is the managed data store (~/Documents/ephysdataio)
+EPHYS_ROOT = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
+DEFAULT_GLOBS = [os.path.join(EPHYS_ROOT, "**", "*.abf"),
+                 os.path.join(EPHYS_ROOT, "**", "*.csv")]
+DEFAULT_DIR = EPHYS_ROOT if os.path.isdir(EPHYS_ROOT) else os.getcwd()
 _last_dir = DEFAULT_DIR          # remembered folder; native dialogs open here
 PALETTE = pc.qualitative.Plotly
 BIN_RATE = 200      # Hz — bin spikes to this rate before FFT

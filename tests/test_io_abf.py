@@ -11,11 +11,12 @@ from neitz.spikes import detect_spikes
 from neitz.analysis import flicker
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# the .abf is gitignored and may live in a few places locally; use whichever exists
+_STORE = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
+# the .abf lives in the data store (gitignored); use whichever path exists
 _CANDIDATES = [
+    os.path.join(_STORE, "2026-06-02", "c01", "raw", "2026_06_02_0044.abf"),
     os.path.join(ROOT, "data", "2026_06_02_0044.abf"),
     os.path.join(ROOT, "data", "ipRGC barak", "ipRGC", "2026_06_02_0044.abf"),
-    os.path.join(ROOT, "ipRGC barak", "ipRGC", "2026_06_02_0044.abf"),
 ]
 DATA = next((p for p in _CANDIDATES if os.path.exists(p)), _CANDIDATES[0])
 

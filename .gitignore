@@ -13,8 +13,11 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Generated outputs
+# Generated figures / analysis outputs (these live in ~/Documents/ephysdataio,
+# not in the repo)
 *.png
+*.pdf
+*.svg
 
 # Python packaging / build artifacts
 *.egg-info/
@@ -22,20 +25,6 @@ build/
 dist/
 .pytest_cache/
 
-# Old / scratch notebooks (kept locally, not in repo)
+# Scratch notebooks (kept locally, not in repo)
 STA_test.ipynb
 testingbed.ipynb
-
-# Large local data — kept locally, NOT in repo (too big; 173MB c4.mat breaks GitHub)
-SaraipRGC/
-ipRGC barak/
-abfUtilities-main/
-*.mat
-data/2026_06_02_*.abf
-data/old abf files/
-
-# Generated analysis outputs (reproducible)
-barak-siso-spikes.csv
-flicker_metrics.csv
-flicker_onoff_metrics.csv
-flicker_onoff_pooled_metrics.csv
