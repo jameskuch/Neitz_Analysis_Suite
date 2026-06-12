@@ -22,7 +22,7 @@ def test_mirror_true_copy_and_delete(tmp_path):
     (src / "2026-06-02" / "c01" / "manifest.json").write_text("{}")
     (src / "2026-06-02" / "c01" / "raw" / "a.abf").write_bytes(b"AAA")
 
-    info = mirror_store(src, dst)
+    mirror_store(src, dst)
     assert (dst / "2026-06-02" / "c01" / "raw" / "a.abf").read_bytes() == b"AAA"
     assert (dst / "2026-06-02" / "c01" / "manifest.json").exists()
 

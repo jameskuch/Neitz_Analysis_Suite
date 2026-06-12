@@ -1,13 +1,15 @@
 """
 neitz.cli — command-line interface to the analysis pipeline.
 
-After `pip install -e .`:   neitz flicker data/ipRGC\\ barak --out flicker
-Without reinstalling:       python -m neitz flicker "data/ipRGC barak" --out flicker
+After `pip install -e .`:   neitz cell 2026-06-02 c01
+Without reinstalling:       python -m neitz flicker "~/Documents/ephysdataio/2026-06-02"
 
 Subcommands:
-  flicker FOLDER     per-file vector strength + per-cell pooled ON/OFF
-  spikes  FOLDER     detect spikes -> binary spike-train CSV (siso-spikes layout)
+  cell    DATE CELL   run an analysis on a stored cell (outputs into the cell)
+  flicker FOLDER      per-file vector strength + per-cell pooled ON/OFF
+  spikes  FOLDER      detect spikes -> binary spike-train CSV (siso-spikes layout)
   noise   SPIKE_CSV STIM_CSV    S-iso reverse correlation (STA / linear filter)
+  mirror  [--set PATH] duplicate the store to this computer's mirror
 """
 from __future__ import annotations
 import argparse
@@ -141,7 +143,7 @@ def main(argv=None) -> int:
         print("\npooled ON/OFF:")
         _print_table(res.tables["pooled_onoff"],
                      ["n_trials", "flicker_hz", "on_ratio", "on_p", "off_ratio", "off_p", "verdict"])
-        print(f"\noutputs written into the cell's outputs/flicker/ (PNG/PDF/SVG + metrics.csv + result.json)")
+        print("\noutputs written into the cell's outputs/flicker/ (PNG/PDF/SVG + metrics.csv + result.json)")
 
     return 0
 

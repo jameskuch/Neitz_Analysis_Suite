@@ -217,6 +217,8 @@ app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, chi
     # ---- data store: pick a cell from the manifest, edit stimulus metadata, run analysis ----
     html.Div(style={"display": "flex", "gap": "10px", "alignItems": "flex-end",
                     "marginBottom": "6px", "flexWrap": "wrap"}, children=[
+        html.Button("📥 Import data…", id="import-data", n_clicks=0,
+                    style={"height": "34px", "fontWeight": "bold"}),
         html.Div([html.Label("cell (data store)"),
                   dcc.Dropdown(id="cell-select", options=store_cell_options(),
                                placeholder="pick a date / cell…", style={"width": "300px"})]),
@@ -302,7 +304,7 @@ app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, chi
     ]),
     html.Div(id="readout", style={"margin": "4px 0", "fontWeight": "bold", "fontSize": "12px"}),
     dcc.Graph(id="time", style={"height": "560px"}),
-    dcc.Graph(id="fft", style={"height": "340px"}),
+    dcc.Graph(id="fft", style={"height": "340px", "width": "33%"}),
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
     dcc.Interval(id="once", interval=300, max_intervals=1),
 ])
@@ -627,6 +629,42 @@ def run_cell(_n, sel):
         return str(e)
     except Exception as e:
         return f"error: {e}"
+
+
+# ---- import new experiment data into the store (copies + auto-groups by date) --
+@app.callback(Output("cell-select", "options", allow_duplicate=True),
+              Output("store-msg", "children", allow_duplicate=True),
+              Input("import-data", "n_clicks"),
+              State("stim-type", "value"), State("stim-params", "value"),
+              prevent_initial_call=True)
+def import_data(_n, stype, sparams):
+    import re
+    folder = native_choose_folder()
+    if not folder:
+        return no_update, no_update
+    abfs = sorted(glob.glob(os.path.join(folder, "**", "*.abf"), recursive=True))
+    if not abfs:
+        return no_update, f"no .abf files found in {folder}"
+    by_date = {}
+    for f in abfs:
+        m = re.match(r"(\d{4})_(\d{2})_(\d{2})", os.path.basename(f))
+        date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else "undated"
+        by_date.setdefault(date, []).append(f)
+
+    stim = None
+    if stype and stype != "(none)":
+        stim = {"type": stype, "params": parse_params(sparams), "source": "user"}
+
+    ds = DataStore()
+    made = []
+    for date, fs in sorted(by_date.items()):
+        cm = ds.new_cell(date, label=os.path.basename(folder.rstrip("/")))
+        for f in fs:
+            cm.add_recording(f, label=os.path.basename(f), stimulus=stim)
+        cm.save()
+        made.append(f"{date}/{cm.data['cell']} ({len(fs)})")
+    ds.update_index()
+    return store_cell_options(), f"imported {len(abfs)} recordings → " + ", ".join(made)
 
 
 # ---- back up the whole data store to this computer's mirror -------------------

@@ -7,7 +7,7 @@ engine extends to the subdivided-checkerboard spatiotemporal map: a 1-D stimulus
 gives a temporal filter; an (n_checks, time) stimulus gives an STRF, one filter per
 check (run reverse_correlation per column).
 
-Matches Sara's MTFanalysis / extract_siso4.py exactly:
+Matches Sara's MTFanalysis exactly:
     filter = real(ifft( fft(response) * conj(fft(stimulus)) ))[:filter_len]
 with the normalization gotcha made explicit (Sara's graphDataOnline divides the
 DISPLAY by max(abs); her internal analysis.linearFilter divides by std).

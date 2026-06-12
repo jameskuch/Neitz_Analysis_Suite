@@ -4,7 +4,7 @@ neitz.run — headless orchestration: folder/recordings -> structured, saveable 
 Reuses the Paradigm classes so the CLI, notebooks, and the GUI share one core.
 
     from neitz.run import run_flicker, from_folder, Result
-    res = run_flicker(from_folder("data/ipRGC barak"))
+    res = run_flicker(from_folder("~/Documents/ephysdataio/2026-06-02"))
     res.save("flicker_results")        # -> flicker_results.json (+ .npz if arrays)
     res.save_csv("flicker_summary.csv")
 """

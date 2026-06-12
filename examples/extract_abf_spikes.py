@@ -4,7 +4,7 @@ extract_abf_spikes.py — convert .abf recordings to the siso-spikes.csv format.
 Thin client of the neitz package: detects action currents (escaped spikes) on the
 current channel and writes a binary spike-train CSV in the exact siso-spikes.csv
 layout (col 0 = time @ OUT_RATE Hz, one binary column per recording = "epoch"),
-so it can feed extract_siso4.py.
+in the siso-spikes.csv layout.
 
 Usage:
     /Users/j/miniconda3/bin/python extract_abf_spikes.py

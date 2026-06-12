@@ -6,7 +6,7 @@ plotting side effects. Here a Recording just gives you clean access to channels
 (by name OR index), the time vector, the sample rate, and metadata — nothing more.
 
     from neitz.io.abf import Recording
-    rec = Recording.load("ipRGC barak/ipRGC/2026_06_02_0044.abf")
+    rec = Recording.load("~/Documents/ephysdataio/2026-06-02/c01/raw/2026_06_02_0044.abf")
     im  = rec.channel("Im_prime")     # by name (case-insensitive, partial ok)
     ttl = rec.channel("TTL")
     t   = rec.time()
