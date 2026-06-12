@@ -50,7 +50,13 @@ def detect_spikes(signal, fs, *, polarity: str = "neg", method: str = "mad",
                   refractory_s: float = 0.002) -> SpikeTrain:
     """
     polarity : 'neg' (downward), 'pos' (upward), or 'abs' (either)
-    method   : 'mad' -> threshold = k * robust-sigma ; 'abs' -> threshold = abs_threshold
+    method   :
+      'mad'        -> threshold = k * robust-sigma (noise-adaptive, per recording)
+      'abs'        -> threshold = abs_threshold (fixed pA)
+      'mad_floor'  -> threshold = max(k * robust-sigma, abs_threshold). k·MAD still
+                      adapts to each file's noise, but a spike must ALSO clear the
+                      absolute floor — rejects small proximal-cell events while
+                      keeping noise-adaptive detection.
     """
     signal = np.asarray(signal, dtype=float)
     med = np.median(signal)
@@ -71,8 +77,10 @@ def detect_spikes(signal, fs, *, polarity: str = "neg", method: str = "mad",
         if abs_threshold is None:
             raise ValueError("method='abs' requires abs_threshold")
         height = float(abs_threshold)
+    elif method == "mad_floor":
+        height = max(k * sigma, float(abs_threshold or 0.0))
     else:
-        raise ValueError("method must be 'mad' or 'abs'")
+        raise ValueError("method must be 'mad', 'abs', or 'mad_floor'")
 
     peaks, _ = find_peaks(sig, height=height, distance=max(1, int(fs * refractory_s)))
     return SpikeTrain(times=peaks / fs, fs=fs, amplitudes=sig[peaks],
