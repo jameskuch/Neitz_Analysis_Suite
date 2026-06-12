@@ -30,7 +30,7 @@ import plotly.colors as pc
 from plotly.subplots import make_subplots
 from dash import Dash, dcc, html, Input, Output, State, ctx, no_update
 
-from neitz.io.abf import Recording
+from neitz.io import load_recording
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
 
@@ -72,13 +72,13 @@ def _osascript(script):
 
 def native_choose_file():
     if platform.system() == "Darwin":
-        return _osascript(f'POSIX path of (choose file with prompt "Select an ABF file" '
-                          f'default location (POSIX file "{_last_dir}") of type {{"abf"}})')
+        return _osascript(f'POSIX path of (choose file with prompt "Select an ABF or spike CSV" '
+                          f'default location (POSIX file "{_last_dir}") of type {{"abf", "csv"}})')
     try:
         import tkinter as tk
         from tkinter import filedialog
         root = tk.Tk(); root.withdraw()
-        p = filedialog.askopenfilename(filetypes=[("ABF", "*.abf"), ("All", "*.*")])
+        p = filedialog.askopenfilename(filetypes=[("ABF/CSV", "*.abf *.csv"), ("All", "*.*")])
         root.destroy(); return p or None
     except Exception:
         return None
@@ -104,7 +104,7 @@ _CACHE: dict[str, dict] = {}
 
 def get_recording(path):
     if path not in _CACHE:
-        _CACHE[path] = dict(rec=Recording.load(path), chans={}, flicker={})
+        _CACHE[path] = dict(rec=load_recording(path), chans={}, flicker={})
     return _CACHE[path]["rec"]
 
 
@@ -117,13 +117,16 @@ def get_channel(path, name):
 
 
 def get_flicker(path, ttl_name):
-    get_recording(path)
+    rec = get_recording(path)
     fc = _CACHE[path]["flicker"]
     if ttl_name not in fc:
-        try:
-            fc[ttl_name] = flk.detect_flicker(get_channel(path, ttl_name), _CACHE[path]["rec"].fs)
-        except Exception:
-            fc[ttl_name] = None
+        if getattr(rec, "protocol", "") == "csv-spikes":
+            fc[ttl_name] = None          # spike CSVs have no frame-sync / flicker
+        else:
+            try:
+                fc[ttl_name] = flk.detect_flicker(get_channel(path, ttl_name), rec.fs)
+            except Exception:
+                fc[ttl_name] = None
     return fc[ttl_name]
 
 

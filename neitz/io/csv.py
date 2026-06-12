@@ -11,6 +11,7 @@ instance state). Used by the extract_siso* scripts.
     stim = ncsv.stim_phase_only(epochs, phases)              # STIM-phase rows only
 """
 from __future__ import annotations
+import os
 import numpy as np
 import pandas as pd
 
@@ -104,3 +105,63 @@ def stim_phase_only(stim_epochs, phases):
     if not mask.any():
         raise ValueError("phase column present but no rows labeled 'STIM'")
     return stim_epochs[mask, :]
+
+
+class CsvSpikeRecording:
+    """
+    Adapter presenting a spike CSV (col 0 = time, cols 1.. = spike channels) with
+    the same interface as neitz.io.abf.Recording, so the viewer and tools can open a
+    spike CSV like an .abf. Each spike column becomes a channel ("ch1", "ch2", ...);
+    values may be binary (0/1) or spike amplitudes (only `> 0` marks a spike).
+    """
+
+    def __init__(self, path):
+        time, spikes = load_spikes_csv(path)
+        self.path = str(path)
+        self._time = np.asarray(time, dtype=float)
+        self._spikes = np.asarray(spikes, dtype=float)
+        dt = float(np.median(np.diff(self._time))) if self._time.size > 1 else 1.0
+        self.fs = (1.0 / dt) if dt else 1.0
+        self.duration = float(self._time[-1]) if self._time.size else 0.0
+        m = self._spikes.shape[1]
+        self.channel_names = [f"ch{i + 1}" for i in range(m)]
+        self.channel_units = ["spikes"] * m
+        self.n_channels = m
+        self.n_sweeps = 1
+        self.protocol = "csv-spikes"
+
+    @classmethod
+    def load(cls, path):
+        return cls(path)
+
+    def resolve_channel(self, channel) -> int:
+        if isinstance(channel, (int, np.integer)):
+            return int(channel)
+        name = str(channel).lower()
+        names = [n.lower() for n in self.channel_names]
+        if name in names:
+            return names.index(name)
+        raise KeyError(f"channel {channel!r} not in {self.channel_names}")
+
+    def channel(self, channel, sweep: int = 0) -> np.ndarray:
+        return self._spikes[:, self.resolve_channel(channel)].copy()
+
+    def time(self, sweep: int = 0) -> np.ndarray:
+        return self._time.copy()
+
+    def units(self, channel) -> str:
+        return "spikes"
+
+    def metadata(self) -> dict:
+        return {
+            "file": os.path.basename(self.path),
+            "protocol": self.protocol,
+            "sample rate": f"{self.fs:.0f} Hz",
+            "duration": f"{self.duration:.2f} s",
+            "samples": int(self._time.size),
+            "channels": ", ".join(self.channel_names),
+        }
+
+    def __repr__(self):
+        return (f"<CsvSpikeRecording {self.path!r} fs={self.fs:.0f}Hz "
+                f"dur={self.duration:.1f}s channels={self.channel_names}>")

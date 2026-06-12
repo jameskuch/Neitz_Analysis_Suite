@@ -32,6 +32,25 @@ def test_stimulus_epochs_frame_number(tmp_path):
     assert np.allclose(ncsv.stim_phase_only(ep, ph), ep)   # no phase -> all rows
 
 
+def test_csv_spike_recording(tmp_path):
+    from neitz.io import load_recording, CsvSpikeRecording
+    from neitz.spikes import detect_spikes
+    p = tmp_path / "spk.csv"
+    # ch1 spikes at interior, well-separated rows (avoid find_peaks edges/refractory)
+    p.write_text("0,0,0\n0.0001,0,0\n0.0002,1,0\n0.0003,0,5\n0.0004,1,5\n0.0005,0,0\n")
+    rec = load_recording(str(p))                       # dispatched by extension
+    assert isinstance(rec, CsvSpikeRecording)
+    assert rec.channel_names == ["ch1", "ch2"]
+    assert abs(rec.fs - 10000) < 1                     # dt = 0.0001 s
+    assert rec.channel("ch1").shape == (6,)
+    assert rec.units("ch1") == "spikes"
+    assert rec.metadata()["protocol"] == "csv-spikes"
+    # the spike columns can be "detected" with an absolute threshold
+    st = detect_spikes(rec.channel("ch1"), rec.fs, polarity="pos", method="abs",
+                       abs_threshold=0.5, refractory_s=0.0001)
+    assert len(st) == 2                                # two 1s in ch1
+
+
 def test_stimulus_epochs_phase_column(tmp_path):
     p = tmp_path / "stim.csv"
     p.write_text("Phase,Stim1,Stim2\nPRE,0,0\nSTIM,0.5,-0.5\nSTIM,0.1,0.2\n")
