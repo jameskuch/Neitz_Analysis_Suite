@@ -1,66 +1,29 @@
-import Neitz as ne
+"""jk.py — quick look at one .abf: current (spike) channel + stimulus/frame-sync.
+
+Thin client of neitz.io.Recording (no plotting side-effects, unlike the old monolith).
+"""
 import numpy as np
-
-import pandas as pd
-
 from matplotlib import pyplot as pl
 
-start = 40
-end = 40
-#abf_names = [f"ep{i:01d}.abf" for i in range(start, end + 1)]
-abf_names = [f"2026_06_02_{i:04d}.abf" for i in range(start, end + 1)]
-duration_s = 6.0  # seconds to show (starting from t=0)
+from neitz.io.abf import Recording
 
+# pick a file (channel 0 = current/spikes, channel 2 = TTL/stimulus)
+ABF = "data/ipRGC barak/ipRGC/2026_06_02_0040.abf"
+SPIKE_CH = 0
+STIM_CH = 2
 
+rec = Recording.load(ABF)
+time_vec = rec.time()
+spike_ch = rec.channel(SPIKE_CH)
+stim_raw = rec.channel(STIM_CH)
+stim_ch = (stim_raw - float(np.max(stim_raw))) * -1.0     # offset + invert (as before)
 
+pl.subplot(2, 1, 1)                 # top panel
+pl.plot(time_vec, spike_ch)         # spike train
+pl.ylabel(f"{rec.channel_names[SPIKE_CH]} ({rec.channel_units[SPIKE_CH]})")
 
-n = ne.Neitz(
-    peak_height=50,
-    filepath=".")
-
-
-for i in np.arange(0,len(abf_names)):
-    
-    #n.abfread(abf_names[1])
-    n.abfread(abf_names[i])
-
-
-    pl.subplot(2, 1, 1)                 # top panel
-    pl.plot(n.time_vec, n.spike_ch)     # spike train
-    pl.ylabel("spikes (pA)")
-
-    pl.subplot(2, 1, 2)                 # bottom panel
-    pl.plot(n.time_vec, n.stim_ch)      # stimulus / frame sync
-    pl.ylabel("stimulus")
-    pl.xlabel("time (s)")
-
-    pl.show()
-    #print(n.stim_ch_m)
-
-
-#time = n.time_vec
-#voltage = n.spike_ch
-
-#pl.plot(n.time_vec, n.spike_ch)
-#pl.show()
-
-
-#peaks = n.find_spikes(spike_polarity="neg")
-    #peaks = n.find_spikes()
-
-
-#print(peaks)              # indices of spikes
-#print(n.time_vec[peaks])  # spike times
-#print(n.spike_ch[peaks])  # spike voltages
-
-#pl.plot(n.time_vec, n.spike_ch)
-#pl.plot(n.time_vec[peaks], [1]*len(peaks), "k|", markersize=12)
-#pl.xlabel("Time (s)")
-#pl.yticks([])
-#pl.show()
-
-#pl.plot(n.time_vec[peaks], n.spike_ch[peaks], "ro", label="spikes")
-#pl.xlabel("Time (s)")
-#pl.ylabel("Voltage")
-#pl.legend()
-#pl.show()
+pl.subplot(2, 1, 2)                 # bottom panel
+pl.plot(time_vec, stim_ch)          # stimulus / frame sync
+pl.ylabel("stimulus")
+pl.xlabel("time (s)")
+pl.show()

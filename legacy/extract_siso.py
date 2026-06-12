@@ -1,46 +1,14 @@
 import numpy as np
 import matplotlib.pyplot as pl
-from neitz.io import csv as ncsv
+import Neitz as ne
 
 
 # ============================================================
 # User settings
 # ============================================================
 
-spike_csv = '/Users/j/Neitz_Analysis_Suite/SaraipRGC/siso-spikes.csv'
-stim_csv  = '/Users/j/Neitz_Analysis_Suite/SaraipRGC/siso-stdev.csv'
-
-
-# ------------------------------------------------------------
-# Normalization toggles  (the whole point of v4 — flip these to compare)
-# ------------------------------------------------------------
-# NORMALIZE_STA:    master on/off for normalizing the AVERAGE filter (the
-#                   spike-triggered average). False -> raw reverse-correlation
-#                   units (spikes/s).
-#
-# STA_NORM_METHOD:  how to normalize when NORMALIZE_STA is True --
-#                   'max' -> divide by max(abs(filter)). This reproduces Sara's
-#                            graphDataOnline display EXACTLY (her plot does
-#                            linearFilter / max(max(abs(linearFilter))), so the
-#                            largest deflection sits at +/-1.0). Use this to
-#                            overlay directly on the MATLAB blue trace.
-#                   'std' -> divide by std(filter). This is Sara's INTERNAL
-#                            analysis.linearFilter value (peak ends up ~5).
-#
-# NORMALIZE_EPOCHS: divide EACH epoch's filter by its own std before drawing
-#                   the faint background traces. This is a DISPLAY choice that
-#                   is NOT in Sara's pipeline (she only ever shows the average).
-#                   Set False to see the raw per-epoch filters at true scale.
-#
-# Note: the FFT temporal-tuning curves are computed from whatever filter the
-# flags produce, so toggling NORMALIZE_STA also rescales the tuning plot.
-NORMALIZE_STA    = True
-STA_NORM_METHOD  = 'max'    # 'max' (matches MATLAB plot) or 'std' (Sara internal)
-NORMALIZE_EPOCHS = True
-
-# Sample-std (ddof=1, i.e. divide by N-1) matches MATLAB's default std().
-STD_DDOF = 1
-
+spike_csv = '/Users/j/Library/CloudStorage/GoogleDrive-j@jkuchen.com/My Drive/Tuo/SaraipRGC/siso-spikes.csv'
+stim_csv  = '/Users/j/Library/CloudStorage/GoogleDrive-j@jkuchen.com/My Drive/Tuo/SaraipRGC/siso-stdev.csv'
 
 bins_per_frame = 6
 fps = 60
@@ -76,11 +44,23 @@ def bin_spike_times(spike_times, stim_le_s, bins_total, bin_rate):
 
 
 def compute_filter_fft(stimulus, response, filter_len, zero_pad=None):
-    # delegates to the shared engine (numerically identical to the old inline FFT)
-    from neitz.analysis import revcorr
+    n = len(stimulus)
+
+    if len(response) != n:
+        raise RuntimeError(
+            f"Stimulus and response length mismatch: {len(stimulus)} vs {len(response)}"
+        )
+
     if zero_pad is None:
-        zero_pad = len(stimulus)
-    return revcorr.reverse_correlation(stimulus, response, filter_len, zero_pad=zero_pad)
+        zero_pad = n
+
+    s_pad = np.concatenate([stimulus, np.zeros(zero_pad)])
+    r_pad = np.concatenate([response, np.zeros(zero_pad)])
+
+    Rsr = np.fft.fft(r_pad) * np.conj(np.fft.fft(s_pad))
+    filt = np.real(np.fft.ifft(Rsr))
+
+    return filt[:filter_len]
 
 
 def compute_temporal_tuning(filt, bin_rate):
@@ -94,27 +74,37 @@ def compute_temporal_tuning(filt, bin_rate):
 # Main
 # ============================================================
 
+n = ne.Neitz(
+    peak_height=50,
+    filepath="."
+)
+
 # ------------------------------------------------------------
 # Load and trim spikes
 # ------------------------------------------------------------
-time_vec, spike_ch = ncsv.load_spikes_csv(spike_csv)
+time_s_t, spikes_t = n.load_csv_spikes(spike_csv)
 
-t_beg = time_vec[0]  + trim_fr_s
-t_end = time_vec[-1] - trim_en_s
+t_beg = time_s_t[0] + trim_fr_s
+t_end = time_s_t[-1] - trim_en_s
 
-mask = (time_vec >= t_beg) & (time_vec < t_end)
+mask = (time_s_t >= t_beg) & (time_s_t < t_end)
 
-time_s = time_vec[mask] - time_vec[mask][0]
-spikes = spike_ch[mask, :]
+time_s = time_s_t[mask] - time_s_t[mask][0]
+spikes = spikes_t[mask, :]
 
-spike_times_all = ncsv.spike_times_from_matrix(spikes, time_s)
+n.t_rel = time_s
+n.spikes = spikes
 
+
+
+spike_times_all = n.extract_spike_times_from_matrix()
 
 # ------------------------------------------------------------
 # Load stimulus epochs from CSV
 # ------------------------------------------------------------
-stim_epochs_all, stim_phases = ncsv.load_stimulus_epochs_csv(stim_csv)
-stim_epochs = ncsv.stim_phase_only(stim_epochs_all, stim_phases)
+n.csv_path = None
+stim_epochs_all, stim_phases = n.load_csv_stimulus_epochs(stim_csv)
+stim_epochs = n.get_stim_phase_only()
 
 # stim_epochs should now be (600, 15)
 print("stim_epochs shape:", stim_epochs.shape)
@@ -166,7 +156,10 @@ for ep in range(num_epochs):
         response[:blank_bins] = 0
 
     stim_ep = stim_upsampled_all[:, ep].astype(float)
-
+    #stim_ep = stim_ep - np.mean(stim_ep)
+   
+    
+    
     filt = compute_filter_fft(
         stimulus=stim_ep,
         response=response,
@@ -174,6 +167,8 @@ for ep in range(num_epochs):
         zero_pad=bins_total
     )
 
+    
+    
     per_epoch_filters[ep, :] = filt
     per_epoch_responses.append(response)
 
@@ -182,49 +177,23 @@ for ep in range(num_epochs):
 
     print(f"Processed epoch {ep + 1:02d} / {num_epochs}")
 
-# ------------------------------------------------------------
-# Average filter (the spike-triggered average)
-# ------------------------------------------------------------
-# Raw mean over epochs (same as Sara's linearFilter/numEpochs).
+# Average raw filter across epochs
 avg_filter = np.mean(per_epoch_filters, axis=0)
 
-# Optional: normalize the STA. 'max' reproduces Sara's graphDataOnline display
-# (trough at -1.0); 'std' gives her internal analysis.linearFilter (trough ~-5).
-if NORMALIZE_STA:
-    if STA_NORM_METHOD == 'max':
-        avg_filter = avg_filter / np.max(np.abs(avg_filter))
-        sta_ylabel = 'normalized amplitude'
-        sta_state = 'STA normalized (/max|.|, matches MATLAB)'
-    elif STA_NORM_METHOD == 'std':
-        avg_filter = avg_filter / np.std(avg_filter, ddof=STD_DDOF)
-        sta_ylabel = 'normalized amplitude'
-        sta_state = 'STA normalized (/std, Sara internal)'
-    else:
-        raise ValueError(f"STA_NORM_METHOD must be 'max' or 'std', got {STA_NORM_METHOD!r}")
-else:
-    sta_ylabel = 'amplitude (spikes/s)'
-    sta_state = 'STA raw (no normalization)'
-
-print(f"\n{sta_state}; "
-      f"peak |amp| = {np.max(np.abs(avg_filter)):.4g} at "
-      f"{1000.0 * np.argmax(np.abs(avg_filter)) / bin_rate:.1f} ms")
+# MATLAB step 2: normalize average filter by its std
+avg_filter = avg_filter / np.std(avg_filter, ddof=1)
 
 # Frequency axis for rfft
 freqs = np.fft.rfftfreq(filter_len, d=1.0 / bin_rate)
 
-# ------------------------------------------------------------
-# Per-epoch traces for display (optionally normalized)
-# ------------------------------------------------------------
-per_epoch_display = np.zeros_like(per_epoch_filters)
+# MATLAB per-epoch normalization before FFT
+per_epoch_filters_norm = np.zeros_like(per_epoch_filters)
 per_epoch_tuning = np.zeros((num_epochs, len(freqs)), dtype=float)
 
 for ep in range(num_epochs):
-    if NORMALIZE_EPOCHS:
-        trace = per_epoch_filters[ep, :] / np.std(per_epoch_filters[ep, :], ddof=STD_DDOF)
-    else:
-        trace = per_epoch_filters[ep, :]
-    per_epoch_display[ep, :] = trace
-    per_epoch_tuning[ep, :] = np.abs(np.fft.rfft(trace))
+    norm_ep = per_epoch_filters[ep, :] / np.std(per_epoch_filters[ep, :], ddof=1)
+    per_epoch_filters_norm[ep, :] = norm_ep
+    per_epoch_tuning[ep, :] = np.abs(np.fft.rfft(norm_ep))
 
 avg_tuning = np.abs(np.fft.rfft(avg_filter))
 avg_response = np.mean(np.vstack(per_epoch_responses), axis=0)
@@ -243,7 +212,7 @@ ax1 = pl.subplot(2, 1, 1)
 for ep in range(num_epochs):
     ax1.plot(
         filter_time_ms,
-        per_epoch_display[ep, :],
+        per_epoch_filters_norm[ep, :],
         linewidth=0.8,
         alpha=0.25
     )
@@ -256,8 +225,8 @@ ax1.plot(
 
 ax1.axhline(0, color='k', linewidth=0.8, alpha=0.4)
 ax1.set_xlabel('time (msec)')
-ax1.set_ylabel(sta_ylabel)
-ax1.set_title(f'S-iso gaussian noise: all 15 epochs + average  [{sta_state}]')
+ax1.set_ylabel('normalized amplitude')
+ax1.set_title('S-iso gaussian noise: all 15 epochs + average')
 ax1.grid(True, alpha=0.25)
 
 # Bottom: tuning

@@ -1,35 +1,23 @@
-import Neitz as ne
+"""jk3.py — bin one channel's spike train into a 360 Hz response.
+
+Thin client of neitz.io.csv (was a broken fragment under the old monolith).
+"""
 import numpy as np
 
-#fn = '/Users/j/Library/CloudStorage/GoogleDrive-j@jkuchen.com/My Drive/Tuo/SaraipRGC/siso-spikes.csv'
-fn = '/Users/j/Neitz_Analysis_Suite/SaraipRGC/siso-spikes.csv'
-#fn = 'SaraipRGC/siso-spikes.csv'
+from neitz.io import csv as ncsv
 
-bins_per_frame = 6
-fps = 60
-fs = 10000
-
+fn = "/Users/j/Neitz_Analysis_Suite/SaraipRGC/siso-spikes.csv"
 stim_le_s = 10.0
-trim_fr_s = 0.500
-trim_en_s = 0.500
+bin_rate = 6 * 60                       # 360 Hz
+bins_total = int(stim_le_s * bin_rate)  # 3600 bins
+ch = 0
 
-bin_rate = bins_per_frame * fps          # 360 Hz
-bin_width_s = 1.0 / bin_rate
-bins_total = int(stim_le_s * bin_rate)   # 3600 bins
-
-n = ne.Neitz(
-    peak_height=50,
-    filepath="."
-)
-
-
-n.t_rel = time_s
-n.spikes = spikes
-
-spike_times = n.extract_spike_times_from_matrix()
-
-
+time_vec, spikes = ncsv.load_spikes_csv(fn)
+spike_times = ncsv.spike_times_from_matrix(spikes, time_vec)
 
 edges = np.linspace(0, stim_le_s, bins_total + 1)
 response_counts, _ = np.histogram(spike_times[ch], bins=edges)
 response = response_counts.astype(float) * bin_rate
+
+print(f"channel {ch}: {len(spike_times[ch])} spikes; response shape {response.shape}, "
+      f"max {response.max():.0f} spikes/s")

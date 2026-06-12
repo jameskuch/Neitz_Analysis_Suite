@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as pl
-import Neitz as ne
+from neitz.io import csv as ncsv
 
 
 # ============================================================
@@ -83,38 +83,27 @@ def compute_temporal_tuning(filt, bin_rate):
 # Main
 # ============================================================
 
-n = ne.Neitz(
-    peak_height=50,
-    filepath="."
-)
-
 # ------------------------------------------------------------
 # Load and trim spikes
 # ------------------------------------------------------------
-n.load_csv_spikes2(spike_csv)
+time_vec, spike_ch = ncsv.load_spikes_csv(spike_csv)
 
-t_beg = n.time_vec[0]  + trim_fr_s
-t_end = n.time_vec[-1] - trim_en_s
+t_beg = time_vec[0]  + trim_fr_s
+t_end = time_vec[-1] - trim_en_s
 
-mask = (n.time_vec >= t_beg) & (n.time_vec < t_end)
+mask = (time_vec >= t_beg) & (time_vec < t_end)
 
-time_s = n.time_vec[mask] - n.time_vec[mask][0]
-spikes = n.spike_ch[mask, :]
+time_s = time_vec[mask] - time_vec[mask][0]
+spikes = spike_ch[mask, :]
 
-n.t_rel = time_s
-n.spikes = spikes
-
-
-spike_times_all = n.extract_spike_times_from_matrix()
-
+spike_times_all = ncsv.spike_times_from_matrix(spikes, time_s)
 
 
 # ------------------------------------------------------------
 # Load stimulus epochs from CSV
 # ------------------------------------------------------------
-n.csv_path = None
-stim_epochs_all, stim_phases = n.load_csv_stimulus_epochs(stim_csv)
-stim_epochs = n.get_stim_phase_only()
+stim_epochs_all, stim_phases = ncsv.load_stimulus_epochs_csv(stim_csv)
+stim_epochs = ncsv.stim_phase_only(stim_epochs_all, stim_phases)
 
 # stim_epochs should now be (600, 15)
 print("stim_epochs shape:", stim_epochs.shape)
