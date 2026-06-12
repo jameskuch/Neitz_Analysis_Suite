@@ -18,7 +18,7 @@ import numpy as np
 
 from .io.abf import Recording
 from .io import csv as ncsv
-from .stimulus import FlickerParadigm, NoiseParadigm
+from .stimulus import FlickerParadigm, NoiseParadigm, CheckerboardParadigm
 
 
 # ---------------------------------------------------------------- result model
@@ -196,3 +196,20 @@ def run_noise(spike_csv, stim_csv, *, paradigm=None, trim_s=0.5, stim_le_s=10.0,
     return Result("noise", summary=summary, arrays=arrays,
                   meta=dict(spike_csv=str(spike_csv), stim_csv=str(stim_csv),
                             normalize=paradigm.normalize, zero_pad=paradigm.zero_pad))
+
+
+# ---------------------------------------------------------------- checkerboard STRF
+def run_strf(stimulus, response, n_y, n_x, *, paradigm=None, **kwargs) -> Result:
+    """Spatiotemporal STRF from a checkerboard stimulus + binned response.
+
+    stimulus: (n_checks, n_time) or (n_y, n_x, n_time); response: (n_time,).
+    """
+    paradigm = paradigm or CheckerboardParadigm(n_y=n_y, n_x=n_x, **kwargs)
+    res = paradigm.analyze(stimulus, response)
+    summary = [dict(peak_y=res.peak_yx[0], peak_x=res.peak_yx[1],
+                    peak_time_ms=res.peak_time_ms, n_y=n_y, n_x=n_x,
+                    filter_len=len(res.temporal))]
+    arrays = dict(strf=res.strf, spatial_rf=res.spatial_rf,
+                  temporal=res.temporal, time_ms=res.time_ms)
+    return Result("strf", summary=summary, arrays=arrays,
+                  meta=dict(n_y=n_y, n_x=n_x, normalize=paradigm.normalize))

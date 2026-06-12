@@ -29,6 +29,8 @@ fl  = flicker.detect_flicker(rec.channel("TTL"), rec.fs)    # square-wave timing
 - `spikes.py` — `detect_spikes` (`mad`, `abs`, or `mad_floor = max(k·MAD, floor)`).
 - `analysis/revcorr.py` — reverse correlation / linear filter, `normalize_filter('max'|'std')`.
 - `analysis/flicker.py` — `detect_flicker`, cycle/transition PSTH, vector strength, shift test.
+- `analysis/strf.py` + `stimulus.CheckerboardParadigm` — spatiotemporal STRF from a
+  subdivided pseudo-random Gaussian checkerboard (same revcorr, run per check).
 
 ## CLI (headless)
 
