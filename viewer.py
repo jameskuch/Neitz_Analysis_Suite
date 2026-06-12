@@ -33,6 +33,8 @@ from dash import Dash, dcc, html, Input, Output, State, ctx, no_update
 from neitz.io import load_recording
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
+from neitz.dataio import DataStore
+from neitz.run import run_cell_flicker
 
 # default browse location is the managed data store (~/Documents/ephysdataio)
 EPHYS_ROOT = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
@@ -175,6 +177,35 @@ def blank_fig(msg=""):
     return f
 
 
+# ---- data-store (manifest) helpers -----------------------------------------
+def store_cell_options():
+    try:
+        idx = DataStore().index()
+    except Exception:
+        idx = []
+    return [{"label": f"{c['date']} / {c['cell']} — {c.get('label') or ''}".strip(" —"),
+             "value": f"{c['date']}|{c['cell']}"} for c in idx]
+
+
+def parse_params(text):
+    """'flicker_hz=2, frame_rate=60' -> {'flicker_hz': 2.0, 'frame_rate': 60.0}."""
+    out = {}
+    for part in (text or "").split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            k, v = k.strip(), v.strip()
+            try:
+                out[k] = float(v)
+            except ValueError:
+                out[k] = v
+    return out
+
+
+def cell_data_files(cm):
+    return [str(cm.dir / r["file"]) for r in cm.data.get("recordings", [])
+            if str(r.get("file", "")).endswith((".abf", ".csv"))]
+
+
 # ============================================================
 # App
 # ============================================================
@@ -183,6 +214,24 @@ app.title = "Neitz ABF Viewer"
 _files = discover_abf()
 
 app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, children=[
+    # ---- data store: pick a cell from the manifest, edit stimulus metadata, run analysis ----
+    html.Div(style={"display": "flex", "gap": "10px", "alignItems": "flex-end",
+                    "marginBottom": "6px", "flexWrap": "wrap"}, children=[
+        html.Div([html.Label("cell (data store)"),
+                  dcc.Dropdown(id="cell-select", options=store_cell_options(),
+                               placeholder="pick a date / cell…", style={"width": "300px"})]),
+        html.Div([html.Label("stimulus type"),
+                  dcc.Dropdown(id="stim-type", style={"width": "150px"},
+                               options=[{"label": t, "value": t} for t in
+                                        ("flicker", "gaussian_noise", "checkerboard", "(none)")])]),
+        html.Div([html.Label("stimulus params (k=v, …)"),
+                  dcc.Input(id="stim-params", type="text", debounce=True,
+                            placeholder="flicker_hz=2, frame_rate=60", style={"width": "240px"})]),
+        html.Button("Save metadata", id="save-meta", n_clicks=0, style={"height": "34px"}),
+        html.Button("▶ Run flicker → cell", id="run-cell", n_clicks=0, style={"height": "34px"}),
+        html.Span(id="store-msg", style={"fontSize": "12px", "color": "#070"}),
+    ]),
+    dcc.Store(id="sel-cell"),
     # file "columns" viewer: browse buttons + left-to-right (Finder-columns) checklist
     html.Div(style={"display": "flex", "gap": "12px", "alignItems": "flex-start",
                     "marginBottom": "4px"}, children=[
@@ -518,6 +567,65 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
             + "; frame syncs overlaid)" if multi else f"single-file inspect ({view})")
     readout = f"[{mode}]  region {rs:.2f}-{re_:.2f}s  |  " + "  |  ".join(readbits)
     return time_fig, fft_fig, readout
+
+
+# ---- data store: pick a cell -> load its recordings + prefill stimulus -------
+@app.callback(Output("file", "options", allow_duplicate=True),
+              Output("file", "value", allow_duplicate=True),
+              Output("sel-cell", "data"), Output("stim-type", "value"),
+              Output("stim-params", "value"),
+              Input("cell-select", "value"), prevent_initial_call=True)
+def pick_cell(val):
+    if not val:
+        return no_update, no_update, None, None, None
+    date, cell = val.split("|")
+    cm = DataStore().cell(date, cell)
+    files = cell_data_files(cm)
+    opts = [{"label": " " + os.path.basename(p), "value": p} for p in files]
+    stype, sparams = None, None
+    for r in cm.data.get("recordings", []):          # prefill from the first stimulus found
+        if r.get("stimulus"):
+            stype = r["stimulus"].get("type")
+            sparams = ", ".join(f"{k}={v}" for k, v in (r["stimulus"].get("params") or {}).items()
+                                if v is not None)
+            break
+    return opts, files, {"date": date, "cell": cell}, stype, sparams
+
+
+# ---- save stimulus metadata to the cell's data recordings --------------------
+@app.callback(Output("store-msg", "children"), Input("save-meta", "n_clicks"),
+              State("sel-cell", "data"), State("stim-type", "value"),
+              State("stim-params", "value"), prevent_initial_call=True)
+def save_meta(_n, sel, stype, sparams):
+    if not sel or not stype:
+        return "pick a cell and a stimulus type first"
+    cm = DataStore().cell(sel["date"], sel["cell"])
+    params = parse_params(sparams)
+    n = 0
+    for r in cm.data.get("recordings", []):
+        if r.get("kind", "recording") == "recording" and str(r.get("file", "")).endswith((".abf", ".csv")):
+            cm.set_stimulus(r["id"], stype, params, source="user"); n += 1
+    cm.save(); DataStore().update_index()
+    return f"saved stimulus '{stype}' {params} to {n} recordings in {sel['date']}/{sel['cell']}"
+
+
+# ---- run the flicker analysis on the selected cell ---------------------------
+@app.callback(Output("store-msg", "children", allow_duplicate=True),
+              Input("run-cell", "n_clicks"), State("sel-cell", "data"),
+              prevent_initial_call=True)
+def run_cell(_n, sel):
+    if not sel:
+        return "pick a cell first"
+    try:
+        res = run_cell_flicker(DataStore(), sel["date"], sel["cell"], n_shuffle=500)
+        p = res.tables["pooled_onoff"][0]
+        return (f"ran flicker on {sel['date']}/{sel['cell']}: {p['n_trials']} trials, "
+                f"{p['flicker_hz']:.1f} Hz, verdict '{p['verdict']}' — "
+                f"outputs written to the cell's outputs/flicker/ (png/pdf/svg + csv + json)")
+    except SystemExit as e:
+        return str(e)
+    except Exception as e:
+        return f"error: {e}"
 
 
 if __name__ == "__main__":
