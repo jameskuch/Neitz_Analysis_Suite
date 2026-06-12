@@ -17,7 +17,8 @@ from neitz.io.abf import Recording
 from neitz.spikes import detect_spikes
 
 # ---- config ----
-ABF_GLOBS = ["data/ipRGC barak/ipRGC/*.abf", "ipRGC barak/ipRGC/*.abf"]   # first that matches wins
+STORE = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
+ABF_GLOBS = [os.path.join(STORE, "2026-06-02", "c01", "raw", "*.abf")]   # c01 = ipRGC
 SPIKE_CH = "Im_prime"
 OUT_RATE = 10000                 # 10 kHz, matches siso-spikes.csv
 OUT_CSV = "barak-siso-spikes.csv"

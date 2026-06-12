@@ -18,7 +18,8 @@ import matplotlib.pyplot as plt
 from neitz.io.abf import Recording
 from neitz.stimulus import FlickerParadigm
 
-ABF_GLOBS = ["data/ipRGC barak/**/*.abf", "ipRGC barak/**/*.abf"]
+STORE = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
+ABF_GLOBS = [os.path.join(STORE, "2026-06-02", "**", "*.abf")]
 PARADIGM = FlickerParadigm(current_channel="Im_prime", ttl_channel="TTL",
                            polarity="neg", method="mad", k=6.0)
 N_SHUFFLE = 1000
@@ -42,7 +43,7 @@ def main():
 
     cells = {}
     for f in files:
-        cells.setdefault(os.path.basename(os.path.dirname(f)), []).append(f)
+        cells.setdefault(os.path.basename(os.path.dirname(os.path.dirname(f))), []).append(f)  # cell folder
 
     rng = np.random.default_rng(0)
     results = []

@@ -31,7 +31,8 @@ import matplotlib.pyplot as plt
 # Config
 # ============================================================
 
-ABF_FILES = sorted(glob.glob('ipRGC barak/**/*.abf', recursive=True))
+STORE = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
+ABF_FILES = sorted(glob.glob(os.path.join(STORE, "2026-06-02", "**", "*.abf"), recursive=True))
 
 CURRENT_CH   = 0
 TTL_CH       = 2
@@ -142,7 +143,7 @@ def main():
         st = detect_spike_times(im, fs)
         on_e, off_e, period = ttl_edges(ttl, fs)
 
-        r = dict(file=os.path.basename(f), folder=os.path.basename(os.path.dirname(f)))
+        r = dict(file=os.path.basename(f), folder=os.path.basename(os.path.dirname(os.path.dirname(f))))  # cell folder
         if on_e is None:
             r.update(flicker_hz=np.nan, on_ratio=np.nan, off_ratio=np.nan, cls='no flicker')
             results.append(r); fig_rows.append((f, None))

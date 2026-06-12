@@ -17,7 +17,8 @@ import matplotlib.pyplot as plt
 from neitz.io.abf import Recording
 from neitz.stimulus import FlickerParadigm
 
-ABF_GLOBS = ["data/ipRGC barak/**/*.abf", "ipRGC barak/**/*.abf"]
+STORE = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
+ABF_GLOBS = [os.path.join(STORE, "2026-06-02", "**", "*.abf")]
 PARADIGM = FlickerParadigm(current_channel="Im_prime", ttl_channel="TTL",
                            polarity="neg", method="mad", k=6.0)
 OUT_FIG = "flicker_analysis.png"
@@ -42,7 +43,7 @@ def main():
     print("-" * 72)
     for f in files:
         res = PARADIGM.analyze_recording(Recording.load(f), name=os.path.basename(f))
-        fold = os.path.basename(os.path.dirname(f))
+        fold = os.path.basename(os.path.dirname(os.path.dirname(f)))  # cell folder (c01/c02)
         results.append((res, fold))
         fhz = f"{res.freq:.2f}" if np.isfinite(res.freq) else "  -"
         vs = f"{res.vector_strength:.3f}" if np.isfinite(res.vector_strength) else "  -"
