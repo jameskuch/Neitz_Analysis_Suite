@@ -229,6 +229,7 @@ app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, chi
                             placeholder="flicker_hz=2, frame_rate=60", style={"width": "240px"})]),
         html.Button("Save metadata", id="save-meta", n_clicks=0, style={"height": "34px"}),
         html.Button("▶ Run flicker → cell", id="run-cell", n_clicks=0, style={"height": "34px"}),
+        html.Button("⤓ Backup to mirror", id="backup-mirror", n_clicks=0, style={"height": "34px"}),
         html.Span(id="store-msg", style={"fontSize": "12px", "color": "#070"}),
     ]),
     dcc.Store(id="sel-cell"),
@@ -626,6 +627,20 @@ def run_cell(_n, sel):
         return str(e)
     except Exception as e:
         return f"error: {e}"
+
+
+# ---- back up the whole data store to this computer's mirror -------------------
+@app.callback(Output("store-msg", "children", allow_duplicate=True),
+              Input("backup-mirror", "n_clicks"), prevent_initial_call=True)
+def backup_mirror(_n):
+    from neitz.dataio import mirror_dir, mirror_store
+    if mirror_dir() is None:
+        return "no mirror configured — set one with `neitz mirror --set PATH`"
+    try:
+        info = mirror_store()
+        return f"backed up store → {info['dst']}  (via {info['method']})"
+    except Exception as e:
+        return f"backup error: {e}"
 
 
 if __name__ == "__main__":

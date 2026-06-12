@@ -78,6 +78,11 @@ def main(argv=None) -> int:
     c.add_argument("--analysis", default="flicker", choices=["flicker"])
     c.add_argument("--n-shuffle", type=int, default=1000)
 
+    m = sub.add_parser("mirror", help="duplicate the data store to this computer's mirror (e.g. Google Drive)")
+    m.add_argument("--set", dest="set_path", metavar="PATH", help="set this computer's mirror path")
+    m.add_argument("--show", action="store_true", help="print the configured mirror path")
+    m.add_argument("--no-delete", action="store_true", help="additive only (keep extra files in the mirror)")
+
     a = ap.parse_args(argv)
 
     if a.cmd == "flicker":
@@ -113,6 +118,19 @@ def main(argv=None) -> int:
         if a.out:
             res.save(a.out)
             print(f"\nwrote {a.out}.json, {a.out}.npz")
+
+    elif a.cmd == "mirror":
+        from .dataio import set_mirror, mirror_dir, mirror_store
+        if a.set_path:
+            set_mirror(a.set_path)
+            print(f"mirror set: {mirror_dir()}")
+        elif a.show:
+            print(f"mirror: {mirror_dir()}")
+        else:
+            if mirror_dir() is None:
+                return print("no mirror configured — `neitz mirror --set PATH` first") or 1
+            info = mirror_store(delete=not a.no_delete)
+            print(f"mirrored store -> {info['dst']}  (via {info['method']})")
 
     elif a.cmd == "cell":
         from .dataio import DataStore

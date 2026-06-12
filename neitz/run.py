@@ -258,7 +258,18 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
                                       on_p=on["p"], off_p=off["p"]))
         cm.save()
         store.update_index()
+        _auto_mirror()
     return result
+
+
+def _auto_mirror():
+    """Back up the store to the configured mirror after a run (best-effort)."""
+    from .dataio import auto_mirror, mirror_dir, mirror_store
+    if auto_mirror() and mirror_dir() is not None:
+        try:
+            mirror_store()
+        except Exception as e:
+            print(f"(auto-mirror skipped: {e})")
 
 
 # ---------------------------------------------------------------- checkerboard STRF
