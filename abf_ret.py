@@ -28,6 +28,8 @@ from pathlib import Path
 
 from Neitz import Neitz
 
+import matplotlib.pyplot as plt
+
 
 # -----------------------------------------------------------------------------
 # Config (change for your data paths and stim/spike settings)
@@ -129,6 +131,25 @@ def ret_abf(
         **NEITZ_KW,
     )
 
+
+
+def ret_abf2(
+    abf_names: list[str] | None = None,
+    csv_name: str | None = None,
+    smooth_ms: float = 1.0,
+    show: bool = True,
+):
+    """Load multiple trials, compute STA across all spikes, then show the STA figure."""
+    if abf_names is None:
+        abf_names = [f"2026_02_04_{i:04d}.abf" for i in range(5, 10)]
+    return Neitz.load_trials_sta_and_plot(
+        abf_names,
+        csv_name=csv_name or CSV_NAME,
+        smooth_ms=smooth_ms,
+        show=show,
+        **NEITZ_KW,
+    )
+
 # -----------------------------------------------------------------------------
 # Main: run all three examples
 # -----------------------------------------------------------------------------
@@ -142,5 +163,30 @@ if __name__ == "__main__":
     #print("Example 3: Multiple trials → STA → figure")
     #example_3_multiple_trials_sta(smooth_ms=1.0)
 
-    print("return abf")
-    ret_abf()
+    #print("return abf2")
+    #ret_abf2()
+
+
+    
+
+    # Edit start/end to change which trials are shown
+    start = 0
+    end = 4
+    abf_names = [f"2026_02_04_{i:04d}.abf" for i in range(start, end + 1)]
+    duration_s = 6.0  # seconds to show (starting from t=0)
+
+    trials, fig = Neitz.load_trials_and_plot_flicker(
+        abf_names,
+        csv_name=CSV_NAME,
+        duration_s=duration_s,
+        show=False,
+        **NEITZ_KW,
+    )
+
+    # --- Customize the figure below ---
+    fig.set_size_inches(12, 8)                                    # (width, height) in inches
+    fig.axes[0].set_title(f"4 Hz flicker – {len(trials)} trials") # change title
+    fig.axes[0].set_xlim(0, 6)                                    # x-axis range in seconds
+    # fig.savefig("flicker_multi.png", dpi=300, bbox_inches="tight")  # uncomment to save
+
+    plt.show()

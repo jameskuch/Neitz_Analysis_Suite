@@ -6,6 +6,7 @@ import pyabf
 from scipy.interpolate import interp1d
 from scipy.signal import find_peaks
 
+import matplotlib.pyplot as plt
 
 class Neitz:
     """
@@ -53,6 +54,8 @@ class Neitz:
     def abfread(self, filename: str) -> "Neitz":
         abf = pyabf.ABF(str(self.datapath / filename))
 
+
+
         abf.setSweep(self.sweep, channel=self.spike_ch_num)
         self.spike_ch = abf.sweepY.copy()
         self.time_vec = abf.sweepX.copy()
@@ -62,6 +65,7 @@ class Neitz:
 
         # offset + invert (not normalized)
         stim_m = float(np.max(stim_raw))
+
         self.stim_ch = (stim_raw - stim_m) * -1.0
         self.stim_ch_m = stim_m
 
@@ -125,6 +129,301 @@ class Neitz:
 
         return self.t_rel_60, self.C_60
 
+
+    def load_csv_spikes(self, csv_filename: str | None = None):
+        """
+        Load spike CSV with unknown number of columns.
+
+        Supports:
+        - No header: first column = time, remaining = spike channels
+        - Optional header: if present, will try to detect "time" column
+
+        Output:
+            self.t_rel        -> (N,) time vector
+            self.spikes       -> (N, M) spike matrix (M channels)
+        """
+
+        if csv_filename is not None:
+            self.csv_path = self.datapath / csv_filename
+        if self.csv_path is None:
+            raise RuntimeError("No csv_path set.")
+
+        # ----------------------------
+        # 1) Try reading with header
+        # ----------------------------
+        try:
+            df = pd.read_csv(self.csv_path)
+
+            # clean column names
+            if len(df.columns) and isinstance(df.columns[0], str):
+                df.columns = [c.strip().lower() for c in df.columns]
+
+            # detect time column
+            time_candidates = ["time", "time_s", "t", "seconds"]
+
+            time_col = None
+            for c in df.columns:
+                if c in time_candidates:
+                    time_col = c
+                    break
+
+            if time_col is not None:
+                self.t_rel = df[time_col].to_numpy(dtype=float)
+
+                spike_cols = [c for c in df.columns if c != time_col]
+                self.spikes = df[spike_cols].to_numpy(dtype=float)
+
+                return self.t_rel, self.spikes
+
+        except Exception:
+            pass  # fall through to no-header case
+
+        # ----------------------------
+        # 2) No-header fallback
+        # ----------------------------
+        df = pd.read_csv(self.csv_path, header=None)
+
+        if df.shape[1] < 2:
+            raise RuntimeError(f"CSV must have at least 2 columns. Got shape={df.shape}")
+
+        # First column = time
+        self.t_rel = df.iloc[:, 0].to_numpy(dtype=float)
+
+        # Remaining columns = spike channels
+        self.spikes = df.iloc[:, 1:].to_numpy(dtype=float)
+
+
+        self.spike_ch = df.iloc[:, 1:].to_numpy(dtype=float)
+        self.time_vec = df.iloc[:, 0].to_numpy(dtype=float)
+
+        self.dt = (self.time_vec[1] - self.time_vec[0])
+        self.fs = 1.0 / self.dt
+
+        #self.stim_ch = 
+
+#        return self
+        return self.t_rel, self.spikes
+
+
+    def load_csv_spikes2(self, csv_filename: str | None = None):
+        """
+        Load spike CSV with unknown number of columns.
+
+        Supports:
+        - No header: first column = time, remaining = spike channels
+        - Optional header: if present, will try to detect "time" column
+
+        Output:
+            self.t_rel        -> (N,) time vector
+            self.spikes       -> (N, M) spike matrix (M channels)
+        """
+
+        if csv_filename is not None:
+            self.csv_path = self.datapath / csv_filename
+        if self.csv_path is None:
+            raise RuntimeError("No csv_path set.")
+
+        # ----------------------------
+        # 1) Try reading with header
+        # ----------------------------
+        try:
+            df = pd.read_csv(self.csv_path)
+
+            # clean column names
+            if len(df.columns) and isinstance(df.columns[0], str):
+                df.columns = [c.strip().lower() for c in df.columns]
+
+            # detect time column
+            time_candidates = ["time", "time_s", "t", "seconds"]
+
+            time_col = None
+            for c in df.columns:
+                if c in time_candidates:
+                    time_col = c
+                    break
+
+            if time_col is not None:
+                self.t_rel = df[time_col].to_numpy(dtype=float)
+
+                spike_cols = [c for c in df.columns if c != time_col]
+                self.spikes = df[spike_cols].to_numpy(dtype=float)
+
+                return self.t_rel, self.spikes
+
+        except Exception:
+            pass  # fall through to no-header case
+
+        # ----------------------------
+        # 2) No-header fallback
+        # ----------------------------
+        df = pd.read_csv(self.csv_path, header=None)
+
+        if df.shape[1] < 2:
+            raise RuntimeError(f"CSV must have at least 2 columns. Got shape={df.shape}")
+
+        # First column = time
+#        self.t_rel = df.iloc[:, 0].to_numpy(dtype=float)
+
+        # Remaining columns = spike channels
+#        self.spikes = df.iloc[:, 1:].to_numpy(dtype=float)
+
+
+        self.spike_ch = df.iloc[:, 1:].to_numpy(dtype=float)
+        self.time_vec = df.iloc[:, 0].to_numpy(dtype=float)
+
+        self.dt = (self.time_vec[1] - self.time_vec[0])
+        self.fs = 1.0 / self.dt
+
+        #self.stim_ch = 
+
+        return self
+#        return self.t_rel, self.spikes
+
+
+
+    def load_csv_stimulus_epochs(self, csv_filename: str | None = None):
+        """
+        Load stimulus CSV in a tolerant way.
+
+        Supported formats
+        -----------------
+        1) Header + phase column
+            Phase, Stim Ep1, Stim Ep2, ...
+            PRE,   ...
+            STIM,  ...
+
+        2) No header + phase column
+            PRE,  ...
+            STIM, ...
+
+        3) Header + frame-number column
+            Frame Number, Epoch 1, Epoch 2, ...
+            1,            ...
+            2,            ...
+
+        4) No header + frame-number column
+            1, ...
+            2, ...
+
+        Returns
+        -------
+        stim_epochs : np.ndarray
+            Shape (num_rows, num_epochs)
+        phases : np.ndarray | None
+            Phase labels if present, otherwise None
+        """
+
+        if csv_filename is not None:
+            self.csv_path = self.datapath / csv_filename
+        if self.csv_path is None:
+            raise RuntimeError("No csv_path set.")
+
+        # Peek without assuming a header
+        df_peek = pd.read_csv(self.csv_path, header=None, nrows=5)
+
+        if df_peek.shape[1] < 2:
+            raise RuntimeError(f"Stimulus CSV must have >= 2 columns. Got {df_peek.shape}")
+
+        first_row = [str(x).strip() for x in df_peek.iloc[0].tolist()]
+        first_row_lower = [x.lower() for x in first_row]
+
+        # Detect whether the first row is a header
+        has_header = (
+            "phase" in first_row_lower
+            or any(x.startswith("stim") for x in first_row_lower)
+            or any("epoch" in x for x in first_row_lower)
+            or any("frame" in x for x in first_row_lower)
+        )
+
+        if has_header:
+            df = pd.read_csv(self.csv_path)
+            df.columns = [str(c).strip() for c in df.columns]
+            cols_lower = [c.lower() for c in df.columns]
+
+            # Case: explicit Phase column exists
+            if "phase" in cols_lower:
+                phase_col = df.columns[cols_lower.index("phase")]
+
+                stim_cols = [
+                    c for c in df.columns
+                    if c != phase_col and (
+                        c.lower().startswith("stim")
+                        or "epoch" in c.lower()
+                    )
+                ]
+
+                if len(stim_cols) == 0:
+                    # Fallback: assume first column is phase, everything else is stimulus
+                    stim_cols = list(df.columns[1:])
+
+                stim_df = df[stim_cols].apply(pd.to_numeric, errors="coerce")
+                valid_mask = stim_df.notna().any(axis=1)
+
+                phases = df.loc[valid_mask, phase_col].astype(str).to_numpy()
+                stim_epochs = stim_df.loc[valid_mask].to_numpy(dtype=float)
+
+            else:
+                # Case: header exists, but no phase column.
+                # Assume first column is frame number / index and all remaining columns are stimulus epochs.
+                stim_df = df.iloc[:, 1:].apply(pd.to_numeric, errors="coerce")
+                valid_mask = stim_df.notna().any(axis=1)
+
+                phases = None
+                stim_epochs = stim_df.loc[valid_mask].to_numpy(dtype=float)
+
+        else:
+            df = pd.read_csv(self.csv_path, header=None)
+
+            if df.shape[1] < 2:
+                raise RuntimeError(f"Stimulus CSV must have >= 2 columns. Got {df.shape}")
+
+            first_col_as_num = pd.to_numeric(df.iloc[:, 0], errors="coerce")
+
+            if first_col_as_num.notna().all():
+                # First column is numeric -> treat as frame number / index
+                phases = None
+                stim_epochs = df.iloc[:, 1:].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+            else:
+                # First column is non-numeric -> treat as phase labels
+                phases = df.iloc[:, 0].astype(str).to_numpy()
+                stim_epochs = df.iloc[:, 1:].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+
+        self.stim_phases = phases
+        self.stim_epochs = stim_epochs
+
+        return self.stim_epochs, self.stim_phases    
+
+    def get_stim_phase_only(self):
+        """
+        Return only rows whose phase is STIM.
+
+        If no phase information exists in the loaded CSV, return all stimulus rows.
+        This allows frame-number-based CSV files to work safely.
+        """
+
+        if not hasattr(self, "stim_epochs"):
+            raise RuntimeError(
+                "Stimulus data not loaded. Call load_csv_stimulus_epochs() first."
+            )
+
+        # No phase information present in the CSV
+        if not hasattr(self, "stim_phases") or self.stim_phases is None:
+            self.stim_only = self.stim_epochs
+            return self.stim_only
+
+        phases = np.asarray(self.stim_phases).astype(str)
+        mask = np.char.upper(np.char.strip(phases)) == "STIM"
+
+        if not np.any(mask):
+            raise RuntimeError(
+                "Phase column exists, but no rows were labeled 'STIM'."
+            )
+
+        self.stim_only = self.stim_epochs[mask, :]
+        return self.stim_only
+    
+
+
     # ----------------------------
     # Spike detection (supports negative spikes)
     # ----------------------------
@@ -174,6 +473,18 @@ class Neitz:
 
         self.peaks = np.asarray(peaks, dtype=int)
         return self.peaks
+
+    
+
+    def extract_spike_times_from_matrix(self):
+        if not hasattr(self, "spikes"):
+            raise RuntimeError("No spike matrix loaded.")
+
+        self.spike_times = [
+            self.t_rel[self.spikes[:, i] > 0]
+            for i in range(self.spikes.shape[1])
+        ]
+        return self.spike_times
 
     # ----------------------------
     # Stim epoch detection
@@ -661,6 +972,8 @@ class Neitz:
             trials.append(n)
         return trials
 
+
+
     @classmethod
     def load_trials_flicker(
         cls,
@@ -901,6 +1214,14 @@ class Neitz:
             import matplotlib.pyplot as plt
             plt.show()
         return trials, sta_norm, lags_ms, fig
+
+
+
+
+
+
+
+
 
 
 # ----------------------------
