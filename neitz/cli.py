@@ -72,6 +72,12 @@ def main(argv=None) -> int:
     n.add_argument("--normalize", default="max", choices=["max", "std", "none"])
     n.add_argument("--zero-pad", type=int, default=None)
 
+    c = sub.add_parser("cell", help="run an analysis on a stored cell (writes into the cell)")
+    c.add_argument("date")
+    c.add_argument("cell")
+    c.add_argument("--analysis", default="flicker", choices=["flicker"])
+    c.add_argument("--n-shuffle", type=int, default=1000)
+
     a = ap.parse_args(argv)
 
     if a.cmd == "flicker":
@@ -107,6 +113,17 @@ def main(argv=None) -> int:
         if a.out:
             res.save(a.out)
             print(f"\nwrote {a.out}.json, {a.out}.npz")
+
+    elif a.cmd == "cell":
+        from .dataio import DataStore
+        res = R.run_cell_flicker(DataStore(), a.date, a.cell, n_shuffle=a.n_shuffle)
+        print(f"{a.date}/{a.cell}:  {len(res.summary)} recording(s)")
+        _print_table(res.summary, ["file", "flicker_hz", "n_in_region",
+                                   "vector_strength", "rayleigh_p"])
+        print("\npooled ON/OFF:")
+        _print_table(res.tables["pooled_onoff"],
+                     ["n_trials", "flicker_hz", "on_ratio", "on_p", "off_ratio", "off_p", "verdict"])
+        print(f"\noutputs written into the cell's outputs/flicker/ (PNG/PDF/SVG + metrics.csv + result.json)")
 
     return 0
 
