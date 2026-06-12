@@ -48,7 +48,7 @@ every generated output (paths + params + timestamp).
 neitz cell 2026-06-02 c01                 # run flicker on a stored cell -> outputs into it
 neitz flicker "~/Documents/ephysdataio/2026-06-02"   # per-file VS + pooled ON/OFF
 neitz spikes  "~/Documents/ephysdataio/2026-06-02/c01" --out spikes.csv
-neitz noise   siso-spikes.csv siso-stdev.csv --out sta   # reverse correlation -> sta.json/.npz
+neitz noise   ~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-spikes.csv ~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-stdev.csv --out sta   # reverse correlation -> sta.json/.npz
 neitz --help                              # all commands     (or: python -m neitz …)
 ```
 

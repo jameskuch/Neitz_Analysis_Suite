@@ -136,7 +136,7 @@ neitz flicker "~/Documents/ephysdataio/2026-06-02" --out flick
 neitz spikes "~/Documents/ephysdataio/2026-06-02/c01" --out spikes.csv --k 6
 
 # noise: S-iso reverse correlation (STA / linear filter)
-neitz noise SaraipRGC/siso-spikes.csv SaraipRGC/siso-stdev.csv --out sta
+neitz noise ~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-spikes.csv ~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-stdev.csv --out sta
 #   -> prints peak latency/sign, writes sta.json + sta.npz (filter arrays)
 
 python -m neitz flicker "~/Documents/ephysdataio/2026-06-02"     # equivalent without the console script
@@ -161,7 +161,7 @@ later = Result.load("flick")          # reload anywhere
 later.summary, later.arrays
 
 run_spike_export("~/Documents/ephysdataio/2026-06-02/c01", "spikes.csv", k=6)
-run_noise("SaraipRGC/siso-spikes.csv", "SaraipRGC/siso-stdev.csv").save("sta")
+run_noise("~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-spikes.csv", "~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-stdev.csv").save("sta")
 run_strf(stimulus, response, n_y=6, n_x=8).save("strf")   # STRF cube -> strf.npz
 ```
 
@@ -175,14 +175,14 @@ amplitude) can be loaded like a recording, and **opened in the viewer**.
 **Programmatic:**
 ```python
 from neitz.io import load_recording           # dispatches .csv -> CsvSpikeRecording
-rec = load_recording("SaraipRGC/siso-spikes.csv")
+rec = load_recording("~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-spikes.csv")
 rec.channel_names         # ['ch1', 'ch2', ... 'ch15']
 rec.fs                    # 10000 (from the time column)
 rec.channel("ch1")        # that spike column
 
 # or the raw arrays:
 from neitz.io import csv as ncsv
-time, spikes = ncsv.load_spikes_csv("SaraipRGC/siso-spikes.csv")   # (N,), (N, M)
+time, spikes = ncsv.load_spikes_csv("~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-spikes.csv")   # (N,), (N, M)
 spike_times  = ncsv.spike_times_from_matrix(spikes, time)          # per-channel times
 ```
 
