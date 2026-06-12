@@ -16,6 +16,12 @@ Thumbs.db
 # Generated outputs
 *.png
 
+# Python packaging / build artifacts
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
 # Old / scratch notebooks (kept locally, not in repo)
 STA_test.ipynb
 testingbed.ipynb
