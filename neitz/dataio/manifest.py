@@ -39,9 +39,14 @@ class CellManifest:
         return mf
 
     # -- recordings ---------------------------------------------------------
-    def add_recording(self, source, *, rec_id=None, stimulus=None, channels=None,
-                      fs=None, duration_s=None, copy=True) -> dict:
-        """Copy `source` into raw/ (proper-named, de-duped) and add to the manifest."""
+    def add_recording(self, source, *, rec_id=None, label=None, kind="recording",
+                      stimulus=None, channels=None, fs=None, duration_s=None,
+                      copy=True) -> dict:
+        """Copy `source` into raw/ (proper-named, de-duped) and add to the manifest.
+
+        `label` is a friendly display name (what the GUI shows); the formatted file
+        name stays canonical. Defaults to the original source filename.
+        """
         source = Path(source)
         target_name = proper_name(source.name, self.data.get("date"))
         raw = self.dir / "raw"
@@ -52,6 +57,8 @@ class CellManifest:
             if not same:
                 shutil.copy2(source, target)
         rec = {"id": rec_id or Path(target_name).stem,
+               "label": label or source.name,          # friendly display name
+               "kind": kind,                            # 'recording' | 'reference'
                "file": f"raw/{target_name}",
                "source": str(source),
                "stimulus": stimulus, "channels": channels,
