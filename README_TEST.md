@@ -30,7 +30,7 @@ after editing `pyproject.toml`.) You can always use `python -m neitz ...` instea
 ```python
 from neitz.io import load_recording, Recording
 
-rec = load_recording("data/ipRGC barak/ipRGC/2026_06_02_0044.abf")
+rec = load_recording("~/Documents/ephysdataio/2026-06-02/c01/raw/2026_06_02_0044.abf")
 rec.fs               # 20000.0
 rec.duration         # 92.0
 rec.channel_names    # ['Im_prime', 'Vm_sec', 'TTL']
@@ -128,18 +128,18 @@ res.peak_yx, res.peak_time_ms, res.strf.shape   # ((y,x), ms, (6,8,30))
 
 ```bash
 # flicker: per-file vector strength + per-cell pooled ON/OFF
-neitz flicker "data/ipRGC barak" --out flick
+neitz flicker "~/Documents/ephysdataio/2026-06-02" --out flick
 #   -> prints tables, writes flick.json + flick_summary.csv
 #   options: --polarity --method {mad,abs,mad_floor} --k --abs-threshold --refractory-ms --n-shuffle
 
 # spikes: detect -> binary spike-train CSV (siso-spikes.csv layout)
-neitz spikes "data/ipRGC barak/ipRGC" --out spikes.csv --k 6
+neitz spikes "~/Documents/ephysdataio/2026-06-02/c01" --out spikes.csv --k 6
 
 # noise: S-iso reverse correlation (STA / linear filter)
 neitz noise SaraipRGC/siso-spikes.csv SaraipRGC/siso-stdev.csv --out sta
 #   -> prints peak latency/sign, writes sta.json + sta.npz (filter arrays)
 
-python -m neitz flicker "data/ipRGC barak"     # equivalent without the console script
+python -m neitz flicker "~/Documents/ephysdataio/2026-06-02"     # equivalent without the console script
 ```
 
 ---
@@ -151,7 +151,7 @@ python -m neitz flicker "data/ipRGC barak"     # equivalent without the console 
 ```python
 from neitz.run import run_flicker, from_folder, run_spike_export, run_noise, run_strf, Result
 
-res = run_flicker(from_folder("data/ipRGC barak"))   # per-file + pooled-per-cell
+res = run_flicker(from_folder("~/Documents/ephysdataio/2026-06-02"))   # per-file + pooled-per-cell
 res.summary            # list of per-file dict rows
 res.tables["pooled_onoff"]    # per-cell ON/OFF table
 res.save("flick")      # -> flick.json (+ flick.npz if arrays)
@@ -160,7 +160,7 @@ res.save_csv("flick_summary.csv")
 later = Result.load("flick")          # reload anywhere
 later.summary, later.arrays
 
-run_spike_export("data/ipRGC barak/ipRGC", "spikes.csv", k=6)
+run_spike_export("~/Documents/ephysdataio/2026-06-02/c01", "spikes.csv", k=6)
 run_noise("SaraipRGC/siso-spikes.csv", "SaraipRGC/siso-stdev.csv").save("sta")
 run_strf(stimulus, response, n_y=6, n_x=8).save("strf")   # STRF cube -> strf.npz
 ```

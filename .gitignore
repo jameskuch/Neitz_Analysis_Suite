@@ -28,3 +28,7 @@ dist/
 # Scratch notebooks (kept locally, not in repo)
 STA_test.ipynb
 testingbed.ipynb
+
+# Generated analysis CSVs from examples run in the repo root (real outputs go to the store)
+*_metrics.csv
+barak-*.csv
