@@ -45,11 +45,15 @@ Open questions for you are marked **[CONFIRM]**.
       outputs/ ...
 ```
 
-- **Raw data** may live under `<cell>/raw/` (managed) **or** be referenced by an
-  absolute path elsewhere (e.g. straight off the rig). The manifest stores whichever.
-  **[CONFIRM]** default when you "import" a recording: **copy** into `raw/`, **move**
-  into `raw/`, or **reference in place**? (Proposed default: *reference in place*, with
-  an explicit "import/copy" action.)
+- **Raw data**: the GUI's **"Import data"** action **copies** the source files into
+  `<cell>/raw/`, renaming to a **proper title format** if the source isn't already
+  properly named. The manifest records both the stored path and the original source path.
+  - *Proper title format*: `YYYY_MM_DD_<id>[_<tag>].<ext>`. A file already matching the
+    `YYYY_MM_DD_NNNN` pattern (e.g. `2026_06_02_0040.abf`) is kept as-is; otherwise it is
+    renamed using the cell's date + a recording id (e.g. `siso-spikes.csv` →
+    `2017_01_18_siso-spikes.csv`).
+  - De-dup: a source whose content already exists in the store (same name + size) is
+    **not copied again**.
 - **Outputs** always go under `<cell>/outputs/<analysis>/`.
 
 ---
@@ -111,9 +115,10 @@ Open questions for you are marked **[CONFIRM]**.
   - `flicker`: flicker_hz, carrier_hz, cone_isolation, frame_rate (most auto-recovered from TTL)
   - `gaussian_noise`: cone_isolation (S/L/M/LM/achromatic), stdev, frame_rate, bins_per_frame, seeds
   - `checkerboard`: n_y, n_x, stixel_size, stdev, frame_rate, seeds
-- **Cell/tissue id [CONFIRM]**: free-text, filesystem-safe label that you supply when
-  registering (e.g. `ipRGC_c1`, `20170118Bc4`). Is there a numbering convention you want
-  enforced (e.g. `c<N>` per date, or a tissue+cell scheme)?
+- **Cell/tissue id**: a **forced number** plus an optional **free-text label**. The
+  folder is `c<NN>` (auto-incremented per date, zero-padded), and the manifest stores a
+  free-text `label` (e.g. "ipRGC", "20170118Bc4"). The GUI shows "c01 — ipRGC". (Folder
+  may be rendered `c01_ipRGC` for readability; the forced `c<NN>` is canonical.)
 
 ---
 
@@ -176,8 +181,9 @@ accompany each analysis output.
 | `legacy/` | **delete** |
 | `abfUtilities-main/` | **delete** (unused; we use `pyabf`) |
 | `neitz.egg-info/` | leave gitignored (auto-generated, not a dependency) |
-| `SaraipRGC/` (759 MB) | **move out of repo** → `~/Documents/ephysdataio/2017-01-18/20170118Bc4/` |
-| `data/` (barak abfs, gitignored) | **[CONFIRM]** migrate into `ephysdataio` as cells (2026-06-02 / ipRGC + notipRGC), or leave as-is for now |
+| `SaraipRGC/` (759 MB) | **migrate** into `ephysdataio` (data → a 2017 cell; redundant `c4_bigger`/`c4_smaller`/`process_*` dropped), then remove from repo |
+| `data/` (barak abfs) | **migrate** into `ephysdataio` (2026-06-02 → ipRGC + notipRGC cells), then remove from repo |
+| `ipRGC barak/` | **delete** — its abfs are already duplicated in `data/`; migrate from `data/` only (no redundant copy) |
 | generated `*.csv` / `*.png` at root | regenerate into the data store; remove strays |
 
 ---
@@ -193,9 +199,12 @@ Each phase is tested and committed separately; destructive steps (Phase A) confi
 
 ---
 
-## 9. Open questions [CONFIRM]
+## 9. Resolved decisions
 
-1. Raw-data import default: **reference in place** / copy / move?
-2. Cell/tissue id convention — free-text, or an enforced numbering scheme?
-3. Migrate the existing `data/` barak recordings into `ephysdataio` now, or later?
-4. Anything else that should move to the data store (e.g. `ipRGC barak/`)?
+1. **Import = copy** the source into `<cell>/raw/`, renaming to the proper title format
+   if needed; record original + stored paths; de-dup identical files.
+2. **Cell id = forced `c<NN>` + free-text label.**
+3. **Migrate** `data/` and `SaraipRGC/` contents into `ephysdataio` now.
+4. **`ipRGC barak/` is deleted** (redundant with `data/`); migrate from `data/` only.
+5. Output formats: **PNG + PDF + SVG**. Flicker scripts kept as `examples/`.
+   `abfUtilities-main` deleted. `neitz.egg-info` left gitignored.
