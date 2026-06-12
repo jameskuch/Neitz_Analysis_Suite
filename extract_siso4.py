@@ -186,24 +186,31 @@ for ep in range(num_epochs):
 # Average filter (the spike-triggered average)
 # ------------------------------------------------------------
 # Raw mean over epochs (same as Sara's linearFilter/numEpochs).
-avg_filter = np.mean(per_epoch_filters, axis=0)
+avg_raw = np.mean(per_epoch_filters, axis=0)
 
-# Optional: normalize the STA. 'max' reproduces Sara's graphDataOnline display
-# (trough at -1.0); 'std' gives her internal analysis.linearFilter (trough ~-5).
+# Normalization FACTOR — computed from the average and applied CONSISTENTLY to both
+# the average AND the per-epoch display traces, so the overlay is on a common scale.
+# (Previously each epoch was divided by its OWN std while the average was divided by
+# max/std of the average -> different scales -> the average looked misleadingly small.
+# Averaging a coherent signal + incoherent noise makes the average ~1.7x the typical
+# single epoch here, which is now visible.)
 if NORMALIZE_STA:
     if STA_NORM_METHOD == 'max':
-        avg_filter = avg_filter / np.max(np.abs(avg_filter))
+        norm_factor = np.max(np.abs(avg_raw))
         sta_ylabel = 'normalized amplitude'
         sta_state = 'STA normalized (/max|.|, matches MATLAB)'
     elif STA_NORM_METHOD == 'std':
-        avg_filter = avg_filter / np.std(avg_filter, ddof=STD_DDOF)
+        norm_factor = np.std(avg_raw, ddof=STD_DDOF)
         sta_ylabel = 'normalized amplitude'
         sta_state = 'STA normalized (/std, Sara internal)'
     else:
         raise ValueError(f"STA_NORM_METHOD must be 'max' or 'std', got {STA_NORM_METHOD!r}")
 else:
+    norm_factor = 1.0
     sta_ylabel = 'amplitude (spikes/s)'
     sta_state = 'STA raw (no normalization)'
+
+avg_filter = avg_raw / norm_factor
 
 print(f"\n{sta_state}; "
       f"peak |amp| = {np.max(np.abs(avg_filter)):.4g} at "
@@ -213,16 +220,14 @@ print(f"\n{sta_state}; "
 freqs = np.fft.rfftfreq(filter_len, d=1.0 / bin_rate)
 
 # ------------------------------------------------------------
-# Per-epoch traces for display (optionally normalized)
+# Per-epoch traces for display — scaled by the SAME factor as the average so the
+# overlay shares one scale (NORMALIZE_EPOCHS=False shows the raw per-epoch filters).
 # ------------------------------------------------------------
 per_epoch_display = np.zeros_like(per_epoch_filters)
 per_epoch_tuning = np.zeros((num_epochs, len(freqs)), dtype=float)
 
 for ep in range(num_epochs):
-    if NORMALIZE_EPOCHS:
-        trace = per_epoch_filters[ep, :] / np.std(per_epoch_filters[ep, :], ddof=STD_DDOF)
-    else:
-        trace = per_epoch_filters[ep, :]
+    trace = per_epoch_filters[ep, :] / (norm_factor if NORMALIZE_EPOCHS else 1.0)
     per_epoch_display[ep, :] = trace
     per_epoch_tuning[ep, :] = np.abs(np.fft.rfft(trace))
 
