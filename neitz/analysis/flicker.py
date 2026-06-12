@@ -95,17 +95,33 @@ def cycle_psth(spike_t, t0, t1, period, n_bins=25) -> tuple:
 
 
 def shift_test(trials, which, *, pre_s, post_s, bin_s, latency_ms=(10, 150),
-               n_shuffle=1000, rng=None) -> dict:
+               n_shuffle=1000, rng=None, null="jitter", jitter_s=None) -> dict:
     """
-    Pooled transition-triggered PSTH + circular-shift significance test.
+    Pooled transition-triggered PSTH + significance test for a time-locked response.
 
     `trials` is a list of dicts: {'spikes': array(s), 'on': edges, 'off': edges,
-    'dur': trial_duration_s}. `which` is 'on' or 'off'. Returns observed rate,
-    latency-window peak ratio over baseline, the shuffle band, and p-value.
+    'dur': trial_duration_s}. `which` is 'on' or 'off'.
+
+    null : 'jitter' (default) — jitter each spike independently by ±jitter_s. This
+           breaks precise time-locking while preserving the firing rate, so a real
+           locked response exceeds the null. Correct for a PERIODIC stimulus.
+           'shift' — circularly shift each trial's whole train. For a perfectly
+           periodic stimulus this only ROTATES the triggered PSTH (the peak height
+           is preserved), so its p-value has a floor ~(window/period) and low power.
+           Kept for reference/back-compatibility.
+    jitter_s : half-width of the per-spike jitter window (s); defaults to half the
+           median inter-edge interval (~half the flicker period).
+
+    Returns observed rate, latency-window peak ratio over baseline, peak latency,
+    the null 99th-percentile band, and the p-value.
     """
     rng = rng or np.random.default_rng(0)
     bins = np.arange(-pre_s, post_s + bin_s, bin_s)
     centers = 0.5 * (bins[:-1] + bins[1:])
+
+    if jitter_s is None:
+        gaps = [np.median(np.diff(t[which])) for t in trials if len(t[which]) > 1]
+        jitter_s = (float(np.median(gaps)) / 2.0) if gaps else max(post_s, 0.1)
 
     def pooled(trs):
         counts = np.zeros(len(centers)); n_edges = 0
@@ -116,25 +132,30 @@ def shift_test(trials, which, *, pre_s, post_s, bin_s, latency_ms=(10, 150),
             n_edges += len(t[which])
         return counts / (n_edges * bin_s) if n_edges else counts
 
-    # baseline = pooled mean rate across all spikes / total duration
-    tot_sp = sum(len(t["spikes"]) for t in trials)
-    tot_t = sum(t["dur"] for t in trials)
-    baseline = tot_sp / tot_t if tot_t else float("nan")
+    baseline = (sum(len(t["spikes"]) for t in trials)
+                / sum(t["dur"] for t in trials)) if sum(t["dur"] for t in trials) else float("nan")
 
     rate = pooled(trials)
     m = (centers * 1000 >= latency_ms[0]) & (centers * 1000 <= latency_ms[1])
     obs_ratio = rate[m].max() / baseline if baseline > 0 else float("nan")
     peak_t = centers[m][np.argmax(rate[m])] * 1000
 
+    def perturb(t):
+        sp = t["spikes"]
+        if null == "jitter":
+            sp = sp + rng.uniform(-jitter_s, jitter_s, sp.shape)
+        else:  # 'shift' — whole-train circular rotation
+            sp = (sp + rng.uniform(0, t["dur"])) % t["dur"]
+        return dict(spikes=np.sort(sp), **{which: t[which]})
+
     null_ratios = np.empty(n_shuffle)
     null_rates = np.empty((n_shuffle, len(centers)))
     for k in range(n_shuffle):
-        shifted = [dict(spikes=np.sort((t["spikes"] + rng.uniform(0, t["dur"])) % t["dur"]),
-                        **{which: t[which]}) for t in trials]
-        nr = pooled(shifted)
+        nr = pooled([perturb(t) for t in trials])
         null_rates[k] = nr
         null_ratios[k] = nr[m].max() / baseline if baseline > 0 else np.nan
     p = float((np.sum(null_ratios >= obs_ratio) + 1) / (n_shuffle + 1))
 
     return dict(centers=centers, rate=rate, baseline=baseline, ratio=obs_ratio,
-                peak_ms=peak_t, p=p, band=np.percentile(null_rates, 99, axis=0))
+                peak_ms=peak_t, p=p, band=np.percentile(null_rates, 99, axis=0),
+                null=null, jitter_s=jitter_s)

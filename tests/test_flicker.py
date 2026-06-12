@@ -48,22 +48,30 @@ def test_triggered_psth_shape():
     assert np.isclose(centers[0], -0.1 + 0.005, atol=1e-6)
 
 
-def test_shift_test_measures_concentration_and_latency():
-    # NOTE: the circular-shift null only ROTATES the triggered PSTH for a perfectly
-    # periodic stimulus, so its p-value has a floor of ~(latency window / period) and
-    # should not be used to *detect* a response. We test the outputs it computes well:
-    # a locked response is more concentrated (higher ratio) than random firing, the
-    # peak lands at the right latency, and random firing is (correctly) not significant.
+def test_shift_test_jitter_null_detects_locked_response():
+    # The default 'jitter' null disperses time-locking, so it CAN detect a real
+    # response on a periodic stimulus (unlike the old whole-train 'shift' rotation).
     on = np.arange(0.5, 30.0, 0.5)
     locked = dict(spikes=on + 0.05, on=on, off=on + 0.25, dur=30.0)   # 50 ms after each ON
     rng = np.random.default_rng(0)
-    rnd = dict(spikes=np.sort(rng.uniform(0, 30, on.size)), on=on, off=on + 0.25, dur=30.0)
+    rnd = dict(spikes=np.sort(rng.uniform(0, 30, 200)), on=on, off=on + 0.25, dur=30.0)
 
     r_lock = flicker.shift_test([locked], "on", pre_s=0.1, post_s=0.4, bin_s=0.01,
-                                n_shuffle=50, rng=np.random.default_rng(1))
+                                n_shuffle=200, rng=np.random.default_rng(1))
     r_rand = flicker.shift_test([rnd], "on", pre_s=0.1, post_s=0.4, bin_s=0.01,
-                                n_shuffle=50, rng=np.random.default_rng(2))
+                                n_shuffle=200, rng=np.random.default_rng(2))
 
-    assert r_lock["ratio"] > r_rand["ratio"]     # locked firing is more concentrated
-    assert 30 <= r_lock["peak_ms"] <= 70         # latency ~50 ms
+    assert r_lock["null"] == "jitter"
+    assert r_lock["p"] < 0.05                     # locked response IS detected now
+    assert 30 <= r_lock["peak_ms"] <= 70          # latency ~50 ms
     assert r_rand["p"] > 0.05                     # random firing is not significant
+
+
+def test_shift_test_rotation_null_has_low_power():
+    # Documents the old behavior: whole-train rotation cannot reach significance
+    # for a perfectly periodic, fully locked train (p floored ~window/period).
+    on = np.arange(0.5, 30.0, 0.5)
+    locked = dict(spikes=on + 0.05, on=on, off=on + 0.25, dur=30.0)
+    r = flicker.shift_test([locked], "on", pre_s=0.1, post_s=0.4, bin_s=0.01,
+                           n_shuffle=200, rng=np.random.default_rng(1), null="shift")
+    assert r["p"] > 0.05

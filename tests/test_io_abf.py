@@ -11,10 +11,16 @@ from neitz.spikes import detect_spikes
 from neitz.analysis import flicker
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(ROOT, "ipRGC barak", "ipRGC", "2026_06_02_0044.abf")
+# the .abf is gitignored and may live in a few places locally; use whichever exists
+_CANDIDATES = [
+    os.path.join(ROOT, "data", "2026_06_02_0044.abf"),
+    os.path.join(ROOT, "data", "ipRGC barak", "ipRGC", "2026_06_02_0044.abf"),
+    os.path.join(ROOT, "ipRGC barak", "ipRGC", "2026_06_02_0044.abf"),
+]
+DATA = next((p for p in _CANDIDATES if os.path.exists(p)), _CANDIDATES[0])
 
 pytestmark = pytest.mark.skipif(not os.path.exists(DATA),
-                                reason=f"abf data not present: {DATA}")
+                                reason="abf data not present (gitignored)")
 
 
 def test_recording_loads_and_channels_by_name():

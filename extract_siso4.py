@@ -76,23 +76,11 @@ def bin_spike_times(spike_times, stim_le_s, bins_total, bin_rate):
 
 
 def compute_filter_fft(stimulus, response, filter_len, zero_pad=None):
-    n = len(stimulus)
-
-    if len(response) != n:
-        raise RuntimeError(
-            f"Stimulus and response length mismatch: {len(stimulus)} vs {len(response)}"
-        )
-
+    # delegates to the shared engine (numerically identical to the old inline FFT)
+    from neitz.analysis import revcorr
     if zero_pad is None:
-        zero_pad = n
-
-    s_pad = np.concatenate([stimulus, np.zeros(zero_pad)])
-    r_pad = np.concatenate([response, np.zeros(zero_pad)])
-
-    Rsr = np.fft.fft(r_pad) * np.conj(np.fft.fft(s_pad))
-    filt = np.real(np.fft.ifft(Rsr))
-
-    return filt[:filter_len]
+        zero_pad = len(stimulus)
+    return revcorr.reverse_correlation(stimulus, response, filter_len, zero_pad=zero_pad)
 
 
 def compute_temporal_tuning(filt, bin_rate):
