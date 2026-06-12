@@ -21,6 +21,9 @@ dependencies = [
 gui = ["dash", "plotly"]
 dev = ["pytest"]
 
+[project.scripts]
+neitz = "neitz.cli:main"
+
 [tool.setuptools.packages.find]
 include = ["neitz*"]
 

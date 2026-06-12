@@ -30,6 +30,24 @@ fl  = flicker.detect_flicker(rec.channel("TTL"), rec.fs)    # square-wave timing
 - `analysis/revcorr.py` — reverse correlation / linear filter, `normalize_filter('max'|'std')`.
 - `analysis/flicker.py` — `detect_flicker`, cycle/transition PSTH, vector strength, shift test.
 
+## CLI (headless)
+
+```bash
+neitz flicker "data/ipRGC barak" --out flick     # per-file VS + pooled ON/OFF -> flick.json + flick_summary.csv
+neitz spikes  "data/ipRGC barak/ipRGC" --out spikes.csv   # detect -> binary spike-train CSV
+neitz noise   siso-spikes.csv siso-stdev.csv --out sta    # reverse correlation -> sta.json + sta.npz
+# (or `python -m neitz ...` without installing the console script)
+```
+
+Programmatic equivalent (reusable from notebooks):
+
+```python
+from neitz.run import run_flicker, from_folder, Result
+res = run_flicker(from_folder("data/ipRGC barak"))
+res.save("flick"); res.save_csv("flick.csv")     # .json + .npz (+ csv summary)
+res = Result.load("flick")
+```
+
 ## GUI
 
 ```bash
