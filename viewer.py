@@ -312,14 +312,16 @@ _LBL = {"fontSize": "11px", "fontWeight": "bold", "color": "#444", "display": "b
 def ov(**pos):
     """A semi-transparent control overlay pinned to a graph corner (absolute)."""
     s = {"position": "absolute", "zIndex": 20, "background": "rgba(255,255,255,0.85)",
-         "padding": "1px 5px", "borderRadius": "4px", "fontSize": "11px",
-         "display": "flex", "alignItems": "center", "gap": "4px",
+         "padding": "0 4px", "borderRadius": "4px", "fontSize": "10px",
+         "display": "flex", "alignItems": "center", "gap": "3px",
          "boxShadow": "0 0 3px rgba(0,0,0,0.18)"}
     s.update(pos)
     return s
 
 
-_OVL = {"fontSize": "11px", "color": "#444", "fontWeight": "bold"}    # inline label inside an overlay
+_OVL = {"fontSize": "10px", "color": "#444", "fontWeight": "bold"}    # inline label inside an overlay
+_OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "border-box",
+        "textAlign": "right"}                                        # compact overlay textbox
 
 
 # ============================================================
@@ -773,47 +775,47 @@ app.layout = html.Div(
         # Region & display controls float in the corners, hugging the graph.
         html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
             dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True}),
-            # top-left: region start
+            # top-left: region start (dropped below the modebar / legend zone)
             html.Div([html.Span("start (s)", style=_OVL),
                       dcc.Input(id="region-start", type="number", debounce=True,
-                                style={"width": "70px"})],
-                     style=ov(top="2px", left="6px")),
-            # top-right: region end + show/crop (right-justified)
+                                style=dict(_OVI, width="60px"))],
+                     style=ov(top="34px", left="6px")),
+            # top-right: region end + show/crop (below the graph toolbar)
             html.Div([html.Span("end (s)", style=_OVL),
                       dcc.Input(id="region-end", type="number", debounce=True,
-                                style={"width": "70px"}),
+                                style=dict(_OVI, width="60px")),
                       dcc.RadioItems(id="region-mode",
                                      options=[{"label": " show", "value": "show"},
                                               {"label": " crop", "value": "crop"}],
                                      value="show", inline=True,
-                                     labelStyle={"fontSize": "11px", "marginLeft": "5px"},
+                                     labelStyle={"fontSize": "10px", "marginLeft": "4px"},
                                      inputStyle={"marginRight": "2px"}, **PERSIST)],
-                     style=ov(top="2px", right="6px")),
+                     style=ov(top="34px", right="6px")),
             # bottom-left of the frame-sync: hide spikes + spike-train view
             dcc.Checklist(id="disp-lr",
                           options=[{"label": " hide spikes", "value": "hide_spikes"},
                                    {"label": " spike-train", "value": "spike_train"}],
                           value=[], inline=True,
-                          labelStyle={"fontSize": "11px", "marginRight": "8px"},
+                          labelStyle={"fontSize": "10px", "marginRight": "8px"},
                           inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="2px", left="6px"), **PERSIST),
+                          style=ov(bottom="3px", left="6px"), **PERSIST),
             # bottom-right of the frame-sync: stagger amount (0 = overlaid, 100 = full)
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
-                                debounce=True, style={"width": "55px"}, **PERSIST)],
-                     style=ov(bottom="2px", right="6px")),
+                                debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
+                     style=ov(bottom="3px", right="6px")),
         ]),
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
                  children=[
             html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True}),
                      style={"flex": "1 1 0", "minWidth": 0}),
-            # ISI histogram with the spike-train bin control floated inside, upper-right
+            # ISI histogram with the spike-train bin control floated inside, below the toolbar
             html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True}),
                       html.Div([html.Span("bin (ms)", style=_OVL),
                                 dcc.Input(id="train-bin", type="number", value=0, min=0,
-                                          debounce=True, style={"width": "60px"}, **PERSIST)],
-                               style=ov(top="2px", right="10px"))],
+                                          debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
+                               style=ov(top="34px", right="8px"))],
                      style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}),
         ]),
     ]),
@@ -1155,7 +1157,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1)
     time_fig.update_xaxes(title_text="time (s)", row=2, col=1, range=[x0, x1])
     time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision="keep",
-                           legend=dict(orientation="h", y=1.12), showlegend=multi)
+                           showlegend=False)   # file colors are evident from the Files list
 
     # power spectrum: group average + stim marker
     if multi and len(per_file_rates) >= 2:
