@@ -948,6 +948,7 @@ app.layout = html.Div(
     dcc.Store(id="absth-map"),                            # {file path: per-trace abs threshold}
     dcc.Store(id="absth-seed"),                           # {file path: seed value for the editor}
     dcc.Store(id="recent-cells", storage_type="local"),   # most-recently-opened date|cell list
+    dcc.Store(id="last-session", storage_type="local"),   # last cell + checked files (auto-loaded on startup)
     dcc.Store(id="rail-sort", data={"col": "date", "dir": "desc"}),   # explorer rail sort
     dcc.Store(id="store-rev", data=0),                    # bumped when the store changes (rail refresh)
     dcc.Store(id="exp-date"),                             # explorer: selected date
@@ -1443,8 +1444,8 @@ def collect_absth(_vals, sync, _files):
               Output("sel-cell", "data"), Output("stim-type", "value"),
               Output("stim-params", "value"), Output("recent-cells", "data"),
               Input("cell-select", "value"), State("recent-cells", "data"),
-              prevent_initial_call=True)
-def pick_cell(vals, recent):
+              State("last-session", "data"), prevent_initial_call=True)
+def pick_cell(vals, recent, sess):
     vals = vals if isinstance(vals, list) else ([vals] if vals else [])
     if not vals:
         return no_update, no_update, [], None, None, no_update
@@ -1468,9 +1469,29 @@ def pick_cell(vals, recent):
                     sparams = ", ".join(f"{k}={v}" for k, v in
                                         (r["stimulus"].get("params") or {}).items() if v is not None)
                     break
+    # restore the exact files last worked on, if they belong to this selection (resume on reload)
+    sess_files = [f for f in ((sess or {}).get("files") or []) if f in seen]
+    if sess_files:
+        checked = sess_files
     recent = [x for x in (recent or []) if x not in vals]        # most-recent-first, de-duped
     recent = list(vals) + recent
     return opts, checked, sel_list, stype, sparams, recent[:50]
+
+
+# ---- persist the working session (cell + checked files) and auto-load it on startup --
+@app.callback(Output("last-session", "data"),
+              Input("cell-select", "value"), Input("file", "value"),
+              prevent_initial_call=True)
+def save_session(cellv, filev):
+    return {"cell": cellv, "files": [f for f in (filev or []) if f]}
+
+
+@app.callback(Output("cell-select", "value"),
+              Input("once", "n_intervals"), State("last-session", "data"),
+              prevent_initial_call=True)
+def restore_session(_n, sess):
+    cell = (sess or {}).get("cell")
+    return cell if cell else no_update
 
 
 # ---- re-sort the cell(s) dropdown (incl. "opened recently") ------------------

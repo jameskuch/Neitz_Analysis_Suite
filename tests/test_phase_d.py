@@ -23,7 +23,7 @@ def test_pick_cell_and_save_meta(tmp_path, monkeypatch):
 
     # pick_cell (multi-cell + recent tracking) lists the cell's files, returns sel as a
     # list, and prepends the pick to the recent-cells list. A single string is wrapped.
-    opts, files, sel, stype, sparams, recent = viewer.pick_cell("2026-06-02|c01", [])
+    opts, files, sel, stype, sparams, recent = viewer.pick_cell("2026-06-02|c01", [], None)
     assert len(opts) == 1                                 # the cell's one recording is listed
     assert isinstance(files, list)                        # checked = openable files only
     assert sel == [{"date": "2026-06-02", "cell": "c01"}]
