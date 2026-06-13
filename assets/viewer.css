@@ -1,11 +1,12 @@
-/* Align every checkbox / radio square with its label text. The square sits a touch
-   LOWER than centered so the label text reads slightly above it.
+/* Align every checkbox / radio square with its label text. The square sits a bit
+   LOWER than centered so the label text reads above it (matches the manual
+   before/after: text raised ~3px at actual UI scale).
    Dash auto-loads any .css in this assets/ folder. */
 input[type="checkbox"],
 input[type="radio"] {
     vertical-align: middle;
     position: relative;
-    top: 2px;
+    top: 5px;
     margin-top: 0;
     margin-bottom: 0;
 }
