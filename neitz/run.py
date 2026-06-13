@@ -200,11 +200,17 @@ def run_noise(spike_csv, stim_csv, *, paradigm=None, trim_s=0.5, stim_le_s=10.0,
 
 # ---------------------------------------------------------------- store-driven cell run
 def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
-                     formats=("png", "pdf", "svg"), save=True) -> Result:
+                     formats=("png", "pdf", "svg"), save=True,
+                     name="flicker", include=None) -> Result:
     """
     Run the flicker analysis on a stored cell: load its .abf recordings, compute
     per-file + pooled ON/OFF, and (if save) write figures (PNG/PDF/SVG) + metrics.csv
-    + result.json into <cell>/outputs/flicker/, recording them in the manifest.
+    + result.json into <cell>/outputs/<name>/, recording them in the manifest.
+
+    name    : output sub-folder + analysis key (default "flicker"). Use a distinct
+              name to keep a variant run alongside earlier ones (instead of overwriting).
+    include : optional collection of recording ids OR file paths/basenames to analyze;
+              default = every .abf recording in the cell. Lets you EXCLUDE recordings.
     """
     import os as _os
     from .io.figures import save_figure
@@ -216,31 +222,40 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
     recs = []
     for r in cm.data.get("recordings", []):
         if r.get("kind", "recording") == "recording" and str(r.get("file", "")).endswith(".abf"):
-            recs.append((r["id"], r.get("label", r["id"]), Recording.load(cm.dir / r["file"])))
+            fpath = cm.dir / r["file"]
+            recs.append((r["id"], r.get("label", r["id"]), Recording.load(fpath), str(fpath)))
     if not recs:
         raise SystemExit(f"no .abf recordings in {date}/{cell}")
 
+    if include is not None:                              # restrict to a chosen subset
+        inc = {str(x) for x in include} | {_os.path.basename(str(x)) for x in include}
+        recs = [t for t in recs
+                if t[0] in inc or t[3] in inc or _os.path.basename(t[3]) in inc]
+        if not recs:
+            raise SystemExit(f"none of the selected recordings are .abf files in {date}/{cell}")
+
     summary, per_file = [], []
-    for rid, label, rec in recs:
+    for rid, label, rec, _fp in recs:
         res = paradigm.analyze_recording(rec, name=label)
         per_file.append(res)
         summary.append(dict(file=label, flicker_hz=res.freq, n_in_region=res.n_in_region,
                             vector_strength=res.vector_strength, rayleigh_p=res.rayleigh_p))
 
-    grp = paradigm.analyze_group([rec for _, _, rec in recs], n_shuffle=n_shuffle)
+    grp = paradigm.analyze_group([rec for _, _, rec, _ in recs], n_shuffle=n_shuffle)
     on, off = grp["on"], grp["off"]
     verdict = ("ON-OFF" if on["p"] < 0.01 and off["p"] < 0.01 else
                "ON" if on["p"] < 0.01 else "OFF" if off["p"] < 0.01 else "no sig.")
     pooled = dict(n_trials=grp["n_trials"], flicker_hz=grp["freq"],
                   on_ratio=on["ratio"], on_p=on["p"], off_ratio=off["ratio"], off_p=off["p"],
                   verdict=verdict)
-    result = Result("flicker", summary=summary, tables={"pooled_onoff": [pooled]},
+    result = Result(name, summary=summary, tables={"pooled_onoff": [pooled]},
                     meta=dict(date=date, cell=cell, label=cm.data.get("label"),
-                              n_shuffle=n_shuffle, detect=paradigm._det))
+                              n_shuffle=n_shuffle, detect=paradigm._det,
+                              inputs=[rid for rid, _, _, _ in recs]))
 
     if save:
-        out = cm.output_dir("flicker")
-        title = f"{date}/{cell} {cm.data.get('label') or ''}".strip()
+        out = cm.output_dir(name)
+        title = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
         figpaths = save_figure(plots.flicker_onoff_figure(grp, label=title), out,
                                "flicker_onoff", formats=formats)
         save_figure(plots.flicker_cycle_grid(per_file), out, "flicker_cycle_grid", formats=formats)
@@ -251,9 +266,9 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
         rel = lambda p: _os.path.relpath(p, cm.dir)          # manifest paths relative to the cell
         files = {f"figure_{k}": rel(v) for k, v in figpaths.items()}
         files.update(metrics_csv=rel(out / "metrics.csv"), result_json=rel(out / "result.json"))
-        cm.record_output("flicker", files=files,
+        cm.record_output(name, files=files,
                          params={"n_shuffle": n_shuffle, **paradigm._det},
-                         inputs=[rid for rid, _, _ in recs],
+                         inputs=[rid for rid, _, _, _ in recs],
                          summary=dict(verdict=verdict, flicker_hz=grp["freq"],
                                       on_p=on["p"], off_p=off["p"]))
         cm.save()

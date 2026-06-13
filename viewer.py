@@ -341,6 +341,40 @@ def sparkline_datauri(path, width_in=2.6, height_in=0.72):
     return uri
 
 
+_BIGWAVE_CACHE: dict = {}                           # (path, mtime) -> full waveform data-URI
+
+
+def big_waveform_datauri(path):
+    """Larger labelled waveform PNG (data-URI) for the enlarge modal; cached by mtime."""
+    try:
+        key = (path, os.path.getmtime(path))
+    except OSError:
+        key = (path, 0.0)
+    if key in _BIGWAVE_CACHE:
+        return _BIGWAVE_CACHE[key]
+    uri = None
+    try:
+        rec = get_recording(path)
+        ch = rec.channel_names[0]
+        y = rec.channel(ch)
+        fs = rec.fs if (np.isfinite(rec.fs) and rec.fs > 0) else 1.0
+        t = np.arange(len(y)) / fs
+        step = max(1, len(y) // 6000)
+        fig = Figure(figsize=(11, 4.2), dpi=110)
+        ax = fig.add_subplot(111)
+        ax.plot(t[::step], y[::step], color="#27408b", linewidth=0.6)
+        ax.set_xlabel("time (s)"); ax.set_ylabel(f"{ch} ({rec.units(ch)})")
+        ax.set_title(os.path.basename(path), fontsize=10)
+        ax.margins(x=0)
+        fig.tight_layout()
+        buf = io.BytesIO(); FigureCanvasAgg(fig).print_png(buf)
+        uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        uri = None
+    _BIGWAVE_CACHE[key] = uri
+    return uri
+
+
 def _latest_output_datauri(cm):
     outdir = cm.dir / "outputs"
     if outdir.exists():
@@ -455,25 +489,62 @@ def _json_tree(obj, key=None, top=False):
 
 
 def explorer_detail(date, cell):
-    """Right pane for a cell: manifest JSON tree + output thumbnails (click to enlarge)."""
+    """Right pane for a cell: raw-trace thumbnails + manifest JSON + output figures,
+    everything click-to-enlarge; output figures get a per-figure delete button."""
     cm = DataStore().cell(date, cell)
+
+    # raw analog recordings — click the waveform to enlarge (task 1)
+    raw_thumbs = []
+    for p in cell_data_files(cm):
+        if not loadable(p):
+            continue
+        spark = sparkline_datauri(p)
+        if not spark:
+            continue
+        raw_thumbs.append(html.Div([
+            html.Img(src=spark, id={"type": "raw-thumb", "src": p}, n_clicks=0,
+                     style={"width": "150px", "border": "1px solid #ccc", "cursor": "pointer",
+                            "background": "white", "display": "block"}),
+            html.Div(os.path.basename(p), style={"fontSize": "9px", "maxWidth": "150px",
+                                                 "overflow": "hidden", "textOverflow": "ellipsis",
+                                                 "whiteSpace": "nowrap"}),
+        ], style={"margin": "3px"}))
+
+    # processed output figures — click to enlarge, 🗑 to delete that figure (task 2)
     outdir = cm.dir / "outputs"
     pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) \
         if outdir.exists() else []
-    out_thumbs = [html.Img(src=_img_datauri(str(p)),
-                           id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
-                           style={"height": "90px", "border": "1px solid #ccc", "margin": "3px",
-                                  "cursor": "pointer", "background": "white"})
-                  for p in pngs]
+    out_thumbs = []
+    for p in pngs:
+        rel = p.relative_to(outdir)
+        out_thumbs.append(html.Div([
+            html.Img(src=_img_datauri(str(p)),
+                     id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
+                     style={"height": "90px", "border": "1px solid #ccc", "cursor": "pointer",
+                            "background": "white", "display": "block"}),
+            html.Div([
+                html.Span(str(rel), style={"fontSize": "9px", "flex": "1", "overflow": "hidden",
+                                           "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+                html.Button("🗑", id={"type": "del-output", "src": str(p)}, n_clicks=0,
+                            title="delete this figure",
+                            style={"fontSize": "10px", "padding": "0 4px", "color": "#b00",
+                                   "border": "none", "background": "none", "cursor": "pointer"}),
+            ], style={"display": "flex", "alignItems": "center", "maxWidth": "150px"}),
+        ], style={"margin": "3px"}))
+
     return [
         html.Div(f"{date} / {cell}", style={"fontWeight": "bold", "fontSize": "13px",
                                             "marginBottom": "4px"}),
+        html.Div("raw recordings (click to enlarge)",
+                 style={"fontWeight": "bold", "fontSize": "11px", "color": "#555"}),
+        html.Div(raw_thumbs or [html.Span("none", style={"color": "#999", "fontSize": "11px"})],
+                 style={"display": "flex", "flexWrap": "wrap", "marginBottom": "6px"}),
         html.Div("manifest.json", style={"fontWeight": "bold", "fontSize": "11px",
                                          "color": "#555", "marginTop": "6px"}),
         html.Div(_json_tree(cm.data, top=True),
-                 style={"maxHeight": "40vh", "overflowY": "auto", "border": "1px solid #eee",
+                 style={"maxHeight": "32vh", "overflowY": "auto", "border": "1px solid #eee",
                         "padding": "6px", "background": "#fbfbfb"}),
-        html.Div("output figures (click to enlarge)",
+        html.Div("output figures (click to enlarge · 🗑 to delete)",
                  style={"fontWeight": "bold", "fontSize": "11px", "color": "#555",
                         "marginTop": "8px"}),
         html.Div(out_thumbs or [html.Span("none yet", style={"color": "#999",
@@ -613,6 +684,11 @@ app.layout = html.Div(
                 html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
                             style={"marginLeft": "4px"}),
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "4px"}),
+            html.Div([html.Label("run name (a new name keeps a variant; runs only the "
+                                 "checked files)", style=dict(_LBL, fontWeight="normal")),
+                      dcc.Input(id="run-name", type="text", value="flicker", debounce=True,
+                                style={"width": "100%", "boxSizing": "border-box"})],
+                     style={"marginTop": "6px"}),
             html.Div(id="store-msg", style={"fontSize": "11px", "color": "#070",
                                             "marginTop": "6px"}),
         ]),
@@ -1228,22 +1304,32 @@ def save_meta(_n, sel, stype, sparams):
     return f"saved stimulus '{stype}' {params} to {total} recordings in " + ", ".join(cells)
 
 
-# ---- run the flicker analysis on the selected cell ---------------------------
+# ---- run the flicker analysis on the selected cell(s) ------------------------
 @app.callback(Output("store-msg", "children", allow_duplicate=True),
               Output("gallery-trigger", "data", allow_duplicate=True),
               Input("run-cell", "n_clicks"), State("sel-cell", "data"),
+              State("file", "value"), State("run-name", "value"),
               prevent_initial_call=True)
-def run_cell(_n, sel):
+def run_cell(_n, sel, checked, run_name):
+    import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "pick a cell first", no_update
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", (run_name or "flicker").strip()) or "flicker"
+    checked = [c for c in (checked or []) if c]
     ds, msgs = DataStore(), []
     for s in sels:
         tag = f"{s['date']}/{s['cell']}"
+        cmdir = str(ds.cell(s["date"], s["cell"]).dir)
+        sub = [f for f in checked if f.startswith(cmdir) and f.endswith(".abf")]
+        include = sub or None                            # only the cell's CHECKED .abf files
         try:
-            res = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=500)
+            res = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=500,
+                                   name=name, include=include)
             p = res.tables["pooled_onoff"][0]
-            msgs.append(f"{tag}: {p['n_trials']} trials, {p['flicker_hz']:.1f} Hz, '{p['verdict']}'")
+            nfile = len(res.summary)
+            msgs.append(f"{tag} [{name}]: {nfile} file(s), {p['n_trials']} trials, "
+                        f"{p['flicker_hz']:.1f} Hz, '{p['verdict']}'")
         except SystemExit as e:
             msgs.append(f"{tag}: {e}")
         except Exception as e:
@@ -1276,14 +1362,19 @@ def build_gallery(cell_val, _trig):
 
 @app.callback(Output("output-modal", "style"), Output("modal-img", "src"),
               Input({"type": "out-thumb", "src": ALL}, "n_clicks"),
+              Input({"type": "raw-thumb", "src": ALL}, "n_clicks"),
               Input("modal-close", "n_clicks"), prevent_initial_call=True)
-def toggle_modal(_thumbs, _close):
+def toggle_modal(_thumbs, _raw, _close):
     trig = ctx.triggered_id
     if trig == "modal-close":
         return {"display": "none"}, no_update
-    if isinstance(trig, dict) and trig.get("type") == "out-thumb":
-        if ctx.triggered and ctx.triggered[0].get("value"):       # a real click
+    if isinstance(trig, dict) and ctx.triggered and ctx.triggered[0].get("value"):  # real click
+        if trig.get("type") == "out-thumb":                       # processed figure (PNG on disk)
             return _MODAL_SHOWN, _img_datauri(trig["src"])
+        if trig.get("type") == "raw-thumb":                       # raw trace -> render full waveform
+            uri = big_waveform_datauri(trig["src"])
+            if uri:
+                return _MODAL_SHOWN, uri
     return no_update, no_update
 
 
@@ -1357,21 +1448,36 @@ def exp_open_viewer(_n, sel):
     return file_options(sel), sel, {"display": "none"}
 
 
-# ---- delete: open the two-factor confirmation modal ---------------------------
+# ---- delete: open the two-factor confirmation modal (raw files OR a figure) ----
 @app.callback(Output("del-modal", "style"), Output("del-targets", "data"),
               Output("del-list", "children"), Output("del-msg", "children"),
               Output("del-confirm-text", "value"), Output("del-password", "value"),
               Input("exp-del-open", "n_clicks"),
+              Input({"type": "del-output", "src": ALL}, "n_clicks"),
               State("exp-files", "value"), State("exp-date", "data"), State("exp-cell", "data"),
               prevent_initial_call=True)
-def open_delete(_n, sel, date, cell):
+def open_delete(_n, _dels, sel, date, cell):
+    trig = ctx.triggered_id
+    if not date or not cell:
+        return _DEL_SHOWN, no_update, [html.Span("Open a cell first.", style={"color": "#b00"})], \
+            "", "", ""
+    if isinstance(trig, dict) and trig.get("type") == "del-output":
+        if not (ctx.triggered and ctx.triggered[0].get("value")):      # ignore button creation
+            return (no_update,) * 6
+        p = Path(trig["src"])                                           # the figure + its siblings
+        paths = sorted(str(x) for x in p.parent.glob(p.stem + ".*"))
+        targets = {"date": date, "cell": cell, "paths": paths}
+        lst = [html.Div("output figure (+ same-name pdf/svg):", style={"fontWeight": "bold"})] \
+            + [html.Div(os.path.basename(x)) for x in paths]
+        return _DEL_SHOWN, targets, lst, "", "", ""
+    # exp-del-open: the checked raw recordings
     sel = [s for s in (sel or []) if s]
-    if not sel or not date or not cell:
+    if not sel:
         return _DEL_SHOWN, no_update, \
-            [html.Span("Select a cell and check one or more files first.",
-                       style={"color": "#b00"})], "", "", ""
+            [html.Span("Check one or more files first.", style={"color": "#b00"})], "", "", ""
     targets = {"date": date, "cell": cell, "paths": sel}
-    lst = [html.Div(os.path.basename(p)) for p in sel]
+    lst = [html.Div("recordings:", style={"fontWeight": "bold"})] \
+        + [html.Div(os.path.basename(p)) for p in sel]
     return _DEL_SHOWN, targets, lst, "", "", ""
 
 
