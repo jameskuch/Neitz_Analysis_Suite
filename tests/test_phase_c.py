@@ -49,3 +49,34 @@ def test_run_cell_flicker_writes_outputs(tmp_path):
     assert "figure_pdf" in files and "figure_svg" in files and "metrics_csv" in files
     for rel in files.values():
         assert (cm.dir / rel).exists()                   # paths resolve under the cell
+
+
+def test_noise_sta_figure_saves(tmp_path):
+    t = np.arange(360)
+    avg = np.sin(t / 20.0) * np.exp(-t / 100.0)
+    arrays = dict(average=avg, time_ms=1000.0 * t / 360.0,
+                  freqs=np.fft.rfftfreq(360, d=1 / 360.0),
+                  tuning=np.abs(np.fft.rfft(avg)),
+                  per_epoch=np.random.RandomState(0).randn(3, 360))
+    fig = plots.noise_sta_figure(arrays, label="2017-01-18/c01 S-iso")
+    paths = save_figure(fig, tmp_path, "sta")
+    assert set(paths) == {"png", "pdf", "svg"}
+    for p in paths.values():
+        assert os.path.exists(p) and os.path.getsize(p) > 0
+
+
+_SISO = os.path.join(_STORE, "2017-01-18", "c01", "manifest.json")
+
+
+@pytest.mark.skipif(not os.path.exists(_SISO), reason="S-iso cell not present")
+def test_run_cell_noise_sta_peak():
+    """Gaussian-noise STA validates against Sara's MATLAB ground truth (~22.2 ms, OFF)."""
+    from neitz.dataio import DataStore
+    from neitz.run import run_cell_noise
+    ds = DataStore(_STORE)
+    res = run_cell_noise(ds, "2017-01-18", "c01", save=False)   # don't pollute the store
+    s = res.summary[0]
+    assert s["n_epochs"] == 15
+    assert abs(s["peak_ms"] - 22.22) < 0.5                       # matches Sara/MATLAB
+    assert s["peak_sign"] == "OFF"
+    assert res.arrays["average"].shape == (360,)

@@ -208,8 +208,10 @@ The GUI works off the **data store** — there's no file browser; you pick cells
   inspect, **2+** to group-average). Non-time-series CSVs (e.g. Sara's stimulus files) are
   filtered out. Detection settings **persist across sessions**.
 - **Stimulus type / params + Save metadata** — record what was shown into the manifest.
-- **▶ Run sq wave** — square-wave (flicker) analysis on the *checked* files; a **run name**
-  keeps variants in `outputs/<name>/`. **⤓ Backup mirror** syncs the store.
+- **▶ Run analysis** — dispatches on the cell's **stimulus type**: `gaussian_noise` →
+  reverse-correlation **STA** (from the spike + stimulus CSVs); else square-wave ON/OFF on the
+  *checked* files. **run name** keeps variants in `outputs/<name>/` (blank = auto sta/flicker).
+  **⤓ Backup mirror** syncs the store.
 - **📂 Data Explorer** (pop-out) — left dates rail (🗑 per day) → cell thumbnail cards
   (waveform + latest output) → file checklist; the **middle** column shows a browser over a
   **hover-preview** strip (hover any graph thumbnail → it appears enlarged below); the **right**

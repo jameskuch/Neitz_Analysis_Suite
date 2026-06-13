@@ -35,7 +35,7 @@ neitz/                         tested core (no GUI deps)
              strf.py (spatiotemporal reverse correlation)
   stimulus/  base.py + NoiseParadigm / FlickerParadigm / CheckerboardParadigm
   dataio/    DataStore, CellManifest, config (mirror), mirror_store  (the managed store)
-  run.py     headless orchestration -> Result; run_cell_flicker(store, date, cell, name=, include=)
+  run.py     headless orchestration -> Result; run_cell_flicker(...name=,include=), run_cell_noise(...) (STA)
   plots.py   flicker_onoff_figure, flicker_cycle_grid
   cli.py / __main__.py
 viewer.py                      the Dash GUI (single file, ~1500 lines) — built ON the core
@@ -77,6 +77,12 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 - **Run variants**: `run_cell_flicker(..., name=, include=)` writes to `outputs/<name>/` so a
   run that excludes a recording coexists with the original instead of overwriting it. The GUI
   "run name" box + checked-files drive this.
+- **Run dispatch by stimulus type** (NOT guessed from file contents — driven by the manifest's
+  explicit `stimulus.type`): `gaussian_noise` → `run_cell_noise` (reverse-correlation STA from
+  the spike + stimulus CSVs, `outputs/sta/`); else → `run_cell_flicker`. Data format (abf-analog
+  vs spike-CSV) is ORTHOGONAL to stimulus type — a spike-CSV is pre-detected spike times (no
+  detection). The S-iso STA peak (22.2 ms OFF on 2017-01-18/c01) is pinned as a regression test
+  and matches Sara's MATLAB ground truth.
 
 ## GUI structure (viewer.py)
 

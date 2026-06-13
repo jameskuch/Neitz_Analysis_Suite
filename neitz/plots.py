@@ -47,3 +47,39 @@ def flicker_cycle_grid(per_file, ncol=5):
         ax.axis("off")
     fig.tight_layout()
     return fig
+
+
+def noise_sta_figure(arrays, label=""):
+    """Gaussian-noise reverse correlation: the temporal STA (linear filter) + its
+    tuning. `arrays` = the dict from run_noise (average, time_ms, freqs, tuning,
+    per_epoch). Used to validate against Sara's MATLAB STA (peak ~22 ms)."""
+    avg = np.asarray(arrays["average"], float)
+    t = np.asarray(arrays["time_ms"], float)
+    freqs = np.asarray(arrays["freqs"], float)
+    tuning = np.asarray(arrays["tuning"], float)
+    pk = int(np.argmax(np.abs(avg)))
+    per = arrays.get("per_epoch")
+    n_ep = len(per) if per is not None else None
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 3.8))
+    if per is not None:                                  # faint per-epoch filters (÷own max)
+        for row in np.asarray(per, float):
+            d = np.max(np.abs(row)) or 1.0
+            ax1.plot(t, row / d, color="0.8", lw=0.4)
+    ax1.plot(t, avg, color="tab:blue", lw=1.8, label="average STA")
+    ax1.axhline(0, color="k", lw=0.6)
+    ax1.axvline(t[pk], color="tab:red", ls="--", lw=1.0)
+    ax1.set_title(f"S-iso STA (linear filter) — peak {t[pk]:.1f} ms "
+                  f"[{'OFF' if avg[pk] < 0 else 'ON'}]", fontsize=9)
+    ax1.set_xlabel("time (ms)"); ax1.set_ylabel("filter (÷max)")
+    ax1.legend(fontsize=7)
+
+    ax2.plot(freqs, tuning, color="tab:purple", lw=1.5)
+    ax2.set_xlim(0, 40)
+    ax2.set_title("temporal tuning (|FFT| of STA)", fontsize=9)
+    ax2.set_xlabel("frequency (Hz)"); ax2.set_ylabel("amplitude")
+
+    fig.suptitle(f"{label} — gaussian-noise reverse correlation"
+                 + (f"  ({n_ep} epochs)" if n_ep else ""))
+    fig.tight_layout()
+    return fig

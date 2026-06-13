@@ -277,6 +277,61 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
     return result
 
 
+def run_cell_noise(store, date, cell, *, name="sta", save=True,
+                   formats=("png", "pdf", "svg"), **noise_kw) -> Result:
+    """
+    Gaussian-noise reverse correlation on a stored cell: locate the cell's spike CSV
+    + stimulus CSV, compute the temporal STA (linear filter) via run_noise, and (if
+    save) write the STA figure (PNG/PDF/SVG) + result.json into <cell>/outputs/<name>/,
+    recording them in the manifest. Validates against Sara's MATLAB STA (peak ~22 ms).
+    """
+    import os as _os
+    from .io.figures import save_figure
+    from . import plots
+
+    cm = store.cell(date, cell)
+    csvs = [str(cm.dir / r["file"]) for r in cm.data.get("recordings", [])
+            if str(r.get("file", "")).endswith(".csv")]
+
+    def pick(*subs):                                     # prefer the non-"_headers" file
+        for sub in subs:
+            cand = [c for c in csvs if sub in _os.path.basename(c).lower()]
+            plain = [c for c in cand if "header" not in _os.path.basename(c).lower()]
+            if plain or cand:
+                return (plain or cand)[0]
+        return None
+
+    spike_csv = pick("spike")
+    stim_csv = pick("stdev", "stim")
+    if not spike_csv or not stim_csv:
+        raise SystemExit(f"need a spike CSV + a stimulus CSV in {date}/{cell} "
+                         f"(spike={spike_csv and _os.path.basename(spike_csv)}, "
+                         f"stim={stim_csv and _os.path.basename(stim_csv)})")
+
+    res = run_noise(spike_csv, stim_csv, **noise_kw)
+
+    if save:
+        out = cm.output_dir(name)
+        label = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
+        figpaths = save_figure(plots.noise_sta_figure(res.arrays, label=label), out, "sta",
+                               formats=formats)
+        res.save(out / "result")
+        import matplotlib.pyplot as _plt
+        _plt.close("all")
+        rel = lambda p: _os.path.relpath(p, cm.dir)
+        files = {f"figure_{k}": rel(v) for k, v in figpaths.items()}
+        files["result_json"] = rel(out / "result.json")
+        cm.record_output(name, files=files,
+                         params={"spike_csv": _os.path.basename(spike_csv),
+                                 "stim_csv": _os.path.basename(stim_csv)},
+                         inputs=[_os.path.basename(spike_csv), _os.path.basename(stim_csv)],
+                         summary=res.summary[0])
+        cm.save()
+        store.update_index()
+        _auto_mirror()
+    return res
+
+
 def _auto_mirror():
     """Back up the store to the configured mirror after a run (best-effort)."""
     from .dataio import auto_mirror, mirror_dir, mirror_store

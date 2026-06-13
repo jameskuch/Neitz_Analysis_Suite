@@ -15,9 +15,10 @@ That's the program. The GUI is a left sidebar (controls) + right graphs:
 - **cell(s)** — multi-select one or more `date / cell — label`s (with an inline
   date / label / type sort); the checked **files** load into the graphs. Set
   **stimulus type / params + Save metadata** to record what was shown.
-- **▶ Run sq wave** — runs the square-wave (flicker) analysis on the *checked* files; a
-  **run name** keeps variants side by side (e.g. excluding a recording); writes PNG/PDF/SVG
-  + CSV + JSON into `<cell>/outputs/<name>/`.
+- **▶ Run analysis** — dispatches on the cell's **stimulus type**: `gaussian_noise` →
+  reverse-correlation **STA** (linear filter, from the spike + stimulus CSVs); otherwise the
+  square-wave ON/OFF analysis on the *checked* files. A **run name** keeps variants side by
+  side (blank = auto: `sta` / `flicker`); outputs land in `<cell>/outputs/<name>/`.
 - **📂 Data explorer** — browse the store by date → cell thumbnails (waveform + latest
   output) → files; click to enlarge raw traces and figures; **Import data** new recordings;
   delete a whole day (🗑 by each date), selected files, or a figure (a confirmation

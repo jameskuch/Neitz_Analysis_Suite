@@ -43,7 +43,7 @@ from neitz.io import load_recording
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
 from neitz.dataio import DataStore
-from neitz.run import run_cell_flicker
+from neitz.run import run_cell_flicker, run_cell_noise
 
 # default browse location is the managed data store (~/Documents/ephysdataio)
 EPHYS_ROOT = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
@@ -727,14 +727,15 @@ app.layout = html.Div(
                      style=_FIELD),
             html.Div([
                 html.Button("Save metadata", id="save-meta", n_clicks=0),
-                html.Button("▶ Run sq wave", id="run-cell", n_clicks=0,
+                html.Button("▶ Run analysis", id="run-cell", n_clicks=0,
                             style={"marginLeft": "4px"}),
                 html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
                             style={"marginLeft": "4px"}),
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "4px"}),
-            html.Div([html.Label("run name (a new name keeps a variant; runs only the "
-                                 "checked files)", style=dict(_LBL, fontWeight="normal")),
-                      dcc.Input(id="run-name", type="text", value="flicker", debounce=True,
+            html.Div([html.Label("run by the cell's stimulus type · run name keeps a variant "
+                                 "(blank = auto)", style=dict(_LBL, fontWeight="normal")),
+                      dcc.Input(id="run-name", type="text", value="", debounce=True,
+                                placeholder="auto (sq wave / sta)",
                                 style={"width": "100%", "boxSizing": "border-box"})],
                      style={"marginTop": "6px"}),
             html.Div(id="store-msg", style={"fontSize": "11px", "color": "#070",
@@ -822,14 +823,15 @@ app.layout = html.Div(
                                     inline=True, labelStyle={"fontSize": "10px", "marginLeft": "4px"},
                                     inputStyle={"marginRight": "2px"}, **PERSIST)],
                      id="end-box", style=_END_OV),
-            # just beneath the spike-data subplot (clear of the "excluded" labels): hide / spike-train
+            # just beneath the spike-data subplot (clear of the "excluded" labels), same height
+            # as start/end: hide spikes / spike-train
             dcc.Checklist(id="disp-lr",
                           options=[{"label": " hide spikes", "value": "hide_spikes"},
                                    {"label": " spike-train", "value": "spike_train"}],
                           value=[], inline=True,
                           labelStyle={"fontSize": "10px", "marginRight": "8px"},
                           inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="36%", right="6px"), **PERSIST),
+                          style=ov(bottom="30%", right="6px", height="20px"), **PERSIST),
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -1379,7 +1381,7 @@ def save_meta(_n, sel, stype, sparams):
     return f"saved stimulus '{stype}' {params} to {total} recordings in " + ", ".join(cells)
 
 
-# ---- run the flicker analysis on the selected cell(s) ------------------------
+# ---- run the analysis for the selected cell(s), dispatched by their stimulus type --
 @app.callback(Output("store-msg", "children", allow_duplicate=True),
               Output("gallery-trigger", "data", allow_duplicate=True),
               Input("run-cell", "n_clicks"), State("sel-cell", "data"),
@@ -1390,26 +1392,35 @@ def run_cell(_n, sel, checked, run_name):
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "pick a cell first", no_update
-    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", (run_name or "flicker").strip()) or "flicker"
+    user_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", (run_name or "").strip())
     checked = [c for c in (checked or []) if c]
     ds, msgs = DataStore(), []
     for s in sels:
         tag = f"{s['date']}/{s['cell']}"
-        cmdir = str(ds.cell(s["date"], s["cell"]).dir)
-        sub = [f for f in checked if f.startswith(cmdir) and f.endswith(".abf")]
-        include = sub or None                            # only the cell's CHECKED .abf files
+        cm = ds.cell(s["date"], s["cell"])
+        stype = next((r["stimulus"].get("type") for r in cm.data.get("recordings", [])
+                      if r.get("stimulus")), None)       # the cell's stimulus type (explicit metadata)
         try:
-            res = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=500,
-                                   name=name, include=include)
-            p = res.tables["pooled_onoff"][0]
-            nfile = len(res.summary)
-            msgs.append(f"{tag} [{name}]: {nfile} file(s), {p['n_trials']} trials, "
-                        f"{p['flicker_hz']:.1f} Hz, '{p['verdict']}'")
+            if stype == "gaussian_noise":                # spikes×stimulus reverse correlation → STA
+                nm = user_name or "sta"
+                r = run_cell_noise(ds, s["date"], s["cell"], name=nm)
+                sm = r.summary[0]
+                msgs.append(f"{tag} [{nm}]: STA {sm['n_epochs']} epochs, "
+                            f"peak {sm['peak_ms']:.1f} ms {sm['peak_sign']}")
+            else:                                        # default: square-wave (flicker) ON/OFF
+                nm = user_name or "flicker"
+                cmdir = str(cm.dir)
+                sub = [f for f in checked if f.startswith(cmdir) and f.endswith(".abf")]
+                r = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=500,
+                                     name=nm, include=(sub or None))
+                p = r.tables["pooled_onoff"][0]
+                msgs.append(f"{tag} [{nm}]: {len(r.summary)} file(s), "
+                            f"{p['flicker_hz']:.1f} Hz, '{p['verdict']}'")
         except SystemExit as e:
             msgs.append(f"{tag}: {e}")
         except Exception as e:
             msgs.append(f"{tag}: error {e}")
-    return "ran sq wave → " + "  |  ".join(msgs) + "  (outputs saved; see gallery)", (_n or 1)
+    return "ran → " + "  |  ".join(msgs) + "  (outputs saved; see gallery)", (_n or 1)
 
 
 # ---- output-image gallery for the selected cell + full-screen pop-out --------
