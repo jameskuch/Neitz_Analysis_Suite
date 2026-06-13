@@ -22,13 +22,14 @@ Run:  /Users/j/miniconda3/bin/python viewer.py   ->  http://127.0.0.1:8050
 from __future__ import annotations
 import os
 import glob
+import base64
 import platform
 import subprocess
 import numpy as np
 import plotly.graph_objects as go
 import plotly.colors as pc
 from plotly.subplots import make_subplots
-from dash import Dash, dcc, html, Input, Output, State, ctx, no_update
+from dash import Dash, dcc, html, Input, Output, State, ctx, no_update, ALL
 
 from neitz.io import load_recording
 from neitz.spikes import detect_spikes
@@ -206,6 +207,37 @@ def cell_data_files(cm):
             if str(r.get("file", "")).endswith((".abf", ".csv"))]
 
 
+def _img_datauri(path):
+    with open(path, "rb") as f:
+        return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+
+
+def output_gallery(date, cell):
+    """Clickable thumbnails of every PNG under the cell's outputs/ (newest first)."""
+    cm = DataStore().cell(date, cell)
+    outdir = cm.dir / "outputs"
+    pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) \
+        if outdir.exists() else []
+    if not pngs:
+        return [html.Span("no output images yet — run an analysis on this cell",
+                          style={"color": "#888", "fontSize": "12px"})]
+    thumbs = []
+    for p in pngs:
+        rel = p.relative_to(outdir)
+        thumbs.append(html.Div([
+            html.Img(src=_img_datauri(p), id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
+                     style={"height": "150px", "border": "1px solid #ccc", "cursor": "pointer",
+                            "display": "block", "background": "white"}),
+            html.Div(str(rel), style={"fontSize": "10px", "maxWidth": "240px", "wordBreak": "break-all"}),
+        ], style={"margin": "4px"}))
+    return thumbs
+
+
+_MODAL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
+                "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.88)",
+                "zIndex": 2000, "alignItems": "center", "justifyContent": "center"}
+
+
 # ============================================================
 # App
 # ============================================================
@@ -224,17 +256,28 @@ app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, chi
                                placeholder="pick a date / cell…", style={"width": "300px"})]),
         html.Div([html.Label("stimulus type"),
                   dcc.Dropdown(id="stim-type", style={"width": "150px"},
-                               options=[{"label": t, "value": t} for t in
-                                        ("flicker", "gaussian_noise", "checkerboard", "(none)")])]),
+                               options=[{"label": "sq wave", "value": "flicker"},
+                                        {"label": "gaussian_noise", "value": "gaussian_noise"},
+                                        {"label": "checkerboard", "value": "checkerboard"},
+                                        {"label": "(none)", "value": "(none)"}])]),
         html.Div([html.Label("stimulus params (k=v, …)"),
                   dcc.Input(id="stim-params", type="text", debounce=True,
                             placeholder="flicker_hz=2, frame_rate=60", style={"width": "240px"})]),
         html.Button("Save metadata", id="save-meta", n_clicks=0, style={"height": "34px"}),
-        html.Button("▶ Run flicker → cell", id="run-cell", n_clicks=0, style={"height": "34px"}),
+        html.Button("▶ Run sq wave → cell", id="run-cell", n_clicks=0, style={"height": "34px"}),
         html.Button("⤓ Backup to mirror", id="backup-mirror", n_clicks=0, style={"height": "34px"}),
         html.Span(id="store-msg", style={"fontSize": "12px", "color": "#070"}),
     ]),
     dcc.Store(id="sel-cell"),
+    dcc.Store(id="gallery-trigger"),
+    # ---- output-image gallery for the selected cell (click to enlarge) ----
+    html.Div([html.Label("cell outputs (click an image to enlarge)",
+                         style={"fontSize": "12px", "fontWeight": "bold"}),
+              html.Div(id="outputs-gallery",
+                       style={"display": "flex", "flexWrap": "wrap", "gap": "6px",
+                              "maxHeight": "340px", "overflowY": "auto",
+                              "border": "1px solid #eee", "padding": "4px", "background": "#fafafa"})],
+             style={"marginBottom": "6px"}),
     # file "columns" viewer: browse buttons + left-to-right (Finder-columns) checklist
     html.Div(style={"display": "flex", "gap": "12px", "alignItems": "flex-start",
                     "marginBottom": "4px"}, children=[
@@ -305,6 +348,14 @@ app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, chi
     html.Div(id="readout", style={"margin": "4px 0", "fontWeight": "bold", "fontSize": "12px"}),
     dcc.Graph(id="time", style={"height": "560px"}),
     dcc.Graph(id="fft", style={"height": "340px", "width": "33%"}),
+    # ---- full-screen pop-out for an output image ----
+    html.Div(id="output-modal", style={"display": "none"}, children=[
+        html.Button("✕ close", id="modal-close", n_clicks=0,
+                    style={"position": "absolute", "top": "12px", "right": "16px",
+                           "fontSize": "15px", "padding": "4px 10px"}),
+        html.Img(id="modal-img", style={"maxWidth": "94vw", "maxHeight": "92vh",
+                                        "boxShadow": "0 0 24px #000", "background": "white"}),
+    ]),
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
     dcc.Interval(id="once", interval=300, max_intervals=1),
 ])
@@ -614,21 +665,50 @@ def save_meta(_n, sel, stype, sparams):
 
 # ---- run the flicker analysis on the selected cell ---------------------------
 @app.callback(Output("store-msg", "children", allow_duplicate=True),
+              Output("gallery-trigger", "data", allow_duplicate=True),
               Input("run-cell", "n_clicks"), State("sel-cell", "data"),
               prevent_initial_call=True)
 def run_cell(_n, sel):
     if not sel:
-        return "pick a cell first"
+        return "pick a cell first", no_update
     try:
         res = run_cell_flicker(DataStore(), sel["date"], sel["cell"], n_shuffle=500)
         p = res.tables["pooled_onoff"][0]
-        return (f"ran flicker on {sel['date']}/{sel['cell']}: {p['n_trials']} trials, "
+        return (f"ran sq wave on {sel['date']}/{sel['cell']}: {p['n_trials']} trials, "
                 f"{p['flicker_hz']:.1f} Hz, verdict '{p['verdict']}' — "
-                f"outputs written to the cell's outputs/flicker/ (png/pdf/svg + csv + json)")
+                f"outputs saved (png/pdf/svg + csv + json); see the gallery above"), _n
     except SystemExit as e:
-        return str(e)
+        return str(e), no_update
     except Exception as e:
-        return f"error: {e}"
+        return f"error: {e}", no_update
+
+
+# ---- output-image gallery for the selected cell + full-screen pop-out --------
+@app.callback(Output("outputs-gallery", "children"),
+              Input("cell-select", "value"), Input("gallery-trigger", "data"),
+              prevent_initial_call=False)
+def build_gallery(cell_val, _trig):
+    if not cell_val:
+        return [html.Span("pick a cell to see its output images",
+                          style={"color": "#888", "fontSize": "12px"})]
+    try:
+        date, cell = cell_val.split("|")
+        return output_gallery(date, cell)
+    except Exception as e:
+        return [html.Span(f"(no outputs: {e})", style={"color": "#888", "fontSize": "12px"})]
+
+
+@app.callback(Output("output-modal", "style"), Output("modal-img", "src"),
+              Input({"type": "out-thumb", "src": ALL}, "n_clicks"),
+              Input("modal-close", "n_clicks"), prevent_initial_call=True)
+def toggle_modal(_thumbs, _close):
+    trig = ctx.triggered_id
+    if trig == "modal-close":
+        return {"display": "none"}, no_update
+    if isinstance(trig, dict) and trig.get("type") == "out-thumb":
+        if ctx.triggered and ctx.triggered[0].get("value"):       # a real click
+            return _MODAL_SHOWN, _img_datauri(trig["src"])
+    return no_update, no_update
 
 
 # ---- import new experiment data into the store (copies + auto-groups by date) --
