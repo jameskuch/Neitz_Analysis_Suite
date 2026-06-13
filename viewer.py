@@ -324,7 +324,7 @@ _OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "
         "textAlign": "right"}                                        # compact overlay textbox
 # region start/end overlays: same fixed height; start flush with the plot's left (l margin),
 # end flush with the plot's right (r margin). Shared so a callback can hide them when cropping.
-_START_OV = ov(top="34px", left="55px", height="20px")
+_START_OV = ov(top="34px", left="60px", height="20px")
 _END_OV = ov(top="34px", right="20px", height="20px")
 _END_FIELDS = {"display": "flex", "alignItems": "center", "gap": "3px"}   # end (s) label+input
 
@@ -409,7 +409,7 @@ _THUMB_IMG = {"height": "62px", "border": "1px solid #ccc", "background": "white
 
 
 def explorer_dates_rail(active=None):
-    """Left rail: one button per date (newest first), with a cell count."""
+    """Left rail: one row per date (newest first) with a cell count + a 🗑 to delete the day."""
     idx = DataStore().index()
     by_date = {}
     for c in idx:
@@ -418,14 +418,40 @@ def explorer_dates_rail(active=None):
     rows = []
     for d in sorted(by_date, reverse=True):
         is_active = (d == active)
-        rows.append(html.Div(
-            f"{d}   ·   {by_date[d]} cell{'s' if by_date[d] != 1 else ''}",
-            id={"type": "exp-date", "date": d}, n_clicks=0,
-            style={"padding": "8px 10px", "cursor": "pointer", "fontSize": "12px",
-                   "borderBottom": "1px solid #2a2a35", "color": "white",
-                   "background": ("#3367d6" if is_active else "transparent"),
-                   "fontWeight": ("bold" if is_active else "normal")}))
+        rows.append(html.Div([
+            html.Div(f"{d}   ·   {by_date[d]} cell{'s' if by_date[d] != 1 else ''}",
+                     id={"type": "exp-date", "date": d}, n_clicks=0,
+                     style={"flex": "1", "cursor": "pointer",
+                            "fontWeight": ("bold" if is_active else "normal")}),
+            html.Button("🗑", id={"type": "del-date", "date": d}, n_clicks=0,
+                        title=f"delete all of {d}",
+                        style={"border": "none", "background": "none", "color": "#e66",
+                               "cursor": "pointer", "fontSize": "12px", "padding": "0 2px"}),
+        ], style={"padding": "8px 10px", "fontSize": "12px", "color": "white",
+                  "display": "flex", "alignItems": "center", "gap": "4px",
+                  "borderBottom": "1px solid #2a2a35",
+                  "background": ("#3367d6" if is_active else "transparent")}))
     return rows or [html.Div("no cells in store", style={"color": "#999", "padding": "10px"})]
+
+
+def delete_date(date):
+    """Move an entire date folder (all its cells) to a reversible .trash/ and reindex."""
+    ds = DataStore()
+    cells = [c for c in ds.index() if c["date"] == date]
+    if not cells:
+        return None
+    date_dir = ds.cell(date, cells[0]["cell"]).dir.parent      # <root>/<date>
+    trash = date_dir.parent / ".trash" / f"{date}_ALL"
+    trash.parent.mkdir(parents=True, exist_ok=True)
+    if trash.exists():
+        trash = date_dir.parent / ".trash" / f"{date}_ALL_dup"
+    shutil.move(str(date_dir), str(trash))
+    for dct in (_CACHE, _LOADABLE, _SPARK_CACHE, _BIGWAVE_CACHE):   # drop cached entries for the date
+        for k in [kk for kk in dct if str(date) in str(kk) or
+                  (isinstance(kk, tuple) and kk and str(date) in str(kk[0]))]:
+            dct.pop(k, None)
+    ds.update_index()
+    return trash
 
 
 def explorer_day_cards(date):
@@ -442,10 +468,10 @@ def explorer_day_cards(date):
                  "background": "white"}
         imgs = []
         if spark:                                    # waveform on top
-            imgs.append(html.Img(src=spark, style=dict(_full, border="1px solid #ccc",
-                                                       marginBottom="4px")))
+            imgs.append(html.Img(src=spark, className="gprev",
+                                 style=dict(_full, border="1px solid #ccc", marginBottom="4px")))
         if out:                                      # processed output beneath, sized to the card
-            imgs.append(html.Img(src=out, style=dict(_full, border="1px solid #ddd")))
+            imgs.append(html.Img(src=out, className="gprev", style=dict(_full, border="1px solid #ddd")))
         if not imgs:
             imgs.append(html.Div("no preview", style={"color": "#999", "fontSize": "11px",
                                                       "height": "62px"}))
@@ -478,7 +504,7 @@ def explorer_file_options(date, cell):
         spark = sparkline_datauri(p)
         stim = (r.get("stimulus") or {}).get("type")
         thumb = html.Div([
-            html.Img(src=spark, style=dict(_THUMB_IMG, width="220px")) if spark
+            html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px")) if spark
             else html.Div("—", style={"height": "62px", "color": "#999"}),
             html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all"}),
             html.Div(f"stim: {stim}" if stim else "stim: —",
@@ -522,7 +548,7 @@ def explorer_detail(date, cell):
         if not spark:
             continue
         raw_thumbs.append(html.Div([
-            html.Img(src=spark, id={"type": "raw-thumb", "src": p}, n_clicks=0,
+            html.Img(src=spark, id={"type": "raw-thumb", "src": p}, n_clicks=0, className="gprev",
                      style={"width": "150px", "border": "1px solid #ccc", "cursor": "pointer",
                             "background": "white", "display": "block"}),
             html.Div(os.path.basename(p), style={"fontSize": "9px", "maxWidth": "150px",
@@ -538,7 +564,7 @@ def explorer_detail(date, cell):
     for p in pngs:
         rel = p.relative_to(outdir)
         out_thumbs.append(html.Div([
-            html.Img(src=_img_datauri(str(p)),
+            html.Img(src=_img_datauri(str(p)), className="gprev",
                      id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
                      style={"height": "90px", "border": "1px solid #ccc", "cursor": "pointer",
                             "background": "white", "display": "block"}),
@@ -796,14 +822,14 @@ app.layout = html.Div(
                                     inline=True, labelStyle={"fontSize": "10px", "marginLeft": "4px"},
                                     inputStyle={"marginRight": "2px"}, **PERSIST)],
                      id="end-box", style=_END_OV),
-            # bottom of the spike-data subplot: hide spikes + spike-train view (right-justified)
+            # just beneath the spike-data subplot (clear of the "excluded" labels): hide / spike-train
             dcc.Checklist(id="disp-lr",
                           options=[{"label": " hide spikes", "value": "hide_spikes"},
                                    {"label": " spike-train", "value": "spike_train"}],
                           value=[], inline=True,
                           labelStyle={"fontSize": "10px", "marginRight": "8px"},
                           inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="42%", right="6px"), **PERSIST),
+                          style=ov(bottom="36%", right="6px"), **PERSIST),
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -864,68 +890,68 @@ app.layout = html.Div(
             html.Div(style={"flex": "1"}),
             html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
                         style={"fontWeight": "bold"}),
-            html.Button("🗑 Delete selected…", id="exp-del-open", n_clicks=0,
-                        style={"fontWeight": "bold", "color": "#b00", "marginLeft": "6px"}),
             html.Button("✕ close", id="exp-close", n_clicks=0, style={"marginLeft": "6px"}),
         ]),
-        # body: three panes
+        # body: left rail (full height) · middle (browser over a hover-preview) · right detail (full height)
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"},
                  children=[
-            # left rail: dates
+            # left rail: dates, each with a 🗑
             html.Div(id="exp-dates",
-                     style={"flex": "0 0 180px", "overflowY": "auto", "background": "#15151d",
+                     style={"flex": "0 0 195px", "overflowY": "auto", "background": "#15151d",
                             "border": "1px solid #2a2a35", "borderRadius": "6px"}),
-            # center: preview viewer (day cards OR cell file checklist)
-            html.Div(style={"flex": "1 1 0", "minWidth": 0, "overflowY": "auto",
-                            "background": "#23232c", "borderRadius": "6px", "padding": "10px"},
-                     children=[
-                html.Div(id="exp-cards",
-                         style={"display": "flex", "flexWrap": "wrap", "gap": "18px",
-                                "alignItems": "flex-start"}),
-                dcc.Checklist(id="exp-files", options=[], value=[],
-                              labelStyle={"display": "inline-block", "verticalAlign": "top",
-                                          "background": "white", "borderRadius": "5px",
-                                          "padding": "5px", "margin": "5px"},
-                              inputStyle={"marginRight": "5px", "verticalAlign": "top"}),
-            ]),
-            # right: detail (75%) over an instant single-file preview (25%)
-            html.Div(style={"flex": "0 0 30%", "minHeight": 0, "display": "flex",
+            # middle column: browser (top 2/3) over the hover preview (bottom 1/3)
+            html.Div(style={"flex": "1 1 0", "minWidth": 0, "display": "flex",
                             "flexDirection": "column", "gap": "6px"}, children=[
-                html.Div(id="exp-detail",
-                         style={"flex": "3 1 0", "minHeight": 0, "overflowY": "auto",
-                                "background": "white", "borderRadius": "6px", "padding": "10px"}),
-                html.Div(id="exp-preview",
+                html.Div(style={"flex": "2 1 0", "minHeight": 0, "overflowY": "auto",
+                                "background": "#23232c", "borderRadius": "6px", "padding": "10px"},
+                         children=[
+                    html.Div(id="exp-cards",
+                             style={"display": "flex", "flexWrap": "wrap", "gap": "18px",
+                                    "alignItems": "flex-start"}),
+                    dcc.Checklist(id="exp-files", options=[], value=[],
+                                  labelStyle={"display": "inline-block", "verticalAlign": "top",
+                                              "background": "white", "borderRadius": "5px",
+                                              "padding": "5px", "margin": "5px"},
+                                  inputStyle={"marginRight": "5px", "verticalAlign": "top"}),
+                    html.Div(html.Button("", id="del-files", n_clicks=0, style={"display": "none"}),
+                             id="del-files-wrap", style={"marginTop": "6px"}),
+                ]),
+                # bottom 1/3 of the middle column: hover preview (any graph you hover lands here)
+                html.Div(id="exp-prev",
                          style={"flex": "1 1 0", "minHeight": 0, "overflow": "hidden",
                                 "background": "white", "borderRadius": "6px", "padding": "6px",
                                 "display": "flex", "alignItems": "center",
-                                "justifyContent": "center", "textAlign": "center"}),
+                                "justifyContent": "center", "textAlign": "center"},
+                         children=[
+                    html.Img(id="exp-prev-img", style={"maxWidth": "100%", "maxHeight": "100%",
+                                                       "objectFit": "contain", "display": "none"}),
+                    html.Span("hover any graph to preview it here", id="exp-prev-hint",
+                              style={"color": "#999", "fontSize": "12px"}),
+                ]),
             ]),
+            # right: detail, full window height
+            html.Div(id="exp-detail",
+                     style={"flex": "0 0 30%", "minHeight": 0, "overflowY": "auto",
+                            "background": "white", "borderRadius": "6px", "padding": "10px"}),
         ]),
     ], style={"display": "none"}),
 
-    # ---- delete confirmation (two-factor: type DELETE + master password) ----
+    # ---- delete confirmation (warning only — no password) ----
     dcc.Store(id="del-targets"),
     html.Div(id="del-modal", style={"display": "none"}, children=[
         html.Div(style={"background": "white", "borderRadius": "8px", "padding": "18px",
                         "maxWidth": "560px", "boxShadow": "0 0 40px #000"}, children=[
-            html.Div("⚠️  Delete files from the data store", style={
+            html.Div("⚠️  Delete from the data store", style={
                 "fontWeight": "bold", "fontSize": "15px", "color": "#b00", "marginBottom": "6px"}),
-            html.Div("Files are moved to a reversible .trash/ folder and removed from the "
-                     "cell's manifest. This affects the managed store (and its mirror on next "
-                     "backup). Confirm carefully.", style={"fontSize": "12px", "color": "#444",
-                                                           "marginBottom": "8px"}),
+            html.Div("These are MOVED to a reversible .trash/ folder and removed from the "
+                     "manifest (and the mirror on next backup). Confirm to proceed.",
+                     style={"fontSize": "12px", "color": "#444", "marginBottom": "8px"}),
             html.Div(id="del-list", style={"fontSize": "12px", "fontFamily": "monospace",
-                                           "maxHeight": "150px", "overflowY": "auto",
+                                           "maxHeight": "220px", "overflowY": "auto",
                                            "background": "#f6f6f6", "padding": "8px",
                                            "borderRadius": "4px", "marginBottom": "10px"}),
-            html.Label("type DELETE to confirm", style=_LBL),
-            dcc.Input(id="del-confirm-text", type="text", placeholder="DELETE",
-                      style={"width": "100%", "boxSizing": "border-box", "marginBottom": "8px"}),
-            html.Label("master password", style=_LBL),
-            dcc.Input(id="del-password", type="password", placeholder="master password",
-                      style={"width": "100%", "boxSizing": "border-box", "marginBottom": "10px"}),
             html.Div([
-                html.Button("🗑 Confirm delete", id="del-confirm", n_clicks=0,
+                html.Button("🗑 Delete", id="del-confirm", n_clicks=0,
                             style={"fontWeight": "bold", "color": "white", "background": "#b00",
                                    "border": "none", "padding": "6px 12px", "borderRadius": "4px"}),
                 html.Button("Cancel", id="del-cancel", n_clicks=0, style={"marginLeft": "8px"}),
@@ -1428,7 +1454,7 @@ def toggle_modal(_thumbs, _raw, _close, _backdrop):
     return no_update, no_update
 
 
-# ---- Escape closes the image pop-out first, else the Data Explorer (clientside) ----
+# ---- clientside: Escape closes pop-outs; hovering any graph fills the preview pane ----
 app.clientside_callback(
     """
     function(n) {
@@ -1445,6 +1471,16 @@ app.clientside_callback(
                     if (ex && ex.style.display !== 'none') {
                         var c = document.getElementById('exp-close'); if (c) { c.click(); }
                     }
+                }
+            });
+            // hover any graph thumbnail (.gprev) -> show it in the explorer preview pane
+            document.addEventListener('mouseover', function(e) {
+                var t = e.target;
+                if (t && t.tagName === 'IMG' && t.classList && t.classList.contains('gprev')) {
+                    var pv = document.getElementById('exp-prev-img');
+                    var hint = document.getElementById('exp-prev-hint');
+                    if (pv) { pv.src = t.src; pv.style.display = 'block'; }
+                    if (hint) { hint.style.display = 'none'; }
                 }
             });
         }
@@ -1526,56 +1562,55 @@ def exp_open_viewer(_n, sel):
     return file_options(sel), sel, {"display": "none"}
 
 
-# ---- instant preview (bottom 25%): show the waveform when exactly 1 file is checked
-@app.callback(Output("exp-preview", "children"),
+# ---- the 🗑 for the checked file(s) (appears at the bottom of the selection) -------
+@app.callback(Output("del-files", "style"), Output("del-files", "children"),
               Input("exp-files", "value"), prevent_initial_call=False)
-def exp_preview(sel):
+def del_files_button(sel):
     sel = [s for s in (sel or []) if s]
-    if len(sel) != 1:
-        n = len(sel)
-        hint = ("check exactly one file (middle panel) for an instant preview"
-                if n == 0 else f"{n} files checked — check just one for a preview")
-        return html.Span(hint, style={"color": "#999", "fontSize": "11px"})
-    p = sel[0]
-    uri = big_waveform_datauri(p) if loadable(p) else None
-    if not uri:
-        return html.Span(f"no preview for {os.path.basename(p)}",
-                         style={"color": "#999", "fontSize": "11px"})
-    return html.Img(src=uri, style={"maxWidth": "100%", "maxHeight": "100%",
-                                    "objectFit": "contain"})
+    base = {"color": "white", "background": "#b00", "border": "none", "borderRadius": "4px",
+            "padding": "4px 10px", "fontWeight": "bold", "fontSize": "12px", "cursor": "pointer"}
+    if not sel:
+        return {"display": "none"}, ""
+    return dict(base, display="inline-block"), f"🗑 delete {len(sel)} selected"
 
 
-# ---- delete: open the two-factor confirmation modal (raw files OR a figure) ----
+# ---- delete: open the (warning-only) confirmation modal -------------------------
+#   targets: a whole DAY {kind:"date", date} · a cell's checked files / a figure {date,cell,paths}
 @app.callback(Output("del-modal", "style"), Output("del-targets", "data"),
-              Output("del-list", "children"), Output("del-msg", "children"),
-              Output("del-confirm-text", "value"), Output("del-password", "value"),
-              Input("exp-del-open", "n_clicks"),
+              Output("del-list", "children"),
+              Input({"type": "del-date", "date": ALL}, "n_clicks"),
               Input({"type": "del-output", "src": ALL}, "n_clicks"),
+              Input("del-files", "n_clicks"),
               State("exp-files", "value"), State("exp-date", "data"), State("exp-cell", "data"),
               prevent_initial_call=True)
-def open_delete(_n, _dels, sel, date, cell):
+def open_delete(_ddates, _douts, _dfiles, sel, date, cell):
     trig = ctx.triggered_id
-    if not date or not cell:
-        return _DEL_SHOWN, no_update, [html.Span("Open a cell first.", style={"color": "#b00"})], \
-            "", "", ""
-    if isinstance(trig, dict) and trig.get("type") == "del-output":
-        if not (ctx.triggered and ctx.triggered[0].get("value")):      # ignore button creation
-            return (no_update,) * 6
-        p = Path(trig["src"])                                           # the figure + its siblings
+    fired = bool(ctx.triggered and ctx.triggered[0].get("value"))
+    if isinstance(trig, dict) and trig.get("type") == "del-date":       # a whole day
+        if not fired:
+            return (no_update,) * 3
+        d = trig["date"]
+        cells = [c for c in DataStore().index() if c["date"] == d]
+        lst = [html.Div(f"ALL of {d} — {len(cells)} cell(s):",
+                        style={"fontWeight": "bold", "color": "#b00"})] \
+            + [html.Div(f"{c['cell']} — {c.get('label') or ''}") for c in cells]
+        return _DEL_SHOWN, {"kind": "date", "date": d}, lst
+    if isinstance(trig, dict) and trig.get("type") == "del-output":     # one figure (+ siblings)
+        if not fired:
+            return (no_update,) * 3
+        p = Path(trig["src"])
         paths = sorted(str(x) for x in p.parent.glob(p.stem + ".*"))
-        targets = {"date": date, "cell": cell, "paths": paths}
         lst = [html.Div("output figure (+ same-name pdf/svg):", style={"fontWeight": "bold"})] \
             + [html.Div(os.path.basename(x)) for x in paths]
-        return _DEL_SHOWN, targets, lst, "", "", ""
-    # exp-del-open: the checked raw recordings
-    sel = [s for s in (sel or []) if s]
-    if not sel:
-        return _DEL_SHOWN, no_update, \
-            [html.Span("Check one or more files first.", style={"color": "#b00"})], "", "", ""
-    targets = {"date": date, "cell": cell, "paths": sel}
-    lst = [html.Div("recordings:", style={"fontWeight": "bold"})] \
-        + [html.Div(os.path.basename(p)) for p in sel]
-    return _DEL_SHOWN, targets, lst, "", "", ""
+        return _DEL_SHOWN, {"date": date, "cell": cell, "paths": paths}, lst
+    if trig == "del-files":                                             # the checked recordings
+        s = [x for x in (sel or []) if x]
+        if not fired or not s or not date or not cell:
+            return (no_update,) * 3
+        lst = [html.Div("recordings:", style={"fontWeight": "bold"})] \
+            + [html.Div(os.path.basename(p)) for p in s]
+        return _DEL_SHOWN, {"date": date, "cell": cell, "paths": s}, lst
+    return (no_update,) * 3
 
 
 @app.callback(Output("del-modal", "style", allow_duplicate=True),
@@ -1586,30 +1621,33 @@ def cancel_delete(_n):
 
 @app.callback(Output("del-msg", "children", allow_duplicate=True),
               Output("del-modal", "style", allow_duplicate=True),
+              Output("exp-dates", "children", allow_duplicate=True),
+              Output("exp-cards", "children", allow_duplicate=True),
               Output("exp-files", "options", allow_duplicate=True),
               Output("exp-files", "value", allow_duplicate=True),
               Output("exp-detail", "children", allow_duplicate=True),
               Output("cell-select", "options", allow_duplicate=True),
-              Input("del-confirm", "n_clicks"),
-              State("del-targets", "data"), State("del-confirm-text", "value"),
-              State("del-password", "value"), prevent_initial_call=True)
-def confirm_delete(_n, targets, text, password):
-    keep = (no_update,) * 4                           # (modal, files-opts, files-val, detail, cells)
-    if not targets or not targets.get("paths"):
-        return "nothing to delete", no_update, *keep
-    if (text or "").strip() != "DELETE":
-        return ("type DELETE exactly to confirm", no_update, *keep)
-    if (password or "") != ADMIN_PASSWORD:
-        return ("✗ wrong master password — nothing deleted", no_update, *keep)
+              Input("del-confirm", "n_clicks"), State("del-targets", "data"),
+              prevent_initial_call=True)
+def confirm_delete(_n, targets):
+    nu = (no_update,) * 6              # dates, cards, files-opts, files-val, detail, cells
+    if not targets:
+        return "nothing to delete", no_update, *nu
     try:
-        removed, trash = delete_files(targets["date"], targets["cell"], targets["paths"])
+        if targets.get("kind") == "date":
+            delete_date(targets["date"])
+            msg = html.Span(f"✓ deleted all of {targets['date']}", style={"color": "#070"})
+            return (msg, {"display": "none"}, explorer_dates_rail(),
+                    [html.Div("pick a date", style={"color": "#999", "fontSize": "12px"})],
+                    [], [], [], store_cell_options())
+        date, cell = targets["date"], targets["cell"]
+        removed, _ = delete_files(date, cell, targets["paths"])
+        msg = html.Span(f"✓ deleted {len(removed)} item(s)", style={"color": "#070"})
+        return (msg, {"display": "none"}, explorer_dates_rail(active=date), no_update,
+                explorer_file_options(date, cell), [],
+                explorer_detail(date, cell), store_cell_options())
     except Exception as e:
-        return (f"delete error: {e}", no_update, *keep)
-    date, cell = targets["date"], targets["cell"]
-    msg = html.Span(f"✓ deleted {len(removed)} file(s) → {trash}", style={"color": "#070"})
-    return (msg, {"display": "none"},
-            explorer_file_options(date, cell), [],
-            explorer_detail(date, cell), store_cell_options())
+        return f"delete error: {e}", no_update, *nu
 
 
 # ---- import new experiment data into the store (copies + auto-groups by date) --

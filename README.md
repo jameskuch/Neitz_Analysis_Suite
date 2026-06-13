@@ -20,7 +20,8 @@ That's the program. The GUI is a left sidebar (controls) + right graphs:
   + CSV + JSON into `<cell>/outputs/<name>/`.
 - **📂 Data explorer** — browse the store by date → cell thumbnails (waveform + latest
   output) → files; click to enlarge raw traces and figures; **Import data** new recordings;
-  delete files/figures (two-factor: type `DELETE` + master password). **⤓ Backup mirror**
+  delete a whole day (🗑 by each date), selected files, or a figure (a confirmation
+  warning; trashed reversibly). **⤓ Backup mirror**
   copies the store to Google Drive.
 - **Graphs**: signal + per-file frame-sync (adjustable **stagger %**), a spike-train
   **power** spectrum (`W = 2·|X[k]|²/N²`), and an **ISI histogram**; live spike detection

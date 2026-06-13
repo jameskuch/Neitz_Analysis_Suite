@@ -67,9 +67,10 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   R=1Ω), NOT a Welch PSD — the user specifically wanted this. See `power_w()`.
 - **Per-trace abs thresholds**: a "sync" checkbox (one value for all) vs a per-trace editor;
   "auto abs" seeds each trace's `k·MAD` and keeps `mad_floor` if already selected.
-- **Destructive deletes** (Data Explorer): two-factor — type `DELETE` + master password
-  (`$NEITZ_ADMIN_PASSWORD`, default `"neitz"`). Files are MOVED to a reversible
-  `~/Documents/ephysdataio/.trash/<date>_<cell>/`, not unlinked.
+- **Deletes** (Data Explorer): a 🗑 on each date (whole day), a 🗑 under the checked files,
+  and a 🗑 on each output figure — each pops a **confirmation-warning** modal (no password).
+  Items are MOVED to a reversible `.trash/` inside the store (`<date>_<cell>/` for files,
+  `<date>_ALL/` for a whole day), not unlinked. `delete_files` / `delete_date` helpers.
 - **Some Sara CSVs aren't time-series** (e.g. `siso-DLP.csv` has a phase label in col 0).
   `CsvSpikeRecording` raises on those; the viewer's `loadable()` filters them and prefers
   spike-train CSVs. Don't "fix" by forcing them open.

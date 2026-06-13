@@ -210,11 +210,13 @@ The GUI works off the **data store** — there's no file browser; you pick cells
 - **Stimulus type / params + Save metadata** — record what was shown into the manifest.
 - **▶ Run sq wave** — square-wave (flicker) analysis on the *checked* files; a **run name**
   keeps variants in `outputs/<name>/`. **⤓ Backup mirror** syncs the store.
-- **📂 Data Explorer** (pop-out) — dates → cell thumbnail cards (waveform + latest output) →
-  files; right pane = manifest **JSON tree** + clickable raw-trace / figure thumbnails + an
-  instant preview of a single checked file (75 / 25 split); **Import data** and per-figure /
-  per-file **delete** (two-factor: type `DELETE` + `$NEITZ_ADMIN_PASSWORD`, default `"neitz"`;
-  files trashed reversibly). Esc / click-off closes pop-outs.
+- **📂 Data Explorer** (pop-out) — left dates rail (🗑 per day) → cell thumbnail cards
+  (waveform + latest output) → file checklist; the **middle** column shows a browser over a
+  **hover-preview** strip (hover any graph thumbnail → it appears enlarged below); the **right**
+  pane (full height) = manifest **JSON tree** + clickable raw-trace / figure thumbnails.
+  **Import data**, and **delete** a whole day (🗑 by the date), the checked files (🗑 under the
+  selection), or a figure (🗑 by it) — each with a confirmation warning, trashed reversibly.
+  Esc / click-off closes pop-outs.
 - **Live spike detection** — polarity (neg/pos/abs), threshold (**k·MAD / absolute /
   k·MAD ≥ floor**), `k` slider, refractory; a **sync** toggle (one abs threshold for all) vs a
   **per-trace** editor, plus **🎯 auto abs** (k·MAD per trace). Number boxes apply on
