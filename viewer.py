@@ -238,6 +238,21 @@ _MODAL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
                 "zIndex": 2000, "alignItems": "center", "justifyContent": "center"}
 
 
+def card(title, children):
+    """A bordered, titled compartment for the left control sidebar."""
+    return html.Div([
+        html.Div(title, style={"fontWeight": "bold", "fontSize": "12px", "color": "#234",
+                               "borderBottom": "1px solid #e3e3e3", "paddingBottom": "3px",
+                               "marginBottom": "6px"}),
+        html.Div(children),
+    ], style={"border": "1px solid #dcdcdc", "borderRadius": "6px", "padding": "8px",
+              "marginBottom": "8px", "background": "white"})
+
+
+_FIELD = {"marginBottom": "6px"}                    # stacked label+control block
+_LBL = {"fontSize": "11px", "fontWeight": "bold", "color": "#444", "display": "block"}
+
+
 # ============================================================
 # App
 # ============================================================
@@ -245,109 +260,154 @@ app = Dash(__name__)
 app.title = "Neitz ABF Viewer"
 _files = discover_abf()
 
-app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, children=[
-    # ---- data store: pick a cell from the manifest, edit stimulus metadata, run analysis ----
-    html.Div(style={"display": "flex", "gap": "10px", "alignItems": "flex-end",
-                    "marginBottom": "6px", "flexWrap": "wrap"}, children=[
-        html.Button("📥 Import data…", id="import-data", n_clicks=0,
-                    style={"height": "34px", "fontWeight": "bold"}),
-        html.Div([html.Label("cell (data store)"),
-                  dcc.Dropdown(id="cell-select", options=store_cell_options(),
-                               placeholder="pick a date / cell…", style={"width": "300px"})]),
-        html.Div([html.Label("stimulus type"),
-                  dcc.Dropdown(id="stim-type", style={"width": "150px"},
-                               options=[{"label": "sq wave", "value": "flicker"},
-                                        {"label": "gaussian_noise", "value": "gaussian_noise"},
-                                        {"label": "checkerboard", "value": "checkerboard"},
-                                        {"label": "(none)", "value": "(none)"}])]),
-        html.Div([html.Label("stimulus params (k=v, …)"),
-                  dcc.Input(id="stim-params", type="text", debounce=True,
-                            placeholder="flicker_hz=2, frame_rate=60", style={"width": "240px"})]),
-        html.Button("Save metadata", id="save-meta", n_clicks=0, style={"height": "34px"}),
-        html.Button("▶ Run sq wave → cell", id="run-cell", n_clicks=0, style={"height": "34px"}),
-        html.Button("⤓ Backup to mirror", id="backup-mirror", n_clicks=0, style={"height": "34px"}),
-        html.Span(id="store-msg", style={"fontSize": "12px", "color": "#070"}),
+app.layout = html.Div(
+    style={"fontFamily": "sans-serif", "display": "flex", "gap": "10px",
+           "height": "100vh", "padding": "8px", "boxSizing": "border-box"},
+    children=[
+
+    # ================= LEFT SIDEBAR: controls (≤ 1/3 width, scrollable) =========
+    html.Div(style={"flex": "0 0 33%", "maxWidth": "33%", "minWidth": "320px",
+                    "height": "100%", "overflowY": "auto", "paddingRight": "6px",
+                    "boxSizing": "border-box"}, children=[
+
+        html.Div("Neitz ABF Viewer", style={"fontWeight": "bold", "fontSize": "15px",
+                                            "marginBottom": "8px"}),
+
+        # ---- compartment: data store ----
+        card("Data store", [
+            html.Button("📥 Import data…", id="import-data", n_clicks=0,
+                        style={"fontWeight": "bold", "width": "100%", "marginBottom": "6px"}),
+            html.Div([html.Label("cell", style=_LBL),
+                      dcc.Dropdown(id="cell-select", options=store_cell_options(),
+                                   placeholder="pick a date / cell…", style={"width": "100%"})],
+                     style=_FIELD),
+            html.Div([html.Label("stimulus type", style=_LBL),
+                      dcc.Dropdown(id="stim-type", style={"width": "100%"},
+                                   options=[{"label": "sq wave", "value": "flicker"},
+                                            {"label": "gaussian_noise", "value": "gaussian_noise"},
+                                            {"label": "checkerboard", "value": "checkerboard"},
+                                            {"label": "(none)", "value": "(none)"}])],
+                     style=_FIELD),
+            html.Div([html.Label("stimulus params (k=v, …)", style=_LBL),
+                      dcc.Input(id="stim-params", type="text", debounce=True,
+                                placeholder="flicker_hz=2, frame_rate=60",
+                                style={"width": "100%", "boxSizing": "border-box"})],
+                     style=_FIELD),
+            html.Div([
+                html.Button("Save metadata", id="save-meta", n_clicks=0),
+                html.Button("▶ Run sq wave", id="run-cell", n_clicks=0,
+                            style={"marginLeft": "4px"}),
+                html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
+                            style={"marginLeft": "4px"}),
+            ], style={"display": "flex", "flexWrap": "wrap", "gap": "4px"}),
+            html.Div(id="store-msg", style={"fontSize": "11px", "color": "#070",
+                                            "marginTop": "6px"}),
+        ]),
+
+        # ---- compartment: files ----
+        card("Files", [
+            html.Div([html.Button("📁 File…", id="browse-file", n_clicks=0),
+                      html.Button("📂 Folder…", id="browse-folder", n_clicks=0,
+                                  style={"marginLeft": "6px"})], style={"marginBottom": "6px"}),
+            html.Div(dcc.Checklist(id="file", options=file_options(_files),
+                                   value=[_files[0]] if _files else [],
+                                   labelStyle={"display": "block", "fontSize": "11px",
+                                               "whiteSpace": "nowrap", "overflow": "hidden",
+                                               "textOverflow": "ellipsis"},
+                                   inputStyle={"marginRight": "4px"}),
+                     style={"maxHeight": "150px", "overflowY": "auto",
+                            "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
+            html.Div(id="meta", style={"fontSize": "10px", "color": "#333", "lineHeight": "1.45",
+                                       "background": "#f6f6f6", "padding": "6px",
+                                       "borderRadius": "4px", "marginTop": "6px"}),
+        ]),
+
+        # ---- compartment: channels & spike detection ----
+        card("Channels & spike detection", [
+            html.Div([html.Label("signal channel", style=_LBL),
+                      dcc.Dropdown(id="chan", style={"width": "100%"})], style=_FIELD),
+            html.Div([html.Label("TTL channel", style=_LBL),
+                      dcc.Dropdown(id="ttl", style={"width": "100%"})], style=_FIELD),
+            html.Div([html.Label("polarity", style=_LBL),
+                      dcc.RadioItems(id="polarity",
+                                     options=[{"label": p, "value": p} for p in ("neg", "pos", "abs")],
+                                     value="neg", inline=True, **PERSIST)], style=_FIELD),
+            html.Div([html.Label("threshold", style=_LBL),
+                      dcc.RadioItems(id="method",
+                                     options=[{"label": "k·MAD", "value": "mad"},
+                                              {"label": "absolute", "value": "abs"},
+                                              {"label": "k·MAD ≥ floor", "value": "mad_floor"}],
+                                     value="mad", inline=True, **PERSIST)], style=_FIELD),
+            html.Div([html.Label("k (MAD)", style=_LBL),
+                      dcc.Slider(id="k", min=2, max=15, step=0.5, value=6,
+                                 marks={2: "2", 6: "6", 10: "10", 15: "15"},
+                                 tooltip={"placement": "bottom"}, **PERSIST)], style=_FIELD),
+            html.Div([
+                html.Div([html.Label("abs thresh", style=_LBL),
+                          dcc.Input(id="absth", type="number", value=20, debounce=True,
+                                    style={"width": "85px"}, **PERSIST)]),
+                html.Div([html.Label("refractory (ms)", style=_LBL),
+                          dcc.Input(id="refr", type="number", value=2, debounce=True,
+                                    style={"width": "85px"}, **PERSIST)],
+                         style={"marginLeft": "10px"}),
+            ], style={"display": "flex"}),
+        ]),
+
+        # ---- compartment: region & display ----
+        card("Region & display", [
+            html.Div([
+                html.Div([html.Label("region start (s)", style=_LBL),
+                          dcc.Input(id="region-start", type="number", debounce=True,
+                                    style={"width": "95px"})]),
+                html.Div([html.Label("region end (s)", style=_LBL),
+                          dcc.Input(id="region-end", type="number", debounce=True,
+                                    style={"width": "95px"})], style={"marginLeft": "10px"}),
+            ], style={"display": "flex", "marginBottom": "6px"}),
+            html.Div([html.Label("excluded regions", style=_LBL),
+                      dcc.RadioItems(id="region-mode",
+                                     options=[{"label": " show", "value": "show"},
+                                              {"label": " crop", "value": "crop"},
+                                              {"label": " baseline", "value": "baseline"}],
+                                     value="show", inline=True,
+                                     labelStyle={"fontSize": "12px", "marginRight": "8px"},
+                                     **PERSIST)], style=_FIELD),
+            html.Div([html.Label("display", style=_LBL),
+                      dcc.Checklist(id="dispopts",
+                                    options=[{"label": " stagger frame syncs", "value": "stagger"},
+                                             {"label": " hide detected spikes", "value": "hide_spikes"},
+                                             {"label": " spike-train view (0/1)", "value": "spike_train"}],
+                                    value=[], labelStyle={"display": "block", "fontSize": "12px"},
+                                    **PERSIST)], style=_FIELD),
+            html.Div([html.Label("spike-train bin (ms, 0=impulses)", style=_LBL),
+                      dcc.Input(id="train-bin", type="number", value=0, min=0, debounce=True,
+                                style={"width": "110px"}, **PERSIST)], style=_FIELD),
+        ]),
+
+        # ---- compartment: cell outputs (click to enlarge) ----
+        card("Cell outputs (click to enlarge)", [
+            html.Div(id="outputs-gallery",
+                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px",
+                            "maxHeight": "300px", "overflowY": "auto",
+                            "border": "1px solid #eee", "padding": "4px", "background": "#fafafa"}),
+        ]),
     ]),
+
+    # ================= RIGHT PANEL: graphs (2/3 width, full height) =============
+    html.Div(style={"flex": "1 1 0", "minWidth": 0, "height": "100%",
+                    "display": "flex", "flexDirection": "column"}, children=[
+        html.Div(id="readout", style={"fontWeight": "bold", "fontSize": "12px",
+                                      "padding": "2px 0", "flex": "0 0 auto"}),
+        html.Div(dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True}),
+                 style={"flex": "2 1 0", "minHeight": 0}),
+        html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True}),
+                 style={"flex": "1 1 0", "minHeight": 0}),
+    ]),
+
+    # ---- invisible state + overlays ----
     dcc.Store(id="sel-cell"),
     dcc.Store(id="gallery-trigger"),
-    # ---- output-image gallery for the selected cell (click to enlarge) ----
-    html.Div([html.Label("cell outputs (click an image to enlarge)",
-                         style={"fontSize": "12px", "fontWeight": "bold"}),
-              html.Div(id="outputs-gallery",
-                       style={"display": "flex", "flexWrap": "wrap", "gap": "6px",
-                              "maxHeight": "340px", "overflowY": "auto",
-                              "border": "1px solid #eee", "padding": "4px", "background": "#fafafa"})],
-             style={"marginBottom": "6px"}),
-    # file "columns" viewer: browse buttons + left-to-right (Finder-columns) checklist
-    html.Div(style={"display": "flex", "gap": "12px", "alignItems": "flex-start",
-                    "marginBottom": "4px"}, children=[
-        html.Div([
-            html.Span("Neitz ABF Viewer", style={"fontWeight": "bold", "fontSize": "14px"}),
-            html.Div([html.Button("📁 File…", id="browse-file", n_clicks=0, style={"height": "30px"}),
-                      html.Button("📂 Folder…", id="browse-folder", n_clicks=0,
-                                  style={"height": "30px", "marginLeft": "6px"})], style={"marginTop": "4px"}),
-        ], style={"flex": "0 0 auto"}),
-        html.Div(dcc.Checklist(id="file",
-                               options=file_options(_files),
-                               value=[_files[0]] if _files else [],
-                               inline=True,
-                               labelStyle={"display": "inline-block", "width": "175px",
-                                           "fontSize": "11px", "whiteSpace": "nowrap",
-                                           "overflow": "hidden", "textOverflow": "ellipsis",
-                                           "verticalAlign": "top", "marginRight": "6px"},
-                               inputStyle={"marginRight": "4px"}),
-                 style={"flex": "1", "maxHeight": "84px", "overflowY": "auto",
-                        "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
-    ]),
-    # details: full-width row beneath the file viewer (same compact font)
-    html.Div(id="meta", style={"fontSize": "11px", "color": "#333", "lineHeight": "1.5",
-                               "background": "#f6f6f6", "padding": "6px", "borderRadius": "4px",
-                               "marginBottom": "6px"}),
-    html.Div(style={"display": "flex", "gap": "16px", "flexWrap": "wrap", "marginTop": "8px",
-                    "alignItems": "flex-end"}, children=[
-        html.Div([html.Label("signal channel"), dcc.Dropdown(id="chan", style={"width": "170px"})]),
-        html.Div([html.Label("TTL channel"), dcc.Dropdown(id="ttl", style={"width": "140px"})]),
-        html.Div([html.Label("polarity"),
-                  dcc.RadioItems(id="polarity", options=[{"label": p, "value": p} for p in ("neg", "pos", "abs")],
-                                 value="neg", inline=True, **PERSIST)]),
-        html.Div([html.Label("threshold"),
-                  dcc.RadioItems(id="method", options=[{"label": "k·MAD", "value": "mad"},
-                                                       {"label": "absolute", "value": "abs"},
-                                                       {"label": "k·MAD ≥ floor", "value": "mad_floor"}],
-                                 value="mad", inline=True, **PERSIST)]),
-        html.Div([html.Label("k (MAD)"),
-                  dcc.Slider(id="k", min=2, max=15, step=0.5, value=6,
-                             marks={2: "2", 6: "6", 10: "10", 15: "15"},
-                             tooltip={"placement": "bottom"}, **PERSIST)], style={"width": "220px"}),
-        html.Div([html.Label("abs thresh"),
-                  dcc.Input(id="absth", type="number", value=20, debounce=True,
-                            style={"width": "85px"}, **PERSIST)]),
-        html.Div([html.Label("refractory (ms)"),
-                  dcc.Input(id="refr", type="number", value=2, debounce=True,
-                            style={"width": "75px"}, **PERSIST)]),
-        html.Div([html.Label("region start (s)"),
-                  dcc.Input(id="region-start", type="number", debounce=True, style={"width": "95px"})]),
-        html.Div([html.Label("region end (s)"),
-                  dcc.Input(id="region-end", type="number", debounce=True, style={"width": "95px"})]),
-        html.Div([html.Label("display"),
-                  dcc.Checklist(id="dispopts",
-                                options=[{"label": " stagger frame syncs", "value": "stagger"},
-                                         {"label": " hide detected spikes", "value": "hide_spikes"},
-                                         {"label": " spike-train view (0/1)", "value": "spike_train"}],
-                                value=[], labelStyle={"display": "block", "fontSize": "12px"}, **PERSIST)]),
-        html.Div([html.Label("excluded regions"),
-                  dcc.RadioItems(id="region-mode",
-                                 options=[{"label": " show", "value": "show"},
-                                          {"label": " crop", "value": "crop"},
-                                          {"label": " baseline", "value": "baseline"}],
-                                 value="show", labelStyle={"display": "block", "fontSize": "12px"}, **PERSIST)]),
-        html.Div([html.Label("spike-train bin (ms, 0=impulses)"),
-                  dcc.Input(id="train-bin", type="number", value=0, min=0, debounce=True,
-                            style={"width": "110px"}, **PERSIST)]),
-    ]),
-    html.Div(id="readout", style={"margin": "4px 0", "fontWeight": "bold", "fontSize": "12px"}),
-    dcc.Graph(id="time", style={"height": "560px"}),
-    dcc.Graph(id="fft", style={"height": "340px", "width": "33%"}),
+    dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
+    dcc.Interval(id="once", interval=300, max_intervals=1),
     # ---- full-screen pop-out for an output image ----
     html.Div(id="output-modal", style={"display": "none"}, children=[
         html.Button("✕ close", id="modal-close", n_clicks=0,
@@ -356,8 +416,6 @@ app.layout = html.Div(style={"font-family": "sans-serif", "margin": "12px"}, chi
         html.Img(id="modal-img", style={"maxWidth": "94vw", "maxHeight": "92vh",
                                         "boxShadow": "0 0 24px #000", "background": "white"}),
     ]),
-    dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
-    dcc.Interval(id="once", interval=300, max_intervals=1),
 ])
 
 
@@ -609,11 +667,17 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     if sfreqs:
         sf = float(np.mean(sfreqs))
         fft_fig.add_vline(x=sf, line_dash="dash", line_color="orange",
-                          annotation_text=f"stim {sf:.2f} Hz", annotation_position="top")
-    fft_fig.update_layout(title="spike-train spectrum (inside region)",
-                          xaxis_title="frequency (Hz)", yaxis_title="amplitude",
-                          xaxis_range=[0, FMAX], margin=dict(l=55, r=20, t=40, b=40),
-                          legend=dict(orientation="h", y=1.2), showlegend=True)
+                          annotation_text=f"stim {sf:.2f} Hz",
+                          annotation_position="bottom right",
+                          annotation=dict(font=dict(size=10, color="#c60")))
+    fft_fig.update_layout(
+        title=dict(text="spike-train spectrum (inside region)", x=0.5, xanchor="center",
+                   y=0.97, yanchor="top", font=dict(size=12)),
+        xaxis_title="frequency (Hz)", yaxis_title="amplitude",
+        xaxis_range=[0, FMAX], margin=dict(l=55, r=15, t=34, b=40),
+        legend=dict(x=0.99, y=0.97, xanchor="right", yanchor="top", font=dict(size=9),
+                    bgcolor="rgba(255,255,255,0.65)", bordercolor="#ccc", borderwidth=1),
+        showlegend=True)
 
     view = ("spike-train" if spike_train else "analog")
     mode = (f"GROUP of {len(files)} (avg→FFT; {view} view"
