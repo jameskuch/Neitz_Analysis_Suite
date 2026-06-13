@@ -322,6 +322,11 @@ def ov(**pos):
 _OVL = {"fontSize": "10px", "color": "#444", "fontWeight": "bold"}    # inline label inside an overlay
 _OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "border-box",
         "textAlign": "right"}                                        # compact overlay textbox
+# region start/end overlays: same fixed height; start flush with the plot's left (l margin),
+# end flush with the plot's right (r margin). Shared so a callback can hide them when cropping.
+_START_OV = ov(top="34px", left="55px", height="20px")
+_END_OV = ov(top="34px", right="20px", height="20px")
+_END_FIELDS = {"display": "flex", "alignItems": "center", "gap": "3px"}   # end (s) label+input
 
 
 # ============================================================
@@ -775,28 +780,30 @@ app.layout = html.Div(
         # Region & display controls float in the corners, hugging the graph.
         html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
             dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True}),
-            # top-left: region start (dropped below the modebar / legend zone)
+            # top-left (flush with the plot's left): region start — hidden when cropping
             html.Div([html.Span("start (s)", style=_OVL),
                       dcc.Input(id="region-start", type="number", debounce=True,
                                 style=dict(_OVI, width="60px"))],
-                     style=ov(top="34px", left="6px")),
-            # top-right: region end + crop (below the graph toolbar)
-            html.Div([html.Span("end (s)", style=_OVL),
-                      dcc.Input(id="region-end", type="number", debounce=True,
-                                style=dict(_OVI, width="60px")),
+                     id="start-box", style=_START_OV),
+            # top-right (flush with the plot's right): region end + crop. The end label+input
+            # (end-fields) hide when cropping; the crop checkbox stays.
+            html.Div([html.Div([html.Span("end (s)", style=_OVL),
+                                dcc.Input(id="region-end", type="number", debounce=True,
+                                          style=dict(_OVI, width="60px"))],
+                               id="end-fields", style=_END_FIELDS),
                       dcc.Checklist(id="region-mode",
                                     options=[{"label": " crop", "value": "crop"}], value=[],
                                     inline=True, labelStyle={"fontSize": "10px", "marginLeft": "4px"},
                                     inputStyle={"marginRight": "2px"}, **PERSIST)],
-                     style=ov(top="34px", right="6px")),
-            # bottom-right of the frame-sync: hide spikes + spike-train view (right-justified)
+                     id="end-box", style=_END_OV),
+            # bottom of the spike-data subplot: hide spikes + spike-train view (right-justified)
             dcc.Checklist(id="disp-lr",
                           options=[{"label": " hide spikes", "value": "hide_spikes"},
                                    {"label": " spike-train", "value": "spike_train"}],
                           value=[], inline=True,
                           labelStyle={"fontSize": "10px", "marginRight": "8px"},
                           inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="4px", right="6px"), **PERSIST),
+                          style=ov(bottom="42%", right="6px"), **PERSIST),
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -981,6 +988,15 @@ def load_meta(files):
     return opts, rec.channel_names[0], opts, ttl_default, txt, rstart, rend
 
 
+# ---- crop hides the start/end region boxes (the crop checkbox stays) ----------
+@app.callback(Output("start-box", "style"), Output("end-fields", "style"),
+              Input("region-mode", "value"), prevent_initial_call=False)
+def toggle_region_boxes(mode):
+    if "crop" in (mode or []):
+        return dict(_START_OV, display="none"), {"display": "none"}
+    return _START_OV, _END_FIELDS
+
+
 # ---- render time + fft -----------------------------------------------------
 @app.callback(Output("time", "figure"), Output("fft", "figure"), Output("isi", "figure"),
               Output("readout", "children"),
@@ -1144,10 +1160,11 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                         + (f", stim {fl.freq:.2f}Hz" if fl else ", no flicker"))
 
     if not crop:                                   # shade excluded blocks (skip when cropped out)
-        for (a, b, lbl) in [(t0_full, rs, "excluded (adapting)"), (re_, t1_full, "excluded")]:
+        for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
+                                 (re_, t1_full, "excluded", "bottom right")]:
             if b > a + 1e-6:
                 time_fig.add_vrect(x0=a, x1=b, fillcolor="gray", opacity=0.4, line_width=0,
-                                   annotation_text=lbl, annotation_position="top left",
+                                   annotation_text=lbl, annotation_position=pos,
                                    annotation=dict(font_size=10), row="all", col=1)
 
     ttl_ylab = (f"{ttl_name} (staggered)" if (stagger and multi) else (ttl_name or "TTL"))
