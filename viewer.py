@@ -1642,14 +1642,19 @@ app.clientside_callback(
                     }
                 }
             });
-            // leaving the open cell(s) dropdown closes it (blur the react-select input)
+            // leaving the cell(s) dropdown closes its menu: send Escape to the react-select
+            // input (the reliable way) + blur as a fallback
             document.addEventListener('mouseout', function(e) {
                 var wrap = document.getElementById('cell-select-wrap');
                 if (!wrap) return;
                 var to = e.relatedTarget;
                 if (wrap.contains(e.target) && (!to || !wrap.contains(to))) {
                     var inp = wrap.querySelector('input');
-                    if (inp) { inp.blur(); }
+                    if (inp) {
+                        inp.dispatchEvent(new KeyboardEvent('keydown',
+                            {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
+                        inp.blur();
+                    }
                 }
             });
         }
