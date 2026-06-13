@@ -1,0 +1,17 @@
+/* Vertically center every checkbox / radio square with its label text.
+   Dash auto-loads any .css in this assets/ folder. */
+input[type="checkbox"],
+input[type="radio"] {
+    vertical-align: middle;
+    margin-top: 0;
+    margin-bottom: 0;
+}
+
+/* dcc.Checklist / dcc.RadioItems render each option as <label><input/>text</label>;
+   keep the box and text on a centered baseline. */
+.dash-checklist label,
+.dash-radioitems label,
+label > input[type="checkbox"],
+label > input[type="radio"] {
+    vertical-align: middle;
+}

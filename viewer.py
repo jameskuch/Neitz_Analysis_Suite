@@ -693,14 +693,12 @@ app.layout = html.Div(
 
             # files for the selected cell(s) — multi-column listbox (saves height)
             html.Label("files", style=_LBL),
-            html.Div(dcc.Checklist(id="file", options=file_options(_files),
-                                   value=[_files[0]] if _files else [],
+            html.Div(dcc.Checklist(id="file", options=[], value=[],   # blank until a cell is picked
                                    labelStyle={"display": "block", "width": "150px",
                                                "boxSizing": "border-box", "fontSize": "11px",
                                                "whiteSpace": "nowrap", "overflow": "hidden",
                                                "textOverflow": "ellipsis"},
-                                   inputStyle={"marginRight": "4px", "verticalAlign": "middle",
-                                               "position": "relative", "top": "-1px"},
+                                   inputStyle={"marginRight": "4px", "verticalAlign": "middle"},
                                    # flexbox column-wrap: each label is atomic (never split
                                    # across columns the way CSS multicol did)
                                    style={"display": "flex", "flexFlow": "column wrap",
@@ -806,7 +804,8 @@ app.layout = html.Div(
         # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height.
         # Region & display controls float in the corners, hugging the graph.
         html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
-            dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True}),
+            dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True},
+                      figure=blank_fig("pick a cell, then check file(s) to display")),
             # top-left (flush with the plot's left): region start — hidden when cropping
             html.Div([html.Span("start (s)", style=_OVL),
                       dcc.Input(id="region-start", type="number", debounce=True,
@@ -818,20 +817,25 @@ app.layout = html.Div(
                                 dcc.Input(id="region-end", type="number", debounce=True,
                                           style=dict(_OVI, width="60px"))],
                                id="end-fields", style=_END_FIELDS),
-                      dcc.Checklist(id="region-mode",
-                                    options=[{"label": " crop", "value": "crop"}], value=[],
-                                    inline=True, labelStyle={"fontSize": "10px", "marginLeft": "4px"},
-                                    inputStyle={"marginRight": "2px"}, **PERSIST)],
+                      dcc.Checklist(id="region-mode",       # checkbox to the RIGHT of "crop"
+                                    options=[{"label": "crop", "value": "crop"}], value=[],
+                                    inline=True,
+                                    labelStyle={"fontSize": "10px", "marginLeft": "4px",
+                                                "display": "inline-flex", "alignItems": "center",
+                                                "flexDirection": "row-reverse"},
+                                    inputStyle={"marginLeft": "3px"}, **PERSIST)],
                      id="end-box", style=_END_OV),
             # just beneath the spike-data subplot (clear of the "excluded" labels), same height
-            # as start/end: hide spikes / spike-train
+            # as start/end. "show detected spikes" defaults ON; "show binned spikes" toggles the
+            # binned spike-train view.
             dcc.Checklist(id="disp-lr",
-                          options=[{"label": " hide spikes", "value": "hide_spikes"},
-                                   {"label": " spike-train", "value": "spike_train"}],
-                          value=[], inline=True,
-                          labelStyle={"fontSize": "10px", "marginRight": "8px"},
+                          options=[{"label": " show detected spikes", "value": "show_spikes"},
+                                   {"label": " show binned spikes", "value": "spike_train"}],
+                          value=["show_spikes"], inline=True,
+                          labelStyle={"fontSize": "10px", "marginRight": "8px",
+                                      "display": "inline-flex", "alignItems": "center"},
                           inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="30%", right="6px", height="20px"), **PERSIST),
+                          style=ov(bottom="30%", right="6px", height="20px")),
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -841,10 +845,12 @@ app.layout = html.Div(
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
                  children=[
-            html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True}),
+            html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True},
+                               figure=blank_fig("")),
                      style={"flex": "1 1 0", "minWidth": 0}),
             # ISI histogram with the spike-train bin control floated inside, below the toolbar
-            html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True}),
+            html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True},
+                                figure=blank_fig("")),
                       html.Div([html.Span("bin (ms)", style=_OVL),
                                 dcc.Input(id="train-bin", type="number", value=0, min=0,
                                           debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
@@ -964,19 +970,7 @@ app.layout = html.Div(
 ])
 
 
-# ---- restore the remembered data folder on page load (once) ----------------
-@app.callback(Output("file", "options", allow_duplicate=True),
-              Output("file", "value", allow_duplicate=True),
-              Input("once", "n_intervals"), State("last-folder", "data"),
-              prevent_initial_call=True)
-def restore_folder(_n, last_folder):
-    global _last_dir
-    if last_folder:
-        files = discover_abf(last_folder)
-        if files:
-            _last_dir = last_folder
-            return file_options(files), []
-    return no_update, no_update
+# (no auto-restore on load — the viewer starts fully blank; pick a cell to populate "files")
 
 
 # ---- load first file -> channels, metadata, auto-fill region ---------------
@@ -1059,10 +1053,9 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     except (TypeError, ValueError):
         stagger_frac = 0.0
     stagger = stagger_frac > 0
-    hide_spikes = "hide_spikes" in opts
-    spike_train = "spike_train" in opts
+    show_spikes = "show_spikes" in opts    # checkbox: "show detected spikes" (default on)
+    spike_train = "spike_train" in opts    # checkbox: "show binned spikes" (spike-train view)
     crop = "crop" in (region_mode or [])   # checkbox: show only the analysis region
-    show_spikes = not hide_spikes          # spikes shown by default (single AND multi)
     tbin = float(train_bin) if train_bin else 0.0
 
     rec0 = get_recording(files[0])
