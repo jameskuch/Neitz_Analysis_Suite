@@ -199,12 +199,20 @@ def blank_fig(msg=""):
 
 
 # ---- data-store (manifest) helpers -----------------------------------------
-def store_cell_options(sort="date_desc"):
+def store_cell_options(sort="date_desc", recent=None):
     try:
         idx = DataStore().index()
     except Exception:
         idx = []
-    if sort == "date_asc":
+    if sort == "recent":                             # most-recently-opened first, then newest date
+        order = {v: i for i, v in enumerate(recent or [])}
+        key = lambda c: f"{c['date']}|{c['cell']}"
+        seen = [c for c in idx if key(c) in order]
+        seen.sort(key=lambda c: order[key(c)])
+        rest = sorted([c for c in idx if key(c) not in order],
+                      key=lambda c: (c["date"], c["cell"]), reverse=True)
+        idx = seen + rest
+    elif sort == "date_asc":
         idx = sorted(idx, key=lambda c: (c["date"], c["cell"]))
     elif sort == "label":
         idx = sorted(idx, key=lambda c: ((c.get("label") or "").lower(), c["date"]))
@@ -408,30 +416,73 @@ _THUMB_IMG = {"height": "62px", "border": "1px solid #ccc", "background": "white
               "display": "block", "marginBottom": "2px"}
 
 
-def explorer_dates_rail(active=None):
-    """Left rail: one row per date (newest first) with a cell count + a 🗑 to delete the day."""
-    idx = DataStore().index()
-    by_date = {}
+def _date_rows_data():
+    """Per-date rows for the rail: {date, label (joined cell labels/types), n cells}."""
+    try:
+        idx = DataStore().index()
+    except Exception:
+        idx = []
+    by = {}
     for c in idx:
-        by_date.setdefault(c["date"], 0)
-        by_date[c["date"]] += 1
+        d = by.setdefault(c["date"], {"date": c["date"], "labels": [], "n": 0})
+        d["n"] += 1
+        lab = c.get("label") or c.get("cell_type") or ""
+        if lab and lab not in d["labels"]:
+            d["labels"].append(lab)
     rows = []
-    for d in sorted(by_date, reverse=True):
-        is_active = (d == active)
-        rows.append(html.Div([
-            html.Div(f"{d}   ·   {by_date[d]} cell{'s' if by_date[d] != 1 else ''}",
-                     id={"type": "exp-date", "date": d}, n_clicks=0,
-                     style={"flex": "1", "cursor": "pointer",
-                            "fontWeight": ("bold" if is_active else "normal")}),
-            html.Button("🗑", id={"type": "del-date", "date": d}, n_clicks=0,
-                        title=f"delete all of {d}",
-                        style={"border": "none", "background": "none", "color": "#e66",
-                               "cursor": "pointer", "fontSize": "12px", "padding": "0 2px"}),
-        ], style={"padding": "8px 10px", "fontSize": "12px", "color": "white",
+    for d in by.values():
+        d["label"] = ", ".join(d["labels"])
+        rows.append(d)
+    return rows
+
+
+_RAIL_DATE = {"flex": "0 0 70px"}
+_RAIL_N = {"flex": "0 0 26px", "textAlign": "center"}
+_RAIL_TRASH = {"flex": "0 0 22px"}
+_RAILHDR = {"background": "#222", "color": "#bcd", "border": "none", "cursor": "pointer",
+            "fontSize": "10px", "padding": "3px", "borderRadius": "3px", "fontWeight": "bold"}
+_RAILQ = {"fontSize": "10px", "padding": "1px 3px", "boxSizing": "border-box", "minWidth": 0,
+          "border": "1px solid #2a2a35", "background": "#0d0d12", "color": "white",
+          "borderRadius": "3px"}
+
+
+def explorer_dates_body(active=None, sort=None, search=None):
+    """Filtered + sorted date rows: [ experiment label | date | #cells | 🗑 ]."""
+    rows = _date_rows_data()
+    s = search or {}
+    ql = (s.get("label") or "").lower(); qd = (s.get("date") or "").lower()
+    qc = (s.get("cells") or "").strip()
+    rows = [r for r in rows
+            if ql in r["label"].lower() and qd in r["date"].lower()
+            and (not qc or qc in str(r["n"]))]
+    sort = sort or {"col": "date", "dir": "desc"}
+    keyf = {"label": lambda r: (r["label"].lower(), r["date"]),
+            "date": lambda r: r["date"],
+            "cells": lambda r: (r["n"], r["date"])}.get(sort.get("col"), lambda r: r["date"])
+    rows.sort(key=keyf, reverse=(sort.get("dir") == "desc"))
+    out = []
+    for r in rows:
+        is_active = (r["date"] == active)
+        out.append(html.Div([
+            html.Div([
+                html.Div(r["label"] or "—", title=r["label"],
+                         style={"flex": "1", "minWidth": 0, "overflow": "hidden",
+                                "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+                html.Div(r["date"], style=_RAIL_DATE),
+                html.Div(str(r["n"]), style=_RAIL_N),
+            ], id={"type": "exp-date", "date": r["date"]}, n_clicks=0,
+               style={"flex": "1", "minWidth": 0, "display": "flex", "gap": "4px",
+                      "alignItems": "center", "cursor": "pointer"}),
+            html.Button("🗑", id={"type": "del-date", "date": r["date"]}, n_clicks=0,
+                        title=f"delete all of {r['date']}",
+                        style=dict(_RAIL_TRASH, border="none", background="none", color="#e66",
+                                   cursor="pointer", fontSize="12px", padding="0")),
+        ], style={"padding": "6px 8px", "fontSize": "11px", "color": "white",
                   "display": "flex", "alignItems": "center", "gap": "4px",
                   "borderBottom": "1px solid #2a2a35",
                   "background": ("#3367d6" if is_active else "transparent")}))
-    return rows or [html.Div("no cells in store", style={"color": "#999", "padding": "10px"})]
+    return out or [html.Div("no dates", style={"color": "#999", "padding": "10px",
+                                               "fontSize": "11px"})]
 
 
 def delete_date(date):
@@ -678,18 +729,20 @@ app.layout = html.Div(
             # cell(s) label + inline sort control on the same row (sort = dropdown order)
             html.Div([
                 html.Label("cell(s)", style=dict(_LBL, marginBottom=0)),
-                dcc.RadioItems(id="cell-sort", value="date_desc", inline=True,
-                               options=[{"label": "↓date", "value": "date_desc"},
+                dcc.RadioItems(id="cell-sort", value="recent", inline=True,
+                               options=[{"label": "opened recently", "value": "recent"},
+                                        {"label": "↓date", "value": "date_desc"},
                                         {"label": "↑date", "value": "date_asc"},
                                         {"label": "label", "value": "label"},
                                         {"label": "type", "value": "type"}],
                                labelStyle={"fontSize": "10px", "marginLeft": "5px"},
                                inputStyle={"marginRight": "2px"}, **PERSIST),
             ], style={"display": "flex", "alignItems": "baseline",
-                      "justifyContent": "space-between"}),
-            dcc.Dropdown(id="cell-select", options=store_cell_options(), multi=True,
-                         placeholder="pick date(s) / cell(s)…",
-                         style={"width": "100%", "marginBottom": "6px"}),
+                      "justifyContent": "space-between", "flexWrap": "wrap"}),
+            html.Div(dcc.Dropdown(id="cell-select", options=store_cell_options(), multi=True,
+                                  placeholder="pick date(s) / cell(s)…", maxHeight=380,
+                                  optionHeight=34, style={"width": "100%"}),
+                     id="cell-select-wrap", style={"marginBottom": "6px"}),
 
             # files for the selected cell(s) — multi-column listbox (saves height)
             html.Label("files", style=_LBL),
@@ -825,9 +878,8 @@ app.layout = html.Div(
                                                 "flexDirection": "row-reverse"},
                                     inputStyle={"marginLeft": "3px"}, **PERSIST)],
                      id="end-box", style=_END_OV),
-            # just beneath the spike-data subplot (clear of the "excluded" labels), same height
-            # as start/end. "show detected spikes" defaults ON; "show binned spikes" toggles the
-            # binned spike-train view.
+            # bottom-LEFT, same level as "stagger frame sync %" (bottom-right). "show detected
+            # spikes" defaults ON; "show binned spikes" toggles the binned spike-train view.
             dcc.Checklist(id="disp-lr",
                           options=[{"label": " show detected spikes", "value": "show_spikes"},
                                    {"label": " show binned spikes", "value": "spike_train"}],
@@ -835,7 +887,7 @@ app.layout = html.Div(
                           labelStyle={"fontSize": "10px", "marginRight": "8px",
                                       "display": "inline-flex", "alignItems": "center"},
                           inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="30%", right="6px", height="20px")),
+                          style=ov(bottom="26px", left="6px", height="20px")),
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -864,6 +916,9 @@ app.layout = html.Div(
     dcc.Store(id="gallery-trigger"),
     dcc.Store(id="absth-map"),                            # {file path: per-trace abs threshold}
     dcc.Store(id="absth-seed"),                           # {file path: seed value for the editor}
+    dcc.Store(id="recent-cells", storage_type="local"),   # most-recently-opened date|cell list
+    dcc.Store(id="rail-sort", data={"col": "date", "dir": "desc"}),   # explorer rail sort
+    dcc.Store(id="store-rev", data=0),                    # bumped when the store changes (rail refresh)
     dcc.Store(id="exp-date"),                             # explorer: selected date
     dcc.Store(id="exp-cell"),                             # explorer: selected cell (within date)
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
@@ -903,10 +958,34 @@ app.layout = html.Div(
         # body: left rail (full height) · middle (browser over a hover-preview) · right detail (full height)
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"},
                  children=[
-            # left rail: dates, each with a 🗑
-            html.Div(id="exp-dates",
-                     style={"flex": "0 0 195px", "overflowY": "auto", "background": "#15151d",
-                            "border": "1px solid #2a2a35", "borderRadius": "6px"}),
+            # left rail: a sortable + searchable 4-column table of dates
+            html.Div(style={"flex": "0 0 330px", "minHeight": 0, "display": "flex",
+                            "flexDirection": "column", "background": "#15151d",
+                            "border": "1px solid #2a2a35", "borderRadius": "6px",
+                            "overflow": "hidden"}, children=[
+                # sortable column headers
+                html.Div([
+                    html.Button("experiment ⇅", id={"type": "rail-sort", "col": "label"},
+                                n_clicks=0, style=dict(_RAILHDR, flex="1", textAlign="left")),
+                    html.Button("date ⇅", id={"type": "rail-sort", "col": "date"}, n_clicks=0,
+                                style=dict(_RAILHDR, **_RAIL_DATE)),
+                    html.Button("# ⇅", id={"type": "rail-sort", "col": "cells"}, n_clicks=0,
+                                style=dict(_RAILHDR, **_RAIL_N)),
+                    html.Span(style=_RAIL_TRASH),
+                ], style={"display": "flex", "gap": "4px", "padding": "4px 6px"}),
+                # per-column search
+                html.Div([
+                    dcc.Input(id="rail-q-label", type="text", placeholder="search…", debounce=True,
+                              style=dict(_RAILQ, flex="1")),
+                    dcc.Input(id="rail-q-date", type="text", placeholder="date", debounce=True,
+                              style=dict(_RAILQ, **_RAIL_DATE)),
+                    dcc.Input(id="rail-q-cells", type="text", placeholder="#", debounce=True,
+                              style=dict(_RAILQ, **_RAIL_N)),
+                    html.Span(style=_RAIL_TRASH),
+                ], style={"display": "flex", "gap": "4px", "padding": "0 6px 4px"}),
+                # the rows (rebuilt by a callback)
+                html.Div(id="exp-dates", style={"flex": "1 1 0", "overflowY": "auto"}),
+            ]),
             # middle column: browser (top 2/3) over the hover preview (bottom 1/3)
             html.Div(style={"flex": "1 1 0", "minWidth": 0, "display": "flex",
                             "flexDirection": "column", "gap": "6px"}, children=[
@@ -916,11 +995,12 @@ app.layout = html.Div(
                     html.Div(id="exp-cards",
                              style={"display": "flex", "flexWrap": "wrap", "gap": "18px",
                                     "alignItems": "flex-start"}),
-                    dcc.Checklist(id="exp-files", options=[], value=[],
-                                  labelStyle={"display": "inline-block", "verticalAlign": "top",
-                                              "background": "white", "borderRadius": "5px",
-                                              "padding": "5px", "margin": "5px"},
-                                  inputStyle={"marginRight": "5px", "verticalAlign": "top"}),
+                    # files as a desktop-icon grid (wrap into rows/columns)
+                    dcc.Checklist(id="exp-files", options=[], value=[], inline=True,
+                                  labelStyle={"display": "inline-flex", "alignItems": "flex-start",
+                                              "verticalAlign": "top", "background": "white",
+                                              "borderRadius": "5px", "padding": "5px", "margin": "5px"},
+                                  inputStyle={"marginRight": "5px", "marginTop": "2px"}),
                     html.Div(html.Button("", id="del-files", n_clicks=0, style={"display": "none"}),
                              id="del-files-wrap", style={"marginTop": "6px"}),
                 ]),
@@ -931,7 +1011,7 @@ app.layout = html.Div(
                                 "display": "flex", "alignItems": "center",
                                 "justifyContent": "center", "textAlign": "center"},
                          children=[
-                    html.Img(id="exp-prev-img", style={"maxWidth": "100%", "maxHeight": "100%",
+                    html.Img(id="exp-prev-img", style={"width": "100%", "height": "100%",
                                                        "objectFit": "contain", "display": "none"}),
                     html.Span("hover any graph to preview it here", id="exp-prev-hint",
                               style={"color": "#999", "fontSize": "12px"}),
@@ -1316,12 +1396,13 @@ def collect_absth(_vals, sync, _files):
 @app.callback(Output("file", "options", allow_duplicate=True),
               Output("file", "value", allow_duplicate=True),
               Output("sel-cell", "data"), Output("stim-type", "value"),
-              Output("stim-params", "value"),
-              Input("cell-select", "value"), prevent_initial_call=True)
-def pick_cell(vals):
+              Output("stim-params", "value"), Output("recent-cells", "data"),
+              Input("cell-select", "value"), State("recent-cells", "data"),
+              prevent_initial_call=True)
+def pick_cell(vals, recent):
     vals = vals if isinstance(vals, list) else ([vals] if vals else [])
     if not vals:
-        return no_update, no_update, [], None, None
+        return no_update, no_update, [], None, None, no_update
     ds = DataStore()
     opts, checked, sel_list, seen = [], [], [], set()
     stype, sparams = None, None
@@ -1342,14 +1423,17 @@ def pick_cell(vals):
                     sparams = ", ".join(f"{k}={v}" for k, v in
                                         (r["stimulus"].get("params") or {}).items() if v is not None)
                     break
-    return opts, checked, sel_list, stype, sparams
+    recent = [x for x in (recent or []) if x not in vals]        # most-recent-first, de-duped
+    recent = list(vals) + recent
+    return opts, checked, sel_list, stype, sparams, recent[:50]
 
 
-# ---- re-sort the cell(s) dropdown ------------------------------------------
+# ---- re-sort the cell(s) dropdown (incl. "opened recently") ------------------
 @app.callback(Output("cell-select", "options", allow_duplicate=True),
-              Input("cell-sort", "value"), prevent_initial_call=True)
-def sort_cells(sort):
-    return store_cell_options(sort or "date_desc")
+              Input("cell-sort", "value"), Input("recent-cells", "data"),
+              prevent_initial_call="initial_duplicate")
+def sort_cells(sort, recent):
+    return store_cell_options(sort or "recent", recent=recent)
 
 
 # ---- save stimulus metadata to the cell's data recordings --------------------
@@ -1487,6 +1571,16 @@ app.clientside_callback(
                     if (hint) { hint.style.display = 'none'; }
                 }
             });
+            // leaving the open cell(s) dropdown closes it (blur the react-select input)
+            document.addEventListener('mouseout', function(e) {
+                var wrap = document.getElementById('cell-select-wrap');
+                if (!wrap) return;
+                var to = e.relatedTarget;
+                if (wrap.contains(e.target) && (!to || !wrap.contains(to))) {
+                    var inp = wrap.querySelector('input');
+                    if (inp) { inp.blur(); }
+                }
+            });
         }
         return window.dash_clientside.no_update;
     }
@@ -1535,23 +1629,51 @@ def exp_back(_n):
     return None
 
 
-@app.callback(Output("exp-dates", "children"), Output("exp-cards", "children"),
+@app.callback(Output("exp-cards", "children"),
               Output("exp-files", "options"), Output("exp-files", "value"),
               Output("exp-detail", "children"), Output("exp-breadcrumb", "children"),
-              Output("exp-back", "style"),
+              Output("exp-back", "style"), Output("exp-prev", "children"),
               Input("exp-date", "data"), Input("exp-cell", "data"), prevent_initial_call=True)
 def exp_render(date, cell):
+    # reset the hover-preview on every navigation (no stale graph showing)
+    prev = [html.Img(id="exp-prev-img", style={"width": "100%", "height": "100%",
+                                               "objectFit": "contain", "display": "none"}),
+            html.Span("hover any graph to preview it here", id="exp-prev-hint",
+                      style={"color": "#999", "fontSize": "12px"})]
     if not date:
-        return ([no_update] * 7)
-    rail = explorer_dates_rail(active=date)
+        return ([no_update] * 6) + [prev]
     bc = explorer_breadcrumb(date, cell)
     if not cell:                                       # DAY view: cell thumbnails
         hint = [html.Div("select a cell to see its files + manifest",
                          style={"color": "#999", "fontSize": "12px"})]
-        return rail, explorer_day_cards(date), [], [], hint, bc, {"display": "none"}
+        return explorer_day_cards(date), [], [], hint, bc, {"display": "none"}, prev
     # CELL view: file checklist + manifest JSON
-    return (rail, [], explorer_file_options(date, cell), [],
-            explorer_detail(date, cell), bc, {"display": "inline-block", "fontSize": "12px"})
+    return ([], explorer_file_options(date, cell), [],
+            explorer_detail(date, cell), bc, {"display": "inline-block", "fontSize": "12px"}, prev)
+
+
+# ---- explorer rail: sort headers + per-column search rebuild the date rows -----
+@app.callback(Output("rail-sort", "data"),
+              Input({"type": "rail-sort", "col": ALL}, "n_clicks"),
+              State("rail-sort", "data"), prevent_initial_call=True)
+def set_rail_sort(_clicks, cur):
+    t = ctx.triggered_id
+    if not (isinstance(t, dict) and ctx.triggered and ctx.triggered[0].get("value")):
+        return no_update
+    cur = cur or {"col": "date", "dir": "desc"}
+    if cur.get("col") == t["col"]:
+        return {"col": t["col"], "dir": ("asc" if cur.get("dir") == "desc" else "desc")}
+    return {"col": t["col"], "dir": "asc"}
+
+
+@app.callback(Output("exp-dates", "children"),
+              Input("rail-sort", "data"), Input("rail-q-label", "value"),
+              Input("rail-q-date", "value"), Input("rail-q-cells", "value"),
+              Input("exp-date", "data"), Input("store-rev", "data"),
+              prevent_initial_call=False)
+def rebuild_rail(sort, ql, qd, qc, active, _rev):
+    return explorer_dates_body(active=active, sort=sort,
+                               search={"label": ql, "date": qd, "cells": qc})
 
 
 @app.callback(Output("file", "options", allow_duplicate=True),
@@ -1625,29 +1747,30 @@ def cancel_delete(_n):
 
 @app.callback(Output("del-msg", "children", allow_duplicate=True),
               Output("del-modal", "style", allow_duplicate=True),
-              Output("exp-dates", "children", allow_duplicate=True),
+              Output("store-rev", "data", allow_duplicate=True),
               Output("exp-cards", "children", allow_duplicate=True),
               Output("exp-files", "options", allow_duplicate=True),
               Output("exp-files", "value", allow_duplicate=True),
               Output("exp-detail", "children", allow_duplicate=True),
               Output("cell-select", "options", allow_duplicate=True),
               Input("del-confirm", "n_clicks"), State("del-targets", "data"),
-              prevent_initial_call=True)
-def confirm_delete(_n, targets):
-    nu = (no_update,) * 6              # dates, cards, files-opts, files-val, detail, cells
+              State("store-rev", "data"), prevent_initial_call=True)
+def confirm_delete(_n, targets, rev):
+    nu = (no_update,) * 6              # store-rev, cards, files-opts, files-val, detail, cells
     if not targets:
         return "nothing to delete", no_update, *nu
+    rev = (rev or 0) + 1               # bump -> rail rebuilds (date removed)
     try:
         if targets.get("kind") == "date":
             delete_date(targets["date"])
             msg = html.Span(f"✓ deleted all of {targets['date']}", style={"color": "#070"})
-            return (msg, {"display": "none"}, explorer_dates_rail(),
+            return (msg, {"display": "none"}, rev,
                     [html.Div("pick a date", style={"color": "#999", "fontSize": "12px"})],
                     [], [], [], store_cell_options())
         date, cell = targets["date"], targets["cell"]
         removed, _ = delete_files(date, cell, targets["paths"])
         msg = html.Span(f"✓ deleted {len(removed)} item(s)", style={"color": "#070"})
-        return (msg, {"display": "none"}, explorer_dates_rail(active=date), no_update,
+        return (msg, {"display": "none"}, rev, no_update,
                 explorer_file_options(date, cell), [],
                 explorer_detail(date, cell), store_cell_options())
     except Exception as e:
@@ -1657,13 +1780,13 @@ def confirm_delete(_n, targets):
 # ---- import new experiment data into the store (copies + auto-groups by date) --
 # (the Import button now lives in the Data Explorer window)
 @app.callback(Output("cell-select", "options", allow_duplicate=True),
-              Output("exp-dates", "children", allow_duplicate=True),
+              Output("store-rev", "data", allow_duplicate=True),
               Output("exp-msg", "children"),
               Output("store-msg", "children", allow_duplicate=True),
               Input("import-data", "n_clicks"),
               State("stim-type", "value"), State("stim-params", "value"),
-              State("exp-date", "data"), prevent_initial_call=True)
-def import_data(_n, stype, sparams, active_date):
+              State("store-rev", "data"), prevent_initial_call=True)
+def import_data(_n, stype, sparams, rev):
     import re
     folder = native_choose_folder()
     if not folder:
@@ -1691,7 +1814,7 @@ def import_data(_n, stype, sparams, active_date):
         made.append(f"{date}/{cm.data['cell']} ({len(fs)})")
     ds.update_index()
     msg = f"imported {len(abfs)} recordings → " + ", ".join(made)
-    return (store_cell_options(), explorer_dates_rail(active=active_date), msg, msg)
+    return (store_cell_options(), (rev or 0) + 1, msg, msg)   # bump store-rev -> rail rebuilds
 
 
 # ---- back up the whole data store to this computer's mirror -------------------
