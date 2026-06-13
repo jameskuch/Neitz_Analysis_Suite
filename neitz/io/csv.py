@@ -120,9 +120,14 @@ class CsvSpikeRecording:
         self.path = str(path)
         self._time = np.asarray(time, dtype=float)
         self._spikes = np.asarray(spikes, dtype=float)
-        dt = float(np.median(np.diff(self._time))) if self._time.size > 1 else 1.0
-        self.fs = (1.0 / dt) if dt else 1.0
-        self.duration = float(self._time[-1]) if self._time.size else 0.0
+        t = self._time
+        if t.size < 2 or not np.all(np.isfinite(t)) or not np.all(np.diff(t) > 0):
+            raise ValueError(
+                f"{os.path.basename(str(path))}: column 0 is not a finite, increasing time "
+                "vector — this looks like a stimulus / header CSV, not a spike recording")
+        dt = float(np.median(np.diff(t)))
+        self.fs = (1.0 / dt) if dt > 0 else 1.0
+        self.duration = float(t[-1])
         m = self._spikes.shape[1]
         self.channel_names = [f"ch{i + 1}" for i in range(m)]
         self.channel_units = ["spikes"] * m

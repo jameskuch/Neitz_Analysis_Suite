@@ -185,11 +185,19 @@ def blank_fig(msg=""):
 
 
 # ---- data-store (manifest) helpers -----------------------------------------
-def store_cell_options():
+def store_cell_options(sort="date_desc"):
     try:
         idx = DataStore().index()
     except Exception:
         idx = []
+    if sort == "date_asc":
+        idx = sorted(idx, key=lambda c: (c["date"], c["cell"]))
+    elif sort == "label":
+        idx = sorted(idx, key=lambda c: ((c.get("label") or "").lower(), c["date"]))
+    elif sort == "type":
+        idx = sorted(idx, key=lambda c: ((c.get("cell_type") or "~").lower(), c["date"], c["cell"]))
+    else:                                            # date_desc (newest first)
+        idx = sorted(idx, key=lambda c: (c["date"], c["cell"]), reverse=True)
     return [{"label": f"{c['date']} / {c['cell']} — {c.get('label') or ''}".strip(" —"),
              "value": f"{c['date']}|{c['cell']}"} for c in idx]
 
@@ -211,6 +219,33 @@ def parse_params(text):
 def cell_data_files(cm):
     return [str(cm.dir / r["file"]) for r in cm.data.get("recordings", [])
             if str(r.get("file", "")).endswith((".abf", ".csv"))]
+
+
+_LOADABLE: dict = {}
+
+
+def loadable(path):
+    """True if `path` opens as a valid time-series recording (finite fs > 0).
+
+    Filters out Sara-style stimulus/header CSVs (e.g. siso-DLP.csv) whose column 0
+    is a phase label, not a time vector, which would otherwise break the viewer.
+    """
+    if path not in _LOADABLE:
+        try:
+            rec = get_recording(path)
+            _LOADABLE[path] = bool(np.isfinite(rec.fs) and rec.fs > 0)
+        except Exception:
+            _LOADABLE[path] = False
+    return _LOADABLE[path]
+
+
+def cell_default_files(cm):
+    """(all data files, files to check by default). Prefers spike-train CSVs, then
+    any openable recording; never auto-checks a file that won't open."""
+    files = cell_data_files(cm)
+    openable = [f for f in files if loadable(f)]
+    spikes = [f for f in openable if "spike" in os.path.basename(f).lower()]
+    return files, (spikes or openable)
 
 
 def _img_datauri(path):
@@ -335,11 +370,14 @@ def explorer_day_cards(date):
         files = cell_data_files(cm)
         out = _latest_output_datauri(cm)
         spark = sparkline_datauri(files[0]) if files else None
+        _full = {"width": "100%", "maxWidth": "100%", "height": "auto", "display": "block",
+                 "background": "white"}
         imgs = []
-        if out:
-            imgs.append(html.Img(src=out, style=dict(_THUMB_IMG, height="84px")))
-        if spark:
-            imgs.append(html.Img(src=spark, style=dict(_THUMB_IMG, width="100%")))
+        if spark:                                    # waveform on top
+            imgs.append(html.Img(src=spark, style=dict(_full, border="1px solid #ccc",
+                                                       marginBottom="4px")))
+        if out:                                      # processed output beneath, sized to the card
+            imgs.append(html.Img(src=out, style=dict(_full, border="1px solid #ddd")))
         if not imgs:
             imgs.append(html.Div("no preview", style={"color": "#999", "fontSize": "11px",
                                                       "height": "62px"}))
@@ -355,9 +393,9 @@ def explorer_day_cards(date):
                          style={"fontSize": "10px", "color": "#777"}),
             ],
             id={"type": "exp-cell", "cell": c["cell"]}, n_clicks=0,
-            style={"width": "200px", "border": "1px solid #ccc", "borderRadius": "6px",
+            style={"width": "210px", "border": "1px solid #ccc", "borderRadius": "6px",
                    "padding": "8px", "background": "white", "cursor": "pointer",
-                   "boxShadow": "0 1px 3px rgba(0,0,0,0.2)"}))
+                   "overflow": "hidden", "boxShadow": "0 1px 3px rgba(0,0,0,0.2)"}))
     return cards or [html.Div("no cells on this date", style={"color": "#ccc"})]
 
 
@@ -464,16 +502,44 @@ app.layout = html.Div(
         html.Div("Neitz ABF Viewer", style={"fontWeight": "bold", "fontSize": "15px",
                                             "marginBottom": "8px"}),
 
-        # ---- compartment: data store ----
+        # ---- compartment: data store (cell select + files + stimulus) ----
         card("Data store", [
-            html.Button("📥 Import data…", id="import-data", n_clicks=0,
-                        style={"fontWeight": "bold", "width": "100%", "marginBottom": "4px"}),
-            html.Button("📂 Data explorer…", id="open-explorer", n_clicks=0,
-                        style={"fontWeight": "bold", "width": "100%", "marginBottom": "6px"}),
-            html.Div([html.Label("cell", style=_LBL),
-                      dcc.Dropdown(id="cell-select", options=store_cell_options(),
-                                   placeholder="pick a date / cell…", style={"width": "100%"})],
+            html.Div([
+                html.Button("📥 Import data…", id="import-data", n_clicks=0,
+                            style={"flex": "1", "fontWeight": "bold"}),
+                html.Button("📂 Data explorer…", id="open-explorer", n_clicks=0,
+                            style={"flex": "1", "fontWeight": "bold", "marginLeft": "4px"}),
+            ], style={"display": "flex", "marginBottom": "8px"}),
+
+            html.Div([html.Label("cell(s)", style=_LBL),
+                      dcc.Dropdown(id="cell-select", options=store_cell_options(), multi=True,
+                                   placeholder="pick date(s) / cell(s)…", style={"width": "100%"})],
                      style=_FIELD),
+            html.Div([html.Label("sort cells by", style=_LBL),
+                      dcc.Dropdown(id="cell-sort", clearable=False, value="date_desc",
+                                   style={"width": "100%"},
+                                   options=[{"label": "date (newest first)", "value": "date_desc"},
+                                            {"label": "date (oldest first)", "value": "date_asc"},
+                                            {"label": "label (A→Z)", "value": "label"},
+                                            {"label": "cell type", "value": "type"}])],
+                     style=_FIELD),
+
+            # files for the selected cell(s) — directly under the dropdown
+            html.Label("files", style=_LBL),
+            html.Div(dcc.Checklist(id="file", options=file_options(_files),
+                                   value=[_files[0]] if _files else [],
+                                   labelStyle={"display": "block", "fontSize": "11px",
+                                               "whiteSpace": "nowrap", "overflow": "hidden",
+                                               "textOverflow": "ellipsis"},
+                                   inputStyle={"marginRight": "4px"}),
+                     style={"maxHeight": "150px", "overflowY": "auto",
+                            "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
+            html.Div(id="meta", style={"fontSize": "10px", "color": "#333", "lineHeight": "1.45",
+                                       "background": "#f6f6f6", "padding": "6px",
+                                       "borderRadius": "4px", "marginTop": "6px",
+                                       "marginBottom": "8px"}),
+
+            # stimulus metadata — moved below the files
             html.Div([html.Label("stimulus type", style=_LBL),
                       dcc.Dropdown(id="stim-type", style={"width": "100%"},
                                    options=[{"label": "sq wave", "value": "flicker"},
@@ -495,24 +561,6 @@ app.layout = html.Div(
             ], style={"display": "flex", "flexWrap": "wrap", "gap": "4px"}),
             html.Div(id="store-msg", style={"fontSize": "11px", "color": "#070",
                                             "marginTop": "6px"}),
-        ]),
-
-        # ---- compartment: files ----
-        card("Files", [
-            html.Div([html.Button("📁 File…", id="browse-file", n_clicks=0),
-                      html.Button("📂 Folder…", id="browse-folder", n_clicks=0,
-                                  style={"marginLeft": "6px"})], style={"marginBottom": "6px"}),
-            html.Div(dcc.Checklist(id="file", options=file_options(_files),
-                                   value=[_files[0]] if _files else [],
-                                   labelStyle={"display": "block", "fontSize": "11px",
-                                               "whiteSpace": "nowrap", "overflow": "hidden",
-                                               "textOverflow": "ellipsis"},
-                                   inputStyle={"marginRight": "4px"}),
-                     style={"maxHeight": "150px", "overflowY": "auto",
-                            "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
-            html.Div(id="meta", style={"fontSize": "10px", "color": "#333", "lineHeight": "1.45",
-                                       "background": "#f6f6f6", "padding": "6px",
-                                       "borderRadius": "4px", "marginTop": "6px"}),
         ]),
 
         # ---- compartment: channels & spike detection ----
@@ -650,7 +698,8 @@ app.layout = html.Div(
                             "background": "#23232c", "borderRadius": "6px", "padding": "10px"},
                      children=[
                 html.Div(id="exp-cards",
-                         style={"display": "flex", "flexWrap": "wrap", "gap": "10px"}),
+                         style={"display": "flex", "flexWrap": "wrap", "gap": "18px",
+                                "alignItems": "flex-start"}),
                 dcc.Checklist(id="exp-files", options=[], value=[],
                               labelStyle={"display": "inline-block", "verticalAlign": "top",
                                           "background": "white", "borderRadius": "5px",
@@ -664,34 +713,6 @@ app.layout = html.Div(
         ]),
     ], style={"display": "none"}),
 ])
-
-
-# ---- native dialogs -> file checklist --------------------------------------
-@app.callback(Output("file", "options"), Output("file", "value"), Output("last-folder", "data"),
-              Input("browse-file", "n_clicks"), Input("browse-folder", "n_clicks"),
-              State("file", "options"), prevent_initial_call=True)
-def browse(_bf, _bfo, cur_opts):
-    global _last_dir
-    trig = ctx.triggered_id
-    if trig == "browse-file":
-        path = native_choose_file()
-        if not path:
-            return no_update, no_update, no_update
-        _last_dir = os.path.dirname(path) or _last_dir
-        opts = list(cur_opts or [])
-        if path not in [o["value"] for o in opts]:
-            opts = file_options([path]) + opts
-        return opts, [path], no_update
-    if trig == "browse-folder":
-        folder = native_choose_folder()
-        if not folder:
-            return no_update, no_update, no_update
-        files = discover_abf(folder)
-        if not files:
-            return no_update, no_update, no_update
-        _last_dir = folder
-        return file_options(files), [files[0]], folder
-    return no_update, no_update, no_update
 
 
 # ---- restore the remembered data folder on page load (once) ----------------
@@ -715,16 +736,25 @@ def restore_folder(_n, last_folder):
               Output("region-start", "value"), Output("region-end", "value"),
               Input("file", "value"), prevent_initial_call=False)
 def load_meta(files):
-    files = files or []
+    files = [f for f in (files or []) if f]
     if not files:
         return [], None, [], None, "No file selected.", None, None
-    try:
-        rec = get_recording(files[0])
-    except Exception as e:
-        return [], None, [], None, f"Failed to load: {e}", None, None
+    rec, used, err = None, None, None
+    for f in files:                                  # first file that opens as a real recording
+        try:
+            r = get_recording(f)
+            if np.isfinite(r.fs) and r.fs > 0:
+                rec, used = r, f
+                break
+        except Exception as e:
+            err = e
+    if rec is None:
+        msg = ("Selected file(s) aren't openable time-series recordings"
+               + (f" — {err}" if err else "") + ".")
+        return [], None, [], None, msg, None, None
     opts = [{"label": n, "value": n} for n in rec.channel_names]
     ttl_default = next((n for n in rec.channel_names if "ttl" in n.lower()), rec.channel_names[-1])
-    fl = get_flicker(files[0], ttl_default)
+    fl = get_flicker(used, ttl_default)
     rstart = round(fl.t0, 2) if fl else 0.0
     rend = round(fl.t1, 2) if fl else round(rec.duration, 2)
     md = rec.metadata()
@@ -732,7 +762,8 @@ def load_meta(files):
                           ["file", "protocol", "sample rate", "duration", "channels",
                            "recorded", "creator"] if k in md)
     n = len(files)
-    txt = f"{n} file{'s' if n != 1 else ''} selected (region auto-filled from file 1)   ·   {fields}"
+    txt = (f"{n} file{'s' if n != 1 else ''} selected (region from {os.path.basename(used)})"
+           f"   ·   {fields}")
     return opts, rec.channel_names[0], opts, ttl_default, txt, rstart, rend
 
 
@@ -750,6 +781,11 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
+    files = [f for f in files if loadable(f)]          # drop stimulus/header CSVs that won't open
+    if not files:
+        return (blank_fig("Selected file(s) aren't time-series recordings"),
+                blank_fig(""), blank_fig(""),
+                "Selected file(s) aren't openable time-series recordings.")
     if not chan:
         return no_update, no_update, no_update, no_update
 
@@ -998,21 +1034,38 @@ def clear_absmap(_v):
               Output("sel-cell", "data"), Output("stim-type", "value"),
               Output("stim-params", "value"),
               Input("cell-select", "value"), prevent_initial_call=True)
-def pick_cell(val):
-    if not val:
-        return no_update, no_update, None, None, None
-    date, cell = val.split("|")
-    cm = DataStore().cell(date, cell)
-    files = cell_data_files(cm)
-    opts = [{"label": " " + os.path.basename(p), "value": p} for p in files]
+def pick_cell(vals):
+    vals = vals if isinstance(vals, list) else ([vals] if vals else [])
+    if not vals:
+        return no_update, no_update, [], None, None
+    ds = DataStore()
+    opts, checked, sel_list, seen = [], [], [], set()
     stype, sparams = None, None
-    for r in cm.data.get("recordings", []):          # prefill from the first stimulus found
-        if r.get("stimulus"):
-            stype = r["stimulus"].get("type")
-            sparams = ", ".join(f"{k}={v}" for k, v in (r["stimulus"].get("params") or {}).items()
-                                if v is not None)
-            break
-    return opts, files, {"date": date, "cell": cell}, stype, sparams
+    for v in vals:
+        date, cell = v.split("|")
+        sel_list.append({"date": date, "cell": cell})
+        cm = ds.cell(date, cell)
+        files, default = cell_default_files(cm)      # default = openable / spike files only
+        for p in files:
+            if p not in seen:
+                seen.add(p)
+                opts.append({"label": " " + os.path.basename(p), "value": p})
+        checked += default
+        if stype is None:                            # prefill from the first stimulus found
+            for r in cm.data.get("recordings", []):
+                if r.get("stimulus"):
+                    stype = r["stimulus"].get("type")
+                    sparams = ", ".join(f"{k}={v}" for k, v in
+                                        (r["stimulus"].get("params") or {}).items() if v is not None)
+                    break
+    return opts, checked, sel_list, stype, sparams
+
+
+# ---- re-sort the cell(s) dropdown ------------------------------------------
+@app.callback(Output("cell-select", "options", allow_duplicate=True),
+              Input("cell-sort", "value"), prevent_initial_call=True)
+def sort_cells(sort):
+    return store_cell_options(sort or "date_desc")
 
 
 # ---- save stimulus metadata to the cell's data recordings --------------------
@@ -1020,16 +1073,21 @@ def pick_cell(val):
               State("sel-cell", "data"), State("stim-type", "value"),
               State("stim-params", "value"), prevent_initial_call=True)
 def save_meta(_n, sel, stype, sparams):
-    if not sel or not stype:
+    sels = sel if isinstance(sel, list) else ([sel] if sel else [])
+    if not sels or not stype:
         return "pick a cell and a stimulus type first"
-    cm = DataStore().cell(sel["date"], sel["cell"])
+    ds = DataStore()
     params = parse_params(sparams)
-    n = 0
-    for r in cm.data.get("recordings", []):
-        if r.get("kind", "recording") == "recording" and str(r.get("file", "")).endswith((".abf", ".csv")):
-            cm.set_stimulus(r["id"], stype, params, source="user"); n += 1
-    cm.save(); DataStore().update_index()
-    return f"saved stimulus '{stype}' {params} to {n} recordings in {sel['date']}/{sel['cell']}"
+    total, cells = 0, []
+    for s in sels:
+        cm = ds.cell(s["date"], s["cell"])
+        n = 0
+        for r in cm.data.get("recordings", []):
+            if r.get("kind", "recording") == "recording" and str(r.get("file", "")).endswith((".abf", ".csv")):
+                cm.set_stimulus(r["id"], stype, params, source="user"); n += 1
+        cm.save(); total += n; cells.append(f"{s['date']}/{s['cell']}")
+    ds.update_index()
+    return f"saved stimulus '{stype}' {params} to {total} recordings in " + ", ".join(cells)
 
 
 # ---- run the flicker analysis on the selected cell ---------------------------
@@ -1038,18 +1096,21 @@ def save_meta(_n, sel, stype, sparams):
               Input("run-cell", "n_clicks"), State("sel-cell", "data"),
               prevent_initial_call=True)
 def run_cell(_n, sel):
-    if not sel:
+    sels = sel if isinstance(sel, list) else ([sel] if sel else [])
+    if not sels:
         return "pick a cell first", no_update
-    try:
-        res = run_cell_flicker(DataStore(), sel["date"], sel["cell"], n_shuffle=500)
-        p = res.tables["pooled_onoff"][0]
-        return (f"ran sq wave on {sel['date']}/{sel['cell']}: {p['n_trials']} trials, "
-                f"{p['flicker_hz']:.1f} Hz, verdict '{p['verdict']}' — "
-                f"outputs saved (png/pdf/svg + csv + json); see the gallery above"), _n
-    except SystemExit as e:
-        return str(e), no_update
-    except Exception as e:
-        return f"error: {e}", no_update
+    ds, msgs = DataStore(), []
+    for s in sels:
+        tag = f"{s['date']}/{s['cell']}"
+        try:
+            res = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=500)
+            p = res.tables["pooled_onoff"][0]
+            msgs.append(f"{tag}: {p['n_trials']} trials, {p['flicker_hz']:.1f} Hz, '{p['verdict']}'")
+        except SystemExit as e:
+            msgs.append(f"{tag}: {e}")
+        except Exception as e:
+            msgs.append(f"{tag}: error {e}")
+    return "ran sq wave → " + "  |  ".join(msgs) + "  (outputs saved; see gallery)", (_n or 1)
 
 
 # ---- output-image gallery for the selected cell + full-screen pop-out --------
@@ -1057,14 +1118,22 @@ def run_cell(_n, sel):
               Input("cell-select", "value"), Input("gallery-trigger", "data"),
               prevent_initial_call=False)
 def build_gallery(cell_val, _trig):
-    if not cell_val:
+    vals = cell_val if isinstance(cell_val, list) else ([cell_val] if cell_val else [])
+    if not vals:
         return [html.Span("pick a cell to see its output images",
                           style={"color": "#888", "fontSize": "12px"})]
-    try:
-        date, cell = cell_val.split("|")
-        return output_gallery(date, cell)
-    except Exception as e:
-        return [html.Span(f"(no outputs: {e})", style={"color": "#888", "fontSize": "12px"})]
+    thumbs = []
+    for v in vals:
+        try:
+            date, cell = v.split("|")
+            imgs = output_gallery(date, cell)
+            if len(vals) > 1:                        # label each cell's group when several picked
+                thumbs.append(html.Div(f"{date}/{cell}", style={"width": "100%", "fontSize": "11px",
+                                                                "fontWeight": "bold", "color": "#555"}))
+            thumbs += imgs
+        except Exception as e:
+            thumbs.append(html.Span(f"(no outputs: {e})", style={"color": "#888", "fontSize": "12px"}))
+    return thumbs
 
 
 @app.callback(Output("output-modal", "style"), Output("modal-img", "src"),

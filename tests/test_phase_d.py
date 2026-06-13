@@ -21,10 +21,12 @@ def test_pick_cell_and_save_meta(tmp_path, monkeypatch):
     labels = [o["label"] for o in viewer.store_cell_options()]
     assert any("testcell" in s for s in labels)
 
-    # pick_cell loads the cell's files
+    # pick_cell (now multi-cell) lists the cell's files and returns sel as a list.
+    # A single "date|cell" string is accepted and wrapped.
     opts, files, sel, stype, sparams = viewer.pick_cell("2026-06-02|c01")
-    assert len(files) == 1
-    assert sel == {"date": "2026-06-02", "cell": "c01"}
+    assert len(opts) == 1                                 # the cell's one recording is listed
+    assert isinstance(files, list)                        # checked = openable files only
+    assert sel == [{"date": "2026-06-02", "cell": "c01"}]
     assert stype is None                                  # no stimulus yet
 
     # save_meta writes stimulus into the manifest (the GUI metadata-query flow)
