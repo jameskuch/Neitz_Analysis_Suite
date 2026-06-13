@@ -412,13 +412,18 @@ def big_waveform_datauri(path):
     return uri
 
 
-def _latest_output_datauri(cm):
+def _latest_output_path(cm):
     outdir = cm.dir / "outputs"
     if outdir.exists():
         pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
         if pngs:
-            return _img_datauri(str(pngs[0]))
+            return str(pngs[0])
     return None
+
+
+def _latest_output_datauri(cm):
+    p = _latest_output_path(cm)
+    return _img_datauri(p) if p else None
 
 
 _THUMB_IMG = {"height": "62px", "border": "1px solid #ccc", "background": "white",
@@ -529,9 +534,12 @@ def explorer_day_cards(date):
         imgs = []
         if spark:                                    # waveform on top
             imgs.append(html.Img(src=spark, className="gprev",
+                                 **({"data-ps": "wave|" + files[0]} if files else {}),
                                  style=dict(_full, border="1px solid #ccc", marginBottom="4px")))
         if out:                                      # processed output beneath, sized to the card
-            imgs.append(html.Img(src=out, className="gprev", style=dict(_full, border="1px solid #ddd")))
+            imgs.append(html.Img(src=out, className="gprev",
+                                 **({"data-ps": "img|" + _latest_output_path(cm)} if _latest_output_path(cm) else {}),
+                                 style=dict(_full, border="1px solid #ddd")))
         if not imgs:
             imgs.append(html.Div("no preview", style={"color": "#999", "fontSize": "11px",
                                                       "height": "62px"}))
@@ -564,7 +572,8 @@ def explorer_file_options(date, cell):
         spark = sparkline_datauri(p)
         stim = (r.get("stimulus") or {}).get("type")
         thumb = html.Div([
-            html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px")) if spark
+            html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px"),
+                     **{"data-ps": "wave|" + p}) if spark
             else html.Div("—", style={"height": "62px", "color": "#999"}),
             html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all"}),
             html.Div(f"stim: {stim}" if stim else "stim: —",
@@ -580,18 +589,18 @@ def _json_tree(obj, key=None, top=False):
     if isinstance(obj, dict):
         return html.Details(open=top, children=[
             html.Summary(f"{klab}{{{len(obj)} keys}}",
-                         style={"cursor": "pointer", "fontSize": "11px", "color": "#226"}),
+                         style={"cursor": "pointer", "fontSize": "12px", "color": "#226"}),
             html.Div([_json_tree(v, k) for k, v in obj.items()],
                      style={"marginLeft": "12px"})])
     if isinstance(obj, list):
         return html.Details(open=top, children=[
             html.Summary(f"{klab}[{len(obj)} items]",
-                         style={"cursor": "pointer", "fontSize": "11px", "color": "#226"}),
+                         style={"cursor": "pointer", "fontSize": "12px", "color": "#226"}),
             html.Div([_json_tree(v, i) for i, v in enumerate(obj)],
                      style={"marginLeft": "12px"})])
     return html.Div([html.Span(klab, style={"color": "#999"}),
                      html.Span(json.dumps(obj), style={"color": "#063"})],
-                    style={"fontFamily": "monospace", "fontSize": "11px", "marginLeft": "2px"})
+                    style={"fontFamily": "monospace", "fontSize": "12px", "marginLeft": "2px"})
 
 
 def explorer_detail(date, cell):
@@ -609,9 +618,10 @@ def explorer_detail(date, cell):
             continue
         raw_thumbs.append(html.Div([
             html.Img(src=spark, id={"type": "raw-thumb", "src": p}, n_clicks=0, className="gprev",
+                     **{"data-ps": "wave|" + p},
                      style={"width": "150px", "border": "1px solid #ccc", "cursor": "pointer",
                             "background": "white", "display": "block"}),
-            html.Div(os.path.basename(p), style={"fontSize": "9px", "maxWidth": "150px",
+            html.Div(os.path.basename(p), style={"fontSize": "11px", "maxWidth": "150px",
                                                  "overflow": "hidden", "textOverflow": "ellipsis",
                                                  "whiteSpace": "nowrap"}),
         ], style={"margin": "3px"}))
@@ -626,35 +636,36 @@ def explorer_detail(date, cell):
         out_thumbs.append(html.Div([
             html.Img(src=_img_datauri(str(p)), className="gprev",
                      id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
-                     style={"height": "90px", "border": "1px solid #ccc", "cursor": "pointer",
+                     **{"data-ps": "img|" + str(p)},
+                     style={"height": "110px", "border": "1px solid #ccc", "cursor": "pointer",
                             "background": "white", "display": "block"}),
             html.Div([
-                html.Span(str(rel), style={"fontSize": "9px", "flex": "1", "overflow": "hidden",
+                html.Span(str(rel), style={"fontSize": "11px", "flex": "1", "overflow": "hidden",
                                            "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
                 html.Button("🗑", id={"type": "del-output", "src": str(p)}, n_clicks=0,
                             title="delete this figure",
-                            style={"fontSize": "10px", "padding": "0 4px", "color": "#b00",
+                            style={"fontSize": "12px", "padding": "0 4px", "color": "#b00",
                                    "border": "none", "background": "none", "cursor": "pointer"}),
-            ], style={"display": "flex", "alignItems": "center", "maxWidth": "150px"}),
+            ], style={"display": "flex", "alignItems": "center", "maxWidth": "180px"}),
         ], style={"margin": "3px"}))
 
     return [
-        html.Div(f"{date} / {cell}", style={"fontWeight": "bold", "fontSize": "13px",
+        html.Div(f"{date} / {cell}", style={"fontWeight": "bold", "fontSize": "15px",
                                             "marginBottom": "4px"}),
         html.Div("raw recordings (click to enlarge)",
-                 style={"fontWeight": "bold", "fontSize": "11px", "color": "#555"}),
-        html.Div(raw_thumbs or [html.Span("none", style={"color": "#999", "fontSize": "11px"})],
+                 style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
+        html.Div(raw_thumbs or [html.Span("none", style={"color": "#999", "fontSize": "13px"})],
                  style={"display": "flex", "flexWrap": "wrap", "marginBottom": "6px"}),
-        html.Div("manifest.json", style={"fontWeight": "bold", "fontSize": "11px",
+        html.Div("manifest.json", style={"fontWeight": "bold", "fontSize": "13px",
                                          "color": "#555", "marginTop": "6px"}),
         html.Div(_json_tree(cm.data, top=True),
                  style={"maxHeight": "32vh", "overflowY": "auto", "border": "1px solid #eee",
                         "padding": "6px", "background": "#fbfbfb"}),
         html.Div("output figures (click to enlarge · 🗑 to delete)",
-                 style={"fontWeight": "bold", "fontSize": "11px", "color": "#555",
+                 style={"fontWeight": "bold", "fontSize": "13px", "color": "#555",
                         "marginTop": "8px"}),
         html.Div(out_thumbs or [html.Span("none yet", style={"color": "#999",
-                                                             "fontSize": "11px"})],
+                                                             "fontSize": "13px"})],
                  style={"display": "flex", "flexWrap": "wrap"}),
     ]
 
@@ -944,6 +955,8 @@ app.layout = html.Div(
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
     dcc.Interval(id="once", interval=300, max_intervals=1),
     dcc.Store(id="kb-dummy"),                             # clientside keydown wiring sink
+    dcc.Input(id="hover-sink", type="text", value="",     # clientside writes the hovered "kind|path"
+              style={"display": "none"}),
     # ---- full-screen pop-out for an output image ----
     html.Div(id="output-modal", style={"display": "none"}, children=[
         # backdrop fills the screen BEHIND the image; clicking it (off the image) closes
@@ -982,7 +995,7 @@ app.layout = html.Div(
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"},
                  children=[
             # left rail: a sortable + searchable 4-column table of dates
-            html.Div(style={"flex": "0 0 330px", "minHeight": 0, "display": "flex",
+            html.Div(style={"flex": "0 0 380px", "minHeight": 0, "display": "flex",
                             "flexDirection": "column", "background": "#15151d",
                             "border": "1px solid #2a2a35", "borderRadius": "6px",
                             "overflow": "hidden"}, children=[
@@ -1031,7 +1044,7 @@ app.layout = html.Div(
                 html.Div(id="exp-prev",
                          style={"flex": "1 1 0", "minHeight": 0, "overflow": "hidden",
                                 "background": "white", "borderRadius": "6px", "padding": "6px",
-                                "display": "flex", "alignItems": "center",
+                                "display": "flex", "alignItems": "center", "position": "relative",
                                 "justifyContent": "center", "textAlign": "center"},
                          children=[
                     html.Img(id="exp-prev-img", style={"width": "100%", "height": "100%",
@@ -1040,9 +1053,9 @@ app.layout = html.Div(
                               style={"color": "#999", "fontSize": "12px"}),
                 ]),
             ]),
-            # right: detail, full window height
+            # right: detail, full window height (larger base font)
             html.Div(id="exp-detail",
-                     style={"flex": "0 0 30%", "minHeight": 0, "overflowY": "auto",
+                     style={"flex": "0 0 30%", "minHeight": 0, "overflowY": "auto", "fontSize": "13px",
                             "background": "white", "borderRadius": "6px", "padding": "10px"}),
         ]),
     ], style={"display": "none"}),
@@ -1593,14 +1606,19 @@ app.clientside_callback(
                     }
                 }
             });
-            // hover any graph thumbnail (.gprev) -> show it in the explorer preview pane
+            // hover any graph thumbnail (.gprev) -> ask the server to render the real
+            // (labelled) plot into the preview pane, by writing its "kind|path" to a hidden input
             document.addEventListener('mouseover', function(e) {
                 var t = e.target;
                 if (t && t.tagName === 'IMG' && t.classList && t.classList.contains('gprev')) {
-                    var pv = document.getElementById('exp-prev-img');
-                    var hint = document.getElementById('exp-prev-hint');
-                    if (pv) { pv.src = t.src; pv.style.display = 'block'; }
-                    if (hint) { hint.style.display = 'none'; }
+                    var ps = t.getAttribute('data-ps');
+                    var inp = document.getElementById('hover-sink');
+                    if (ps && inp && inp.value !== ps) {
+                        var setter = Object.getOwnPropertyDescriptor(
+                            window.HTMLInputElement.prototype, 'value').set;
+                        setter.call(inp, ps);
+                        inp.dispatchEvent(new Event('input', {bubbles: true}));
+                    }
                 }
             });
             // leaving the open cell(s) dropdown closes it (blur the react-select input)
@@ -1706,6 +1724,27 @@ def set_rail_sort(_clicks, cur):
 def rebuild_rail(sort, ql, qd, qc, active, _rev):
     return explorer_dates_body(active=active, sort=sort,
                                search={"label": ql, "date": qd, "cells": qc})
+
+
+# ---- hover preview: render the REAL (labelled) plot for the hovered thumbnail -----
+@app.callback(Output("exp-prev", "children", allow_duplicate=True),
+              Input("hover-sink", "value"), prevent_initial_call=True)
+def render_hover(ps):
+    if not ps or "|" not in ps:
+        return no_update
+    kind, path = ps.split("|", 1)
+    if kind == "wave":
+        uri = big_waveform_datauri(path) if loadable(path) else None
+    else:
+        uri = _img_datauri(path) if os.path.exists(path) else None
+    if not uri:
+        return no_update
+    return [html.Img(src=uri, style={"width": "100%", "height": "100%", "objectFit": "contain"}),
+            html.Div(os.path.basename(path),
+                     style={"position": "absolute", "bottom": "3px", "left": "8px",
+                            "fontSize": "12px", "color": "#333", "fontWeight": "bold",
+                            "background": "rgba(255,255,255,0.75)", "padding": "0 4px",
+                            "borderRadius": "3px"})]
 
 
 @app.callback(Output("file", "options", allow_duplicate=True),
