@@ -30,7 +30,6 @@ import platform
 import subprocess
 from pathlib import Path
 import numpy as np
-from scipy.signal import welch
 import matplotlib
 matplotlib.use("Agg")                       # headless: render sparkline thumbnails to PNG bytes
 from matplotlib.figure import Figure
@@ -170,14 +169,22 @@ def binned_rate(times, t0, t1, bin_rate=BIN_RATE):
     return cnt.astype(float) * bin_rate
 
 
-def psd(rate, bin_rate=BIN_RATE):
-    """Welch power spectral density of a binned-rate signal, clipped to FMAX."""
+def power_w(rate, bin_rate=BIN_RATE):
+    """Single-sided FFT power per frequency bin, in watts (R = 1 Ω):
+
+        W = 2 * |X[k]|^2 / N^2
+
+    X[k] = rfft of the mean-removed binned-rate signal, N = number of samples.
+    Clipped to FMAX.
+    """
     r = np.asarray(rate, dtype=float)
     r = r - r.mean()
-    nperseg = int(min(len(r), 256))
-    f, pxx = welch(r, fs=bin_rate, nperseg=max(8, nperseg), detrend="constant")
+    n = len(r)
+    x = np.fft.rfft(r)
+    p = 2.0 * np.abs(x) ** 2 / (n ** 2)
+    f = np.fft.rfftfreq(n, d=1.0 / bin_rate)
     keep = f <= FMAX
-    return f[keep], pxx[keep]
+    return f[keep], p[keep]
 
 
 def blank_fig(msg=""):
@@ -555,28 +562,31 @@ app.layout = html.Div(
                             style={"flex": "1", "fontWeight": "bold", "marginLeft": "4px"}),
             ], style={"display": "flex", "marginBottom": "8px"}),
 
-            html.Div([html.Label("cell(s)", style=_LBL),
-                      dcc.Dropdown(id="cell-select", options=store_cell_options(), multi=True,
-                                   placeholder="pick date(s) / cell(s)…", style={"width": "100%"})],
-                     style=_FIELD),
-            html.Div([html.Label("sort cells by", style=_LBL),
-                      dcc.Dropdown(id="cell-sort", clearable=False, value="date_desc",
-                                   style={"width": "100%"},
-                                   options=[{"label": "date (newest first)", "value": "date_desc"},
-                                            {"label": "date (oldest first)", "value": "date_asc"},
-                                            {"label": "label (A→Z)", "value": "label"},
-                                            {"label": "cell type", "value": "type"}])],
-                     style=_FIELD),
+            # cell(s) label + inline sort control on the same row (sort = dropdown order)
+            html.Div([
+                html.Label("cell(s)", style=dict(_LBL, marginBottom=0)),
+                dcc.RadioItems(id="cell-sort", value="date_desc", inline=True,
+                               options=[{"label": "↓date", "value": "date_desc"},
+                                        {"label": "↑date", "value": "date_asc"},
+                                        {"label": "label", "value": "label"},
+                                        {"label": "type", "value": "type"}],
+                               labelStyle={"fontSize": "10px", "marginLeft": "5px"},
+                               inputStyle={"marginRight": "2px"}, **PERSIST),
+            ], style={"display": "flex", "alignItems": "baseline",
+                      "justifyContent": "space-between"}),
+            dcc.Dropdown(id="cell-select", options=store_cell_options(), multi=True,
+                         placeholder="pick date(s) / cell(s)…",
+                         style={"width": "100%", "marginBottom": "6px"}),
 
-            # files for the selected cell(s) — directly under the dropdown
+            # files for the selected cell(s) — multi-column listbox (saves height)
             html.Label("files", style=_LBL),
             html.Div(dcc.Checklist(id="file", options=file_options(_files),
                                    value=[_files[0]] if _files else [],
                                    labelStyle={"display": "block", "fontSize": "11px",
                                                "whiteSpace": "nowrap", "overflow": "hidden",
-                                               "textOverflow": "ellipsis"},
+                                               "textOverflow": "ellipsis", "breakInside": "avoid"},
                                    inputStyle={"marginRight": "4px"}),
-                     style={"maxHeight": "150px", "overflowY": "auto",
+                     style={"maxHeight": "150px", "overflowY": "auto", "columnWidth": "110px",
                             "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
             html.Div(id="meta", style={"fontSize": "10px", "color": "#333", "lineHeight": "1.45",
                                        "background": "#f6f6f6", "padding": "6px",
@@ -1015,8 +1025,8 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         rate = binned_rate(in_reg - rs, 0.0, re_ - rs)
         if rate is not None:
             per_file_rates.append(rate)
-            f, pxx = psd(rate)
-            fft_fig.add_trace(go.Scatter(x=f, y=pxx, mode="lines", legendgroup=name,
+            f, pw = power_w(rate)
+            fft_fig.add_trace(go.Scatter(x=f, y=pw, mode="lines", legendgroup=name,
                                          line=dict(width=(1 if multi else 2), color=color),
                                          opacity=(0.45 if multi else 1.0), name=name))
         thr_txt = (f", thr {det_i['abs_threshold']:.1f}"
@@ -1039,11 +1049,11 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision="keep",
                            legend=dict(orientation="h", y=1.12), showlegend=multi)
 
-    # PSD: group average + stim marker
+    # power spectrum: group average + stim marker
     if multi and len(per_file_rates) >= 2:
         n = min(len(r) for r in per_file_rates)
-        f, pxx = psd(np.mean([r[:n] for r in per_file_rates], axis=0))
-        fft_fig.add_trace(go.Scatter(x=f, y=pxx, mode="lines",
+        f, pw = power_w(np.mean([r[:n] for r in per_file_rates], axis=0))
+        fft_fig.add_trace(go.Scatter(x=f, y=pw, mode="lines",
                                      line=dict(width=3, color="black"), name="GROUP AVG"))
     sfreqs = [s for s in stim_freqs if s]
     if sfreqs:
@@ -1053,9 +1063,9 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                           annotation_position="bottom right",
                           annotation=dict(font=dict(size=10, color="#c60")))
     fft_fig.update_layout(
-        title=dict(text="spike-train PSD (Welch, inside region)", x=0.5, xanchor="center",
-                   y=0.97, yanchor="top", font=dict(size=12)),
-        xaxis_title="frequency (Hz)", yaxis_title="power (spikes²/Hz)",
+        title=dict(text="spike-train power  2|X[k]|²/N²  (inside region)", x=0.5,
+                   xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
+        xaxis_title="frequency (Hz)", yaxis_title="power (W, R=1Ω)",
         xaxis_range=[0, FMAX], margin=dict(l=55, r=15, t=34, b=40),
         legend=dict(x=0.99, y=0.97, xanchor="right", yanchor="top", font=dict(size=9),
                     bgcolor="rgba(255,255,255,0.65)", bordercolor="#ccc", borderwidth=1),
@@ -1076,7 +1086,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         isi_fig = blank_fig("no spikes in region for ISI")
 
     view = ("spike-train" if spike_train else "analog")
-    mode = (f"GROUP of {len(files)} (avg→PSD; {view} view"
+    mode = (f"GROUP of {len(files)} (avg→power; {view} view"
             + ("; spikes shown" if (show_spikes and not spike_train) else "")
             + "; frame syncs overlaid)" if multi else f"single-file inspect ({view})")
     readout = f"[{mode}]  region {rs:.2f}-{re_:.2f}s  |  " + "  |  ".join(readbits)
