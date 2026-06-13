@@ -718,13 +718,17 @@ app.layout = html.Div(
                     "height": "100%", "overflowY": "auto", "paddingRight": "6px",
                     "boxSizing": "border-box"}, children=[
 
-        html.Div("Neitz ABF Viewer", style={"fontWeight": "bold", "fontSize": "15px",
-                                            "marginBottom": "8px"}),
+        # upper-left nav: click to jump to the Data Explorer
+        html.Div([
+            html.Div("Data Explorer ↱", id="open-explorer", n_clicks=0,
+                     title="open the Data Explorer",
+                     style={"fontWeight": "bold", "fontSize": "15px", "cursor": "pointer",
+                            "color": "#3367d6"}),
+            html.Div("Neitz ABF Viewer", style={"fontSize": "10px", "color": "#888"}),
+        ], style={"marginBottom": "8px"}),
 
         # ---- compartment: data store (cell select + files + stimulus) ----
         card("Data store", [
-            html.Button("📂 Data explorer…", id="open-explorer", n_clicks=0,
-                        style={"width": "100%", "fontWeight": "bold", "marginBottom": "8px"}),
 
             # cell(s) label + inline sort control on the same row (sort = dropdown order)
             html.Div([
@@ -878,16 +882,23 @@ app.layout = html.Div(
                                                 "flexDirection": "row-reverse"},
                                     inputStyle={"marginLeft": "3px"}, **PERSIST)],
                      id="end-box", style=_END_OV),
-            # bottom-LEFT, same level as "stagger frame sync %" (bottom-right). "show detected
-            # spikes" defaults ON; "show binned spikes" toggles the binned spike-train view.
-            dcc.Checklist(id="disp-lr",
-                          options=[{"label": " show detected spikes", "value": "show_spikes"},
-                                   {"label": " show binned spikes", "value": "spike_train"}],
-                          value=["show_spikes"], inline=True,
-                          labelStyle={"fontSize": "10px", "marginRight": "8px",
-                                      "display": "inline-flex", "alignItems": "center"},
-                          inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="26px", left="6px", height="20px")),
+            # bottom-LEFT, same level as "stagger frame sync %". "show detected spikes" (default
+            # ON) HIDES when "show binned spikes" is checked, and keeps its value for when it
+            # reappears.
+            html.Div([
+                dcc.Checklist(id="disp-show",
+                              options=[{"label": " show detected spikes", "value": "show_spikes"}],
+                              value=["show_spikes"], inline=True,
+                              labelStyle={"fontSize": "10px", "marginRight": "8px",
+                                          "display": "inline-flex", "alignItems": "center"},
+                              inputStyle={"marginRight": "3px"}),
+                dcc.Checklist(id="disp-binned",
+                              options=[{"label": " show binned spikes", "value": "spike_train"}],
+                              value=[], inline=True,
+                              labelStyle={"fontSize": "10px", "display": "inline-flex",
+                                          "alignItems": "center"},
+                              inputStyle={"marginRight": "3px"}),
+            ], style=ov(bottom="26px", left="6px", height="20px")),
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -940,20 +951,23 @@ app.layout = html.Div(
 
     # ================= DATA EXPLORER pop-out (dates → cells → files + JSON) =====
     html.Div(id="explorer-modal", children=[
-        # header bar
+        # header bar — left nav back to Analysis, Import centered, Open selected at right
         html.Div(style={"display": "flex", "alignItems": "center", "gap": "12px",
-                        "color": "white", "marginBottom": "8px", "flex": "0 0 auto"}, children=[
-            html.Span("📂 Data Explorer", style={"fontWeight": "bold", "fontSize": "16px"}),
-            html.Button("📥 Import data…", id="import-data", n_clicks=0,
-                        style={"fontWeight": "bold"}),
+                        "color": "white", "marginBottom": "8px", "flex": "0 0 auto",
+                        "position": "relative"}, children=[
+            html.Div("↰ Analysis", id="exp-close", n_clicks=0, title="back to the analysis view",
+                     style={"fontWeight": "bold", "fontSize": "16px", "cursor": "pointer",
+                            "color": "#9fc0ff"}),
             html.Button("←  back to day", id="exp-back", n_clicks=0,
                         style={"display": "none", "fontSize": "12px"}),
             html.Span(id="exp-breadcrumb", style={"fontSize": "13px"}),
             html.Span(id="exp-msg", style={"fontSize": "12px", "color": "#7fdc7f"}),
             html.Div(style={"flex": "1"}),
+            html.Button("📥 Import data…", id="import-data", n_clicks=0,
+                        style={"fontWeight": "bold", "position": "absolute", "left": "50%",
+                               "transform": "translateX(-50%)"}),
             html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
                         style={"fontWeight": "bold"}),
-            html.Button("✕ close", id="exp-close", n_clicks=0, style={"marginLeft": "6px"}),
         ]),
         # body: left rail (full height) · middle (browser over a hover-preview) · right detail (full height)
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"},
@@ -1099,6 +1113,15 @@ def toggle_region_boxes(mode):
     return _START_OV, _END_FIELDS
 
 
+# ---- "show binned spikes" hides "show detected spikes" (which keeps its value) ----
+@app.callback(Output("disp-show", "style"), Input("disp-binned", "value"),
+              prevent_initial_call=False)
+def toggle_disp_show(binned):
+    if "spike_train" in (binned or []):
+        return {"display": "none"}
+    return {"display": "inline-block"}
+
+
 # ---- render time + fft -----------------------------------------------------
 @app.callback(Output("time", "figure"), Output("fft", "figure"), Output("isi", "figure"),
               Output("readout", "children"),
@@ -1106,11 +1129,12 @@ def toggle_region_boxes(mode):
               Input("polarity", "value"), Input("method", "value"), Input("k", "value"),
               Input("absth", "value"), Input("refr", "value"),
               Input("region-start", "value"), Input("region-end", "value"),
-              Input("disp-lr", "value"), Input("stagger-pct", "value"),
+              Input("disp-show", "value"), Input("disp-binned", "value"),
+              Input("stagger-pct", "value"),
               Input("region-mode", "value"), Input("train-bin", "value"),
               Input("absth-map", "data"), Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
-           disp_lr, stagger_pct, region_mode, train_bin, absth_map, relayout):
+           disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, relayout):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -1127,14 +1151,13 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                refractory_s=(float(refr) / 1000.0) if refr else 0.002)
     amap = absth_map or {}                          # per-trace absolute thresholds
     multi = len(files) > 1
-    opts = disp_lr or []
     try:
         stagger_frac = max(0.0, min(100.0, float(stagger_pct))) / 100.0
     except (TypeError, ValueError):
         stagger_frac = 0.0
     stagger = stagger_frac > 0
-    show_spikes = "show_spikes" in opts    # checkbox: "show detected spikes" (default on)
-    spike_train = "spike_train" in opts    # checkbox: "show binned spikes" (spike-train view)
+    spike_train = "spike_train" in (disp_binned or [])   # "show binned spikes" (spike-train view)
+    show_spikes = "show_spikes" in (disp_show or [])     # "show detected spikes" (default on)
     crop = "crop" in (region_mode or [])   # checkbox: show only the analysis region
     tbin = float(train_bin) if train_bin else 0.0
 
