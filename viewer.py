@@ -25,9 +25,12 @@ import io
 import json
 import glob
 import base64
+import shutil
 import platform
 import subprocess
+from pathlib import Path
 import numpy as np
+from scipy.signal import welch
 import matplotlib
 matplotlib.use("Agg")                       # headless: render sparkline thumbnails to PNG bytes
 from matplotlib.figure import Figure
@@ -49,6 +52,8 @@ DEFAULT_GLOBS = [os.path.join(EPHYS_ROOT, "**", "*.abf"),
                  os.path.join(EPHYS_ROOT, "**", "*.csv")]
 DEFAULT_DIR = EPHYS_ROOT if os.path.isdir(EPHYS_ROOT) else os.getcwd()
 _last_dir = DEFAULT_DIR          # remembered folder; native dialogs open here
+# master password gating destructive deletes in the explorer (override via env)
+ADMIN_PASSWORD = os.environ.get("NEITZ_ADMIN_PASSWORD", "neitz")
 PALETTE = pc.qualitative.Plotly
 BIN_RATE = 200      # Hz — bin spikes to this rate before FFT
 FMAX = 60           # Hz — FFT display limit
@@ -165,12 +170,14 @@ def binned_rate(times, t0, t1, bin_rate=BIN_RATE):
     return cnt.astype(float) * bin_rate
 
 
-def spectrum(rate, bin_rate=BIN_RATE):
-    r = rate - rate.mean()
-    amp = np.abs(np.fft.rfft(r))
-    f = np.fft.rfftfreq(len(r), d=1.0 / bin_rate)
+def psd(rate, bin_rate=BIN_RATE):
+    """Welch power spectral density of a binned-rate signal, clipped to FMAX."""
+    r = np.asarray(rate, dtype=float)
+    r = r - r.mean()
+    nperseg = int(min(len(r), 256))
+    f, pxx = welch(r, fs=bin_rate, nperseg=max(8, nperseg), detrend="constant")
     keep = f <= FMAX
-    return f[keep], amp[keep]
+    return f[keep], pxx[keep]
 
 
 def blank_fig(msg=""):
@@ -476,10 +483,47 @@ def explorer_breadcrumb(date, cell):
     return parts
 
 
+def delete_files(date, cell, paths):
+    """Move the given files to a reversible .trash/ and drop them from the manifest.
+
+    Files are MOVED (not unlinked) into ~/Documents/ephysdataio/.trash/<date>_<cell>/
+    so a delete can be undone by hand. Refuses anything outside the cell's folder.
+    Returns (removed_names, trash_dir).
+    """
+    cm = DataStore().cell(date, cell)
+    cell_dir = cm.dir.resolve()
+    trash = Path(EPHYS_ROOT) / ".trash" / f"{date}_{cell}"
+    trash.mkdir(parents=True, exist_ok=True)
+    removed = []
+    for p in paths:
+        pp = Path(p).resolve()
+        if cell_dir not in pp.parents:               # safety: only inside this cell
+            continue
+        rel = str(pp.relative_to(cell_dir))
+        if pp.exists():
+            dest = trash / pp.name
+            if dest.exists():
+                dest = trash / f"{pp.stem}__dup{pp.suffix}"
+            shutil.move(str(pp), str(dest))
+        cm.data["recordings"] = [r for r in cm.data.get("recordings", [])
+                                 if r.get("file") != rel]
+        for d in (_CACHE, _LOADABLE, _SPARK_CACHE):  # drop any cached copies
+            for key in [kk for kk in d if (kk == p or (isinstance(kk, tuple) and kk and kk[0] == p))]:
+                d.pop(key, None)
+        removed.append(pp.name)
+    cm.save()
+    DataStore().update_index()
+    return removed, trash
+
+
 _EXPLORER_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
                    "width": "100%", "height": "100%", "background": "rgba(18,18,26,0.97)",
                    "zIndex": 2500, "flexDirection": "column", "padding": "10px",
                    "boxSizing": "border-box"}
+
+_DEL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
+              "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.6)",
+              "zIndex": 2800, "alignItems": "center", "justifyContent": "center"}
 
 
 # ============================================================
@@ -565,10 +609,14 @@ app.layout = html.Div(
 
         # ---- compartment: channels & spike detection ----
         card("Channels & spike detection", [
-            html.Div([html.Label("signal channel", style=_LBL),
-                      dcc.Dropdown(id="chan", style={"width": "100%"})], style=_FIELD),
-            html.Div([html.Label("TTL channel", style=_LBL),
-                      dcc.Dropdown(id="ttl", style={"width": "100%"})], style=_FIELD),
+            html.Div([                                   # signal + TTL channel, side by side
+                html.Div([html.Label("signal channel", style=_LBL),
+                          dcc.Dropdown(id="chan", style={"width": "100%"})],
+                         style={"flex": "1", "minWidth": 0}),
+                html.Div([html.Label("TTL channel", style=_LBL),
+                          dcc.Dropdown(id="ttl", style={"width": "100%"})],
+                         style={"flex": "1", "minWidth": 0, "marginLeft": "8px"}),
+            ], style={"display": "flex", "marginBottom": "6px"}),
             html.Div([html.Label("polarity", style=_LBL),
                       dcc.RadioItems(id="polarity",
                                      options=[{"label": p, "value": p} for p in ("neg", "pos", "abs")],
@@ -584,7 +632,7 @@ app.layout = html.Div(
                                  marks={2: "2", 6: "6", 10: "10", 15: "15"},
                                  tooltip={"placement": "bottom"}, **PERSIST)], style=_FIELD),
             html.Div([
-                html.Div([html.Label("abs thresh", style=_LBL),
+                html.Div([html.Label("abs thresh (all)", style=_LBL),
                           dcc.Input(id="absth", type="number", value=20, debounce=True,
                                     style={"width": "85px"}, **PERSIST)]),
                 html.Div([html.Label("refractory (ms)", style=_LBL),
@@ -592,6 +640,12 @@ app.layout = html.Div(
                                     style={"width": "85px"}, **PERSIST)],
                          style={"marginLeft": "10px"}),
             ], style={"display": "flex"}),
+            dcc.Checklist(id="absth-sync",
+                          options=[{"label": " sync — use one abs threshold for all traces",
+                                    "value": "sync"}],
+                          value=["sync"], style={"marginTop": "6px"},
+                          labelStyle={"fontSize": "11px"}, **PERSIST),
+            html.Div(id="absth-editor", style={"display": "none", "marginTop": "4px"}),
             html.Button("🎯 auto abs (per trace)", id="auto-absth", n_clicks=0,
                         style={"marginTop": "6px", "fontSize": "11px", "width": "100%"}),
             html.Div(id="absth-msg", style={"fontSize": "10px", "color": "#666",
@@ -659,6 +713,7 @@ app.layout = html.Div(
     dcc.Store(id="sel-cell"),
     dcc.Store(id="gallery-trigger"),
     dcc.Store(id="absth-map"),                            # {file path: per-trace abs threshold}
+    dcc.Store(id="absth-seed"),                           # {file path: seed value for the editor}
     dcc.Store(id="exp-date"),                             # explorer: selected date
     dcc.Store(id="exp-cell"),                             # explorer: selected cell (within date)
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
@@ -684,7 +739,9 @@ app.layout = html.Div(
             html.Div(style={"flex": "1"}),
             html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
                         style={"fontWeight": "bold"}),
-            html.Button("✕ close", id="exp-close", n_clicks=0),
+            html.Button("🗑 Delete selected…", id="exp-del-open", n_clicks=0,
+                        style={"fontWeight": "bold", "color": "#b00", "marginLeft": "6px"}),
+            html.Button("✕ close", id="exp-close", n_clicks=0, style={"marginLeft": "6px"}),
         ]),
         # body: three panes
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"},
@@ -712,6 +769,37 @@ app.layout = html.Div(
                             "borderRadius": "6px", "padding": "10px"}),
         ]),
     ], style={"display": "none"}),
+
+    # ---- delete confirmation (two-factor: type DELETE + master password) ----
+    dcc.Store(id="del-targets"),
+    html.Div(id="del-modal", style={"display": "none"}, children=[
+        html.Div(style={"background": "white", "borderRadius": "8px", "padding": "18px",
+                        "maxWidth": "560px", "boxShadow": "0 0 40px #000"}, children=[
+            html.Div("⚠️  Delete files from the data store", style={
+                "fontWeight": "bold", "fontSize": "15px", "color": "#b00", "marginBottom": "6px"}),
+            html.Div("Files are moved to a reversible .trash/ folder and removed from the "
+                     "cell's manifest. This affects the managed store (and its mirror on next "
+                     "backup). Confirm carefully.", style={"fontSize": "12px", "color": "#444",
+                                                           "marginBottom": "8px"}),
+            html.Div(id="del-list", style={"fontSize": "12px", "fontFamily": "monospace",
+                                           "maxHeight": "150px", "overflowY": "auto",
+                                           "background": "#f6f6f6", "padding": "8px",
+                                           "borderRadius": "4px", "marginBottom": "10px"}),
+            html.Label("type DELETE to confirm", style=_LBL),
+            dcc.Input(id="del-confirm-text", type="text", placeholder="DELETE",
+                      style={"width": "100%", "boxSizing": "border-box", "marginBottom": "8px"}),
+            html.Label("master password", style=_LBL),
+            dcc.Input(id="del-password", type="password", placeholder="master password",
+                      style={"width": "100%", "boxSizing": "border-box", "marginBottom": "10px"}),
+            html.Div([
+                html.Button("🗑 Confirm delete", id="del-confirm", n_clicks=0,
+                            style={"fontWeight": "bold", "color": "white", "background": "#b00",
+                                   "border": "none", "padding": "6px 12px", "borderRadius": "4px"}),
+                html.Button("Cancel", id="del-cancel", n_clicks=0, style={"marginLeft": "8px"}),
+            ]),
+            html.Div(id="del-msg", style={"fontSize": "12px", "marginTop": "8px"}),
+        ]),
+    ]),
 ])
 
 
@@ -927,8 +1015,8 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         rate = binned_rate(in_reg - rs, 0.0, re_ - rs)
         if rate is not None:
             per_file_rates.append(rate)
-            f, amp = spectrum(rate)
-            fft_fig.add_trace(go.Scatter(x=f, y=amp, mode="lines", legendgroup=name,
+            f, pxx = psd(rate)
+            fft_fig.add_trace(go.Scatter(x=f, y=pxx, mode="lines", legendgroup=name,
                                          line=dict(width=(1 if multi else 2), color=color),
                                          opacity=(0.45 if multi else 1.0), name=name))
         thr_txt = (f", thr {det_i['abs_threshold']:.1f}"
@@ -951,11 +1039,11 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision="keep",
                            legend=dict(orientation="h", y=1.12), showlegend=multi)
 
-    # FFT: group average + stim marker
+    # PSD: group average + stim marker
     if multi and len(per_file_rates) >= 2:
         n = min(len(r) for r in per_file_rates)
-        f, amp = spectrum(np.mean([r[:n] for r in per_file_rates], axis=0))
-        fft_fig.add_trace(go.Scatter(x=f, y=amp, mode="lines",
+        f, pxx = psd(np.mean([r[:n] for r in per_file_rates], axis=0))
+        fft_fig.add_trace(go.Scatter(x=f, y=pxx, mode="lines",
                                      line=dict(width=3, color="black"), name="GROUP AVG"))
     sfreqs = [s for s in stim_freqs if s]
     if sfreqs:
@@ -965,9 +1053,9 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                           annotation_position="bottom right",
                           annotation=dict(font=dict(size=10, color="#c60")))
     fft_fig.update_layout(
-        title=dict(text="spike-train spectrum (inside region)", x=0.5, xanchor="center",
+        title=dict(text="spike-train PSD (Welch, inside region)", x=0.5, xanchor="center",
                    y=0.97, yanchor="top", font=dict(size=12)),
-        xaxis_title="frequency (Hz)", yaxis_title="amplitude",
+        xaxis_title="frequency (Hz)", yaxis_title="power (spikes²/Hz)",
         xaxis_range=[0, FMAX], margin=dict(l=55, r=15, t=34, b=40),
         legend=dict(x=0.99, y=0.97, xanchor="right", yanchor="top", font=dict(size=9),
                     bgcolor="rgba(255,255,255,0.65)", bordercolor="#ccc", borderwidth=1),
@@ -988,44 +1076,84 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         isi_fig = blank_fig("no spikes in region for ISI")
 
     view = ("spike-train" if spike_train else "analog")
-    mode = (f"GROUP of {len(files)} (avg→FFT; {view} view"
+    mode = (f"GROUP of {len(files)} (avg→PSD; {view} view"
             + ("; spikes shown" if (show_spikes and not spike_train) else "")
             + "; frame syncs overlaid)" if multi else f"single-file inspect ({view})")
     readout = f"[{mode}]  region {rs:.2f}-{re_:.2f}s  |  " + "  |  ".join(readbits)
     return time_fig, fft_fig, isi_fig, readout
 
 
-# ---- auto absolute threshold: one value PER TRACE (k·MAD of each file) --------
-@app.callback(Output("absth-map", "data"), Output("absth-msg", "children"),
-              Output("method", "value", allow_duplicate=True),
+# ---- auto absolute threshold: seed one value PER TRACE (k·MAD of each file) ----
+@app.callback(Output("absth-seed", "data"), Output("absth-sync", "value"),
+              Output("method", "value", allow_duplicate=True), Output("absth-msg", "children"),
               Input("auto-absth", "n_clicks"),
               State("file", "value"), State("chan", "value"), State("k", "value"),
-              prevent_initial_call=True)
-def auto_absth(_n, files, chan, k):
-    files = [f for f in (files or []) if f]
+              State("method", "value"), prevent_initial_call=True)
+def auto_absth(_n, files, chan, k, method):
+    files = [f for f in (files or []) if f and loadable(f)]
     if not files or not chan:
-        return no_update, "select file(s) + a signal channel first", no_update
-    amap, bits = {}, []
+        return no_update, no_update, no_update, "select file(s) + a signal channel first"
+    seed, bits = {}, []
     for path in files:
         try:
             y = get_channel(path, chan)
             sigma = float(np.median(np.abs(y - np.median(y))) * 1.4826)   # robust σ
-            thr = round(float(k) * sigma, 2)
-            amap[path] = thr
-            bits.append(f"{os.path.basename(path)}={thr:g}")
+            seed[path] = round(float(k) * sigma, 2)
+            bits.append(f"{os.path.basename(path)}={seed[path]:g}")
         except Exception:
             pass
-    if not amap:
-        return no_update, "could not compute thresholds", no_update
-    return amap, "auto abs (k·MAD per trace) → " + ", ".join(bits), "abs"
+    if not seed:
+        return no_update, no_update, no_update, "could not compute thresholds"
+    # works for both "absolute" and "k·MAD ≥ floor"; only nudge plain k·MAD over to absolute
+    new_method = method if method in ("abs", "mad_floor") else "abs"
+    return seed, [], new_method, "auto abs (k·MAD per trace) → " + ", ".join(bits)
 
 
-# ---- typing a single abs value reverts to ONE uniform threshold for all traces -
-@app.callback(Output("absth-map", "data", allow_duplicate=True),
-              Output("absth-msg", "children", allow_duplicate=True),
-              Input("absth", "value"), prevent_initial_call=True)
-def clear_absmap(_v):
-    return {}, "abs thresh: uniform across all traces"
+# ---- build the per-trace abs-threshold editor (shown when NOT synced) ----------
+@app.callback(Output("absth-editor", "children"), Output("absth-editor", "style"),
+              Input("absth-sync", "value"), Input("file", "value"), Input("absth-seed", "data"),
+              State("absth", "value"), prevent_initial_call=False)
+def build_absth_editor(sync, files, seed, single):
+    if "sync" in (sync or []):
+        return [], {"display": "none"}
+    files = [f for f in (files or []) if f and loadable(f)]
+    seed = seed or {}
+    default = single if single is not None else 20
+    rows = [html.Div("per-trace abs threshold:", style={"fontSize": "10px", "color": "#555",
+                                                        "marginBottom": "2px"})]
+    for p in files:
+        rows.append(html.Div([
+            html.Span(os.path.basename(p), style={"fontSize": "10px", "flex": "1",
+                                                  "overflow": "hidden", "textOverflow": "ellipsis",
+                                                  "whiteSpace": "nowrap"}),
+            dcc.Input(id={"type": "absth-trace", "path": p}, type="number",
+                      value=seed.get(p, default), debounce=True,
+                      style={"width": "70px", "marginLeft": "4px"}),
+        ], style={"display": "flex", "alignItems": "center", "marginBottom": "2px"}))
+    if not files:
+        rows.append(html.Span("select file(s) to set per-trace thresholds",
+                              style={"fontSize": "10px", "color": "#999"}))
+    return rows, {"display": "block", "marginTop": "4px",
+                  "borderLeft": "2px solid #3367d6", "paddingLeft": "6px"}
+
+
+# ---- collect the per-trace inputs into absth-map (render reads this) ------------
+@app.callback(Output("absth-map", "data"),
+              Input({"type": "absth-trace", "path": ALL}, "value"),
+              Input("absth-sync", "value"), Input("file", "value"),
+              prevent_initial_call=True)
+def collect_absth(_vals, sync, _files):
+    if "sync" in (sync or []):
+        return {}                                    # synced → render falls back to the single value
+    amap = {}
+    for item in (ctx.inputs_list[0] or []):          # each: {"id": {...,"path":p}, "value": v}
+        v = item.get("value")
+        if v is not None:
+            try:
+                amap[item["id"]["path"]] = float(v)
+            except (TypeError, ValueError):
+                pass
+    return amap
 
 
 # ---- data store: pick a cell -> load its recordings + prefill stimulus -------
@@ -1217,6 +1345,58 @@ def exp_open_viewer(_n, sel):
     if not sel:
         return no_update, no_update, no_update
     return file_options(sel), sel, {"display": "none"}
+
+
+# ---- delete: open the two-factor confirmation modal ---------------------------
+@app.callback(Output("del-modal", "style"), Output("del-targets", "data"),
+              Output("del-list", "children"), Output("del-msg", "children"),
+              Output("del-confirm-text", "value"), Output("del-password", "value"),
+              Input("exp-del-open", "n_clicks"),
+              State("exp-files", "value"), State("exp-date", "data"), State("exp-cell", "data"),
+              prevent_initial_call=True)
+def open_delete(_n, sel, date, cell):
+    sel = [s for s in (sel or []) if s]
+    if not sel or not date or not cell:
+        return _DEL_SHOWN, no_update, \
+            [html.Span("Select a cell and check one or more files first.",
+                       style={"color": "#b00"})], "", "", ""
+    targets = {"date": date, "cell": cell, "paths": sel}
+    lst = [html.Div(os.path.basename(p)) for p in sel]
+    return _DEL_SHOWN, targets, lst, "", "", ""
+
+
+@app.callback(Output("del-modal", "style", allow_duplicate=True),
+              Input("del-cancel", "n_clicks"), prevent_initial_call=True)
+def cancel_delete(_n):
+    return {"display": "none"}
+
+
+@app.callback(Output("del-msg", "children", allow_duplicate=True),
+              Output("del-modal", "style", allow_duplicate=True),
+              Output("exp-files", "options", allow_duplicate=True),
+              Output("exp-files", "value", allow_duplicate=True),
+              Output("exp-detail", "children", allow_duplicate=True),
+              Output("cell-select", "options", allow_duplicate=True),
+              Input("del-confirm", "n_clicks"),
+              State("del-targets", "data"), State("del-confirm-text", "value"),
+              State("del-password", "value"), prevent_initial_call=True)
+def confirm_delete(_n, targets, text, password):
+    keep = (no_update,) * 4                           # (modal, files-opts, files-val, detail, cells)
+    if not targets or not targets.get("paths"):
+        return "nothing to delete", no_update, *keep
+    if (text or "").strip() != "DELETE":
+        return ("type DELETE exactly to confirm", no_update, *keep)
+    if (password or "") != ADMIN_PASSWORD:
+        return ("✗ wrong master password — nothing deleted", no_update, *keep)
+    try:
+        removed, trash = delete_files(targets["date"], targets["cell"], targets["paths"])
+    except Exception as e:
+        return (f"delete error: {e}", no_update, *keep)
+    date, cell = targets["date"], targets["cell"]
+    msg = html.Span(f"✓ deleted {len(removed)} file(s) → {trash}", style={"color": "#070"})
+    return (msg, {"display": "none"},
+            explorer_file_options(date, cell), [],
+            explorer_detail(date, cell), store_cell_options())
 
 
 # ---- import new experiment data into the store (copies + auto-groups by date) --
