@@ -14,7 +14,7 @@ The same analysis core is reachable three ways: a **GUI**, a **CLI**, and a
 pip install -e .            # core library (numpy, scipy, pyabf, pandas, ...)
 pip install -e ".[gui]"     # + Dash/Plotly for the viewer
 pip install -e ".[dev]"     # + pytest
-pytest                      # run the test suite (35 tests; .abf tests skip if data absent)
+pytest                      # run the test suite (43 tests; .abf tests skip if data absent)
 ```
 
 After `pip install -e .` the **`neitz`** command is on your PATH. (Re-run the install
@@ -186,11 +186,12 @@ time, spikes = ncsv.load_spikes_csv("~/Documents/ephysdataio/2017-01-18/c01/raw/
 spike_times  = ncsv.spike_times_from_matrix(spikes, time)          # per-channel times
 ```
 
-**In the GUI:** click **Browse file…** and pick the `.csv` (the dialog now accepts
-`.abf` *and* `.csv`). Each spike column appears as a channel `ch1, ch2, …`. To mark
-the spikes, set **polarity = pos**, **threshold = absolute**, **abs thresh ≈ 0.5**
-(or use **spike-train view**). The TTL/flicker/region features don't apply to spike
-CSVs (no frame sync), so the analysis region is the full trace.
+**In the GUI:** select the cell **`2017-01-18 / c01`** in the **cell(s)** dropdown (or open
+it in the **Data Explorer**); its spike CSV loads with each spike column as a channel
+`ch1, ch2, …` (Sara's non-time-series stimulus CSVs are auto-filtered out). To mark the
+spikes, set **polarity = pos**, **threshold = absolute**, **abs thresh ≈ 0.5** (or use
+**spike-train view**). The TTL/flicker/region features don't apply to spike CSVs (no frame
+sync), so the analysis region is the full trace.
 
 ---
 
@@ -200,32 +201,38 @@ CSVs (no frame sync), so the analysis region is the full trace.
 python viewer.py            # http://127.0.0.1:8050
 ```
 
-Features:
-- **Native macOS dialogs** — 📁 Browse file… (`.abf` or spike `.csv`), 📂 Browse folder…
-  (repopulates the file list). The data folder + detection settings **persist across
-  sessions**.
-- **Files as a checkbox grid** — check **1** to inspect, **2+** to group-average.
-- **Channels by name**, with an acquisition **metadata** strip (rate, protocol, date…).
+The GUI works off the **data store** — there's no file browser; you pick cells.
+
+- **cell(s)** dropdown — multi-select date/cell(s) (inline date / label / type sort); the
+  cell's recordings populate the **files** list (multi-column checkbox grid: check **1** to
+  inspect, **2+** to group-average). Non-time-series CSVs (e.g. Sara's stimulus files) are
+  filtered out. Detection settings **persist across sessions**.
+- **Stimulus type / params + Save metadata** — record what was shown into the manifest.
+- **▶ Run sq wave** — square-wave (flicker) analysis on the *checked* files; a **run name**
+  keeps variants in `outputs/<name>/`. **⤓ Backup mirror** syncs the store.
+- **📂 Data Explorer** (pop-out) — dates → cell thumbnail cards (waveform + latest output) →
+  files; right pane = manifest **JSON tree** + clickable raw-trace / figure thumbnails + an
+  instant preview of a single checked file (75 / 25 split); **Import data** and per-figure /
+  per-file **delete** (two-factor: type `DELETE` + `$NEITZ_ADMIN_PASSWORD`, default `"neitz"`;
+  files trashed reversibly). Esc / click-off closes pop-outs.
 - **Live spike detection** — polarity (neg/pos/abs), threshold (**k·MAD / absolute /
-  k·MAD ≥ floor**), `k` slider, refractory. Number boxes apply on **Enter / click-away**;
-  radios/checkboxes apply instantly.
-- **Excluded regions** (radio): **show** (shade adapting/post blocks) · **crop** (clip
-  to the analysis region) · **baseline** (flatten excluded regions to each channel's
-  baseline). The **region start/end** boxes auto-fill from the detected flicker and are
-  editable.
-- **Display options**: stagger overlaid frame syncs · hide detected spikes ·
-  **spike-train view** (0/1 impulses, or binned counts via the bin box).
-- **Multi-file group mode**: signals + frame syncs overlaid in matching colors; FFT
-  shows each file's spike-train spectrum + a bold **GROUP-AVG**.
-- **Spike-train FFT** with the detected stimulus frequency marked.
-- **Linked x-axes** (signal + frame sync) with zoom that re-renders at full detail.
+  k·MAD ≥ floor**), `k` slider, refractory; a **sync** toggle (one abs threshold for all) vs a
+  **per-trace** editor, plus **🎯 auto abs** (k·MAD per trace). Number boxes apply on
+  **Enter / click-away**; radios/checkboxes instantly.
+- **Graph overlays** (controls floated on the plots) — region **start / end** + optional
+  **crop**; **hide spikes** / **spike-train view** (0/1 impulses or binned counts via the
+  **bin (ms)** box); **stagger frame sync %** (0 = overlaid, 100 = full).
+- **Graphs** — signal + per-file frame-sync overlaid in matching colors (top), then a
+  spike-train **power** spectrum (`W = 2·|X[k]|²/N²`, stimulus frequency marked, bold
+  **GROUP-AVG** in multi mode) and an **ISI histogram** (bottom). Linked x-axes; zoom
+  re-renders at full detail.
 
 ---
 
 ## 9. Tests
 
 ```bash
-pytest                      # 35 tests
+pytest                      # 43 tests
 pytest tests/test_spikes.py -v
 ```
 

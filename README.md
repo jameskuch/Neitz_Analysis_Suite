@@ -11,14 +11,22 @@ cd /Users/j/Neitz_Analysis_Suite
 python viewer.py            # then open http://127.0.0.1:8050  (Ctrl-C to stop)
 ```
 
-That's the program. In the GUI (top to bottom):
-- **cell (data store)** — pick a `date / cell — label`; it loads that cell's recordings.
-- **stimulus type / params + Save metadata** — record what was shown (esp. for cells
-  with blank metadata).
-- **▶ Run flicker → cell** — runs the analysis; writes PNG/PDF/SVG + CSV + JSON into the cell.
-- **⤓ Backup to mirror** — copy the store to Google Drive (after you set the path, below).
-- Or **📁 Browse file…** to open any `.abf` or spike `.csv` directly; live spike detection,
-  spike-train FFT, region show/crop/baseline, multi-file group averaging.
+That's the program. The GUI is a left sidebar (controls) + right graphs:
+- **cell(s)** — multi-select one or more `date / cell — label`s (with an inline
+  date / label / type sort); the checked **files** load into the graphs. Set
+  **stimulus type / params + Save metadata** to record what was shown.
+- **▶ Run sq wave** — runs the square-wave (flicker) analysis on the *checked* files; a
+  **run name** keeps variants side by side (e.g. excluding a recording); writes PNG/PDF/SVG
+  + CSV + JSON into `<cell>/outputs/<name>/`.
+- **📂 Data explorer** — browse the store by date → cell thumbnails (waveform + latest
+  output) → files; click to enlarge raw traces and figures; **Import data** new recordings;
+  delete files/figures (two-factor: type `DELETE` + master password). **⤓ Backup mirror**
+  copies the store to Google Drive.
+- **Graphs**: signal + per-file frame-sync (adjustable **stagger %**), a spike-train
+  **power** spectrum (`W = 2·|X[k]|²/N²`), and an **ISI histogram**; live spike detection
+  (polarity, k·MAD / absolute / floor, with per-trace thresholds), an editable analysis
+  **region** (start / end, optional **crop**), and a **spike-train** view — all floated as
+  controls on the graphs.
 
 First time only (installs the package, the `neitz` command, and Dash):
 ```bash
@@ -45,7 +53,7 @@ every generated output (paths + params + timestamp).
 ## CLI (`neitz`)
 
 ```bash
-neitz cell 2026-06-02 c01                 # run flicker on a stored cell -> outputs into it
+neitz cell 2026-06-02 c01                 # run the sq-wave (flicker) analysis on a cell -> outputs into it
 neitz flicker "~/Documents/ephysdataio/2026-06-02"   # per-file VS + pooled ON/OFF
 neitz spikes  "~/Documents/ephysdataio/2026-06-02/c01" --out spikes.csv
 neitz noise   ~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-spikes.csv ~/Documents/ephysdataio/2017-01-18/c01/raw/2017_01_18_siso-stdev.csv --out sta   # reverse correlation -> sta.json/.npz

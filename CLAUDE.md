@@ -11,7 +11,7 @@ productive immediately. Keep it current when the architecture changes.
 - **Python**: `/Users/j/miniconda3/bin/python` (conda base — has `pyabf`, `dash`, `plotly`,
   `scipy`, `pandas`, `matplotlib`). Plain `python` may not be it.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (≈47 tests; synthetic tests run
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (≈43 tests; synthetic tests run
   anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -82,9 +82,10 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 - Two-column flex shell: **left sidebar 20%** (collapsible `<details>` cards: Data store,
   Channels & spike detection, Cell outputs) + **right 80%** graphs (signal+frame-sync on top,
   FFT-power | ISI-histogram on the bottom).
-- The region/display controls are **overlays floated onto the graphs** (start/end/region-mode
-  top, stagger%/hide/spike-train bottom, bin inside the ISI), via the `ov()` helper, positioned
-  below the Plotly toolbar.
+- The region/display controls are **overlays floated onto the graphs** (start top-left, end +
+  a `crop` checkbox top-right, hide-spikes/spike-train bottom-right, stagger% just above the
+  frame-sync x-axis, bin inside the ISI), via the `ov()` helper, positioned below the Plotly
+  toolbar. Compact `_OVI` textboxes.
 - **Data Explorer** pop-out (`📂`): dates rail → cell thumbnail cards (waveform + latest output)
   → file checklist (middle) + detail/JSON/preview (right, split 75/25). Import lives here.
   Escape closes the image pop-out first, then the explorer (clientside keydown handler).
@@ -104,7 +105,7 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 
 ## Known stale / TODO
 
-- `README.md` still says "Run flicker → cell" and "region show/crop/baseline" — outdated
-  (now "Run sq wave", and baseline mode was removed). Refresh when convenient.
 - 6 session cells (2025-12 → 2026-02) have blank stimulus metadata pending entry.
 - No CI yet; checkerboard has no on-disk stimulus format / CLI.
+- `RESTRUCTURE_DESIGN.md` is a historical design record (the restructure is done) — keep
+  for provenance, don't treat as current.

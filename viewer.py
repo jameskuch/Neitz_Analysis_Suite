@@ -780,30 +780,28 @@ app.layout = html.Div(
                       dcc.Input(id="region-start", type="number", debounce=True,
                                 style=dict(_OVI, width="60px"))],
                      style=ov(top="34px", left="6px")),
-            # top-right: region end + show/crop (below the graph toolbar)
+            # top-right: region end + crop (below the graph toolbar)
             html.Div([html.Span("end (s)", style=_OVL),
                       dcc.Input(id="region-end", type="number", debounce=True,
                                 style=dict(_OVI, width="60px")),
-                      dcc.RadioItems(id="region-mode",
-                                     options=[{"label": " show", "value": "show"},
-                                              {"label": " crop", "value": "crop"}],
-                                     value="show", inline=True,
-                                     labelStyle={"fontSize": "10px", "marginLeft": "4px"},
-                                     inputStyle={"marginRight": "2px"}, **PERSIST)],
+                      dcc.Checklist(id="region-mode",
+                                    options=[{"label": " crop", "value": "crop"}], value=[],
+                                    inline=True, labelStyle={"fontSize": "10px", "marginLeft": "4px"},
+                                    inputStyle={"marginRight": "2px"}, **PERSIST)],
                      style=ov(top="34px", right="6px")),
-            # bottom-left of the frame-sync: hide spikes + spike-train view
+            # bottom-right of the frame-sync: hide spikes + spike-train view (right-justified)
             dcc.Checklist(id="disp-lr",
                           options=[{"label": " hide spikes", "value": "hide_spikes"},
                                    {"label": " spike-train", "value": "spike_train"}],
                           value=[], inline=True,
                           labelStyle={"fontSize": "10px", "marginRight": "8px"},
                           inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="3px", left="6px"), **PERSIST),
-            # bottom-right of the frame-sync: stagger amount (0 = overlaid, 100 = full)
+                          style=ov(bottom="4px", right="6px"), **PERSIST),
+            # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
                                 debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
-                     style=ov(bottom="3px", right="6px")),
+                     style=ov(bottom="26px", right="8px")),
         ]),
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
@@ -1019,7 +1017,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     stagger = stagger_frac > 0
     hide_spikes = "hide_spikes" in opts
     spike_train = "spike_train" in opts
-    crop = region_mode == "crop"           # show only the analysis region (drop excluded blocks)
+    crop = "crop" in (region_mode or [])   # checkbox: show only the analysis region
     show_spikes = not hide_spikes          # spikes shown by default (single AND multi)
     tbin = float(train_bin) if train_bin else 0.0
 
