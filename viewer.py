@@ -662,12 +662,17 @@ app.layout = html.Div(
             html.Label("files", style=_LBL),
             html.Div(dcc.Checklist(id="file", options=file_options(_files),
                                    value=[_files[0]] if _files else [],
-                                   labelStyle={"display": "block", "fontSize": "11px",
+                                   labelStyle={"display": "block", "width": "150px",
+                                               "boxSizing": "border-box", "fontSize": "11px",
                                                "whiteSpace": "nowrap", "overflow": "hidden",
-                                               "textOverflow": "ellipsis", "breakInside": "avoid"},
+                                               "textOverflow": "ellipsis"},
                                    inputStyle={"marginRight": "4px", "verticalAlign": "middle",
-                                               "position": "relative", "top": "-1px"}),
-                     style={"maxHeight": "150px", "overflowY": "auto", "columnWidth": "110px",
+                                               "position": "relative", "top": "-1px"},
+                                   # flexbox column-wrap: each label is atomic (never split
+                                   # across columns the way CSS multicol did)
+                                   style={"display": "flex", "flexFlow": "column wrap",
+                                          "alignContent": "flex-start", "maxHeight": "150px"}),
+                     style={"maxHeight": "158px", "overflowX": "auto", "overflowY": "hidden",
                             "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
             html.Div(id="meta", style={"fontSize": "10px", "color": "#333", "lineHeight": "1.45",
                                        "background": "#f6f6f6", "padding": "6px",
@@ -792,12 +797,11 @@ app.layout = html.Div(
                           labelStyle={"fontSize": "11px", "marginRight": "8px"},
                           inputStyle={"marginRight": "3px"},
                           style=ov(bottom="2px", left="6px"), **PERSIST),
-            # bottom-right of the frame-sync: stagger frame syncs
-            dcc.Checklist(id="disp-stagger",
-                          options=[{"label": " stagger frame syncs", "value": "stagger"}],
-                          value=[], inline=True, labelStyle={"fontSize": "11px"},
-                          inputStyle={"marginRight": "3px"},
-                          style=ov(bottom="2px", right="6px"), **PERSIST),
+            # bottom-right of the frame-sync: stagger amount (0 = overlaid, 100 = full)
+            html.Div([html.Span("stagger frame sync %", style=_OVL),
+                      dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
+                                debounce=True, style={"width": "55px"}, **PERSIST)],
+                     style=ov(bottom="2px", right="6px")),
         ]),
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
@@ -823,12 +827,18 @@ app.layout = html.Div(
     dcc.Store(id="exp-cell"),                             # explorer: selected cell (within date)
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
     dcc.Interval(id="once", interval=300, max_intervals=1),
+    dcc.Store(id="kb-dummy"),                             # clientside keydown wiring sink
     # ---- full-screen pop-out for an output image ----
     html.Div(id="output-modal", style={"display": "none"}, children=[
+        # backdrop fills the screen BEHIND the image; clicking it (off the image) closes
+        html.Div(id="modal-backdrop", n_clicks=0,
+                 style={"position": "absolute", "top": 0, "left": 0, "width": "100%",
+                        "height": "100%", "zIndex": 0, "cursor": "zoom-out"}),
         html.Button("✕ close", id="modal-close", n_clicks=0,
-                    style={"position": "absolute", "top": "12px", "right": "16px",
+                    style={"position": "absolute", "top": "12px", "right": "16px", "zIndex": 2,
                            "fontSize": "15px", "padding": "4px 10px"}),
-        html.Img(id="modal-img", style={"maxWidth": "94vw", "maxHeight": "92vh",
+        html.Img(id="modal-img", style={"maxWidth": "94vw", "maxHeight": "92vh", "zIndex": 1,
+                                        "position": "relative",
                                         "boxShadow": "0 0 24px #000", "background": "white"}),
     ]),
 
@@ -871,10 +881,18 @@ app.layout = html.Div(
                                           "padding": "5px", "margin": "5px"},
                               inputStyle={"marginRight": "5px", "verticalAlign": "top"}),
             ]),
-            # right: manifest JSON tree + output thumbnails
-            html.Div(id="exp-detail",
-                     style={"flex": "0 0 30%", "overflowY": "auto", "background": "white",
-                            "borderRadius": "6px", "padding": "10px"}),
+            # right: detail (75%) over an instant single-file preview (25%)
+            html.Div(style={"flex": "0 0 30%", "minHeight": 0, "display": "flex",
+                            "flexDirection": "column", "gap": "6px"}, children=[
+                html.Div(id="exp-detail",
+                         style={"flex": "3 1 0", "minHeight": 0, "overflowY": "auto",
+                                "background": "white", "borderRadius": "6px", "padding": "10px"}),
+                html.Div(id="exp-preview",
+                         style={"flex": "1 1 0", "minHeight": 0, "overflow": "hidden",
+                                "background": "white", "borderRadius": "6px", "padding": "6px",
+                                "display": "flex", "alignItems": "center",
+                                "justifyContent": "center", "textAlign": "center"}),
+            ]),
         ]),
     ], style={"display": "none"}),
 
@@ -970,11 +988,11 @@ def load_meta(files):
               Input("polarity", "value"), Input("method", "value"), Input("k", "value"),
               Input("absth", "value"), Input("refr", "value"),
               Input("region-start", "value"), Input("region-end", "value"),
-              Input("disp-lr", "value"), Input("disp-stagger", "value"),
+              Input("disp-lr", "value"), Input("stagger-pct", "value"),
               Input("region-mode", "value"), Input("train-bin", "value"),
               Input("absth-map", "data"), Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
-           disp_lr, disp_stagger, region_mode, train_bin, absth_map, relayout):
+           disp_lr, stagger_pct, region_mode, train_bin, absth_map, relayout):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -991,8 +1009,12 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                refractory_s=(float(refr) / 1000.0) if refr else 0.002)
     amap = absth_map or {}                          # per-trace absolute thresholds
     multi = len(files) > 1
-    opts = (disp_lr or []) + (disp_stagger or [])
-    stagger = "stagger" in opts
+    opts = disp_lr or []
+    try:
+        stagger_frac = max(0.0, min(100.0, float(stagger_pct))) / 100.0
+    except (TypeError, ValueError):
+        stagger_frac = 0.0
+    stagger = stagger_frac > 0
     hide_spikes = "hide_spikes" in opts
     spike_train = "spike_train" in opts
     crop = region_mode == "crop"           # show only the analysis region (drop excluded blocks)
@@ -1025,11 +1047,11 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     fft_fig = go.Figure()
     per_file_rates, stim_freqs, readbits, isi_all = [], [], [], []
 
-    # vertical stagger step for frame syncs (from first file's TTL peak-to-peak)
+    # vertical stagger step for frame syncs: fraction × (first file's TTL peak-to-peak)
     ttl_step = 0.0
     if stagger and ttl_name and ttl_name != chan:
         try:
-            ttl_step = 1.3 * float(np.ptp(get_channel(files[0], ttl_name)))
+            ttl_step = stagger_frac * 1.3 * float(np.ptp(get_channel(files[0], ttl_name)))
         except Exception:
             ttl_step = 0.0
 
@@ -1373,10 +1395,11 @@ def build_gallery(cell_val, _trig):
 @app.callback(Output("output-modal", "style"), Output("modal-img", "src"),
               Input({"type": "out-thumb", "src": ALL}, "n_clicks"),
               Input({"type": "raw-thumb", "src": ALL}, "n_clicks"),
-              Input("modal-close", "n_clicks"), prevent_initial_call=True)
-def toggle_modal(_thumbs, _raw, _close):
+              Input("modal-close", "n_clicks"), Input("modal-backdrop", "n_clicks"),
+              prevent_initial_call=True)
+def toggle_modal(_thumbs, _raw, _close, _backdrop):
     trig = ctx.triggered_id
-    if trig == "modal-close":
+    if trig in ("modal-close", "modal-backdrop"):         # ✕, or click off the image
         return {"display": "none"}, no_update
     if isinstance(trig, dict) and ctx.triggered and ctx.triggered[0].get("value"):  # real click
         if trig.get("type") == "out-thumb":                       # processed figure (PNG on disk)
@@ -1386,6 +1409,34 @@ def toggle_modal(_thumbs, _raw, _close):
             if uri:
                 return _MODAL_SHOWN, uri
     return no_update, no_update
+
+
+# ---- Escape closes the image pop-out first, else the Data Explorer (clientside) ----
+app.clientside_callback(
+    """
+    function(n) {
+        if (!window._neitzEsc) {
+            window._neitzEsc = true;
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' || e.keyCode === 27) {
+                    var im = document.getElementById('output-modal');
+                    if (im && im.style.display !== 'none') {
+                        var b = document.getElementById('modal-close'); if (b) { b.click(); }
+                        return;
+                    }
+                    var ex = document.getElementById('explorer-modal');
+                    if (ex && ex.style.display !== 'none') {
+                        var c = document.getElementById('exp-close'); if (c) { c.click(); }
+                    }
+                }
+            });
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output("kb-dummy", "data"),
+    Input("once", "n_intervals"),
+)
 
 
 # ============================================================
@@ -1456,6 +1507,25 @@ def exp_open_viewer(_n, sel):
     if not sel:
         return no_update, no_update, no_update
     return file_options(sel), sel, {"display": "none"}
+
+
+# ---- instant preview (bottom 25%): show the waveform when exactly 1 file is checked
+@app.callback(Output("exp-preview", "children"),
+              Input("exp-files", "value"), prevent_initial_call=False)
+def exp_preview(sel):
+    sel = [s for s in (sel or []) if s]
+    if len(sel) != 1:
+        n = len(sel)
+        hint = ("check exactly one file (middle panel) for an instant preview"
+                if n == 0 else f"{n} files checked — check just one for a preview")
+        return html.Span(hint, style={"color": "#999", "fontSize": "11px"})
+    p = sel[0]
+    uri = big_waveform_datauri(p) if loadable(p) else None
+    if not uri:
+        return html.Span(f"no preview for {os.path.basename(p)}",
+                         style={"color": "#999", "fontSize": "11px"})
+    return html.Img(src=uri, style={"maxWidth": "100%", "maxHeight": "100%",
+                                    "objectFit": "contain"})
 
 
 # ---- delete: open the two-factor confirmation modal (raw files OR a figure) ----
