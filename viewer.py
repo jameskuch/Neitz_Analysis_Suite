@@ -1642,14 +1642,21 @@ app.clientside_callback(
                     }
                 }
             });
-            // leaving the cell(s) dropdown closes its menu: send Escape to the react-select
-            // input (the reliable way) + blur as a fallback
+            // close the cell(s) dropdown only when the pointer is over NEITHER the control NOR
+            // its open menu (the menu — with Search / Select-all — is portalled outside the wrap)
             document.addEventListener('mouseout', function(e) {
                 var wrap = document.getElementById('cell-select-wrap');
                 if (!wrap) return;
-                var to = e.relatedTarget;
-                if (wrap.contains(e.target) && (!to || !wrap.contains(to))) {
-                    var inp = wrap.querySelector('input');
+                var inp = wrap.querySelector('input');
+                var lbId = inp && inp.getAttribute('aria-controls');
+                var lb = lbId ? document.getElementById(lbId) : null;
+                var menu = lb ? (lb.parentElement || lb)
+                              : document.querySelector('.Select__menu, .Select-menu-outer');
+                if (!menu) return;                          // menu not open -> nothing to close
+                var inRegion = function(n) {
+                    return !!(n && (wrap.contains(n) || menu.contains(n)));
+                };
+                if (inRegion(e.target) && !inRegion(e.relatedTarget)) {
                     if (inp) {
                         inp.dispatchEvent(new KeyboardEvent('keydown',
                             {key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true}));
