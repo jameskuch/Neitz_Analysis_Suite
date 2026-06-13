@@ -639,12 +639,8 @@ app.layout = html.Div(
 
         # ---- compartment: data store (cell select + files + stimulus) ----
         card("Data store", [
-            html.Div([
-                html.Button("📥 Import data…", id="import-data", n_clicks=0,
-                            style={"flex": "1", "fontWeight": "bold"}),
-                html.Button("📂 Data explorer…", id="open-explorer", n_clicks=0,
-                            style={"flex": "1", "fontWeight": "bold", "marginLeft": "4px"}),
-            ], style={"display": "flex", "marginBottom": "8px"}),
+            html.Button("📂 Data explorer…", id="open-explorer", n_clicks=0,
+                        style={"width": "100%", "fontWeight": "bold", "marginBottom": "8px"}),
 
             # cell(s) label + inline sort control on the same row (sort = dropdown order)
             html.Div([
@@ -842,9 +838,12 @@ app.layout = html.Div(
         html.Div(style={"display": "flex", "alignItems": "center", "gap": "12px",
                         "color": "white", "marginBottom": "8px", "flex": "0 0 auto"}, children=[
             html.Span("📂 Data Explorer", style={"fontWeight": "bold", "fontSize": "16px"}),
+            html.Button("📥 Import data…", id="import-data", n_clicks=0,
+                        style={"fontWeight": "bold"}),
             html.Button("←  back to day", id="exp-back", n_clicks=0,
                         style={"display": "none", "fontSize": "12px"}),
             html.Span(id="exp-breadcrumb", style={"fontSize": "13px"}),
+            html.Span(id="exp-msg", style={"fontSize": "12px", "color": "#7fdc7f"}),
             html.Div(style={"flex": "1"}),
             html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
                         style={"fontWeight": "bold"}),
@@ -1527,19 +1526,22 @@ def confirm_delete(_n, targets, text, password):
 
 
 # ---- import new experiment data into the store (copies + auto-groups by date) --
+# (the Import button now lives in the Data Explorer window)
 @app.callback(Output("cell-select", "options", allow_duplicate=True),
+              Output("exp-dates", "children", allow_duplicate=True),
+              Output("exp-msg", "children"),
               Output("store-msg", "children", allow_duplicate=True),
               Input("import-data", "n_clicks"),
               State("stim-type", "value"), State("stim-params", "value"),
-              prevent_initial_call=True)
-def import_data(_n, stype, sparams):
+              State("exp-date", "data"), prevent_initial_call=True)
+def import_data(_n, stype, sparams, active_date):
     import re
     folder = native_choose_folder()
     if not folder:
-        return no_update, no_update
+        return no_update, no_update, no_update, no_update
     abfs = sorted(glob.glob(os.path.join(folder, "**", "*.abf"), recursive=True))
     if not abfs:
-        return no_update, f"no .abf files found in {folder}"
+        return no_update, no_update, f"no .abf files found in {folder}", no_update
     by_date = {}
     for f in abfs:
         m = re.match(r"(\d{4})_(\d{2})_(\d{2})", os.path.basename(f))
@@ -1559,7 +1561,8 @@ def import_data(_n, stype, sparams):
         cm.save()
         made.append(f"{date}/{cm.data['cell']} ({len(fs)})")
     ds.update_index()
-    return store_cell_options(), f"imported {len(abfs)} recordings → " + ", ".join(made)
+    msg = f"imported {len(abfs)} recordings → " + ", ".join(made)
+    return (store_cell_options(), explorer_dates_rail(active=active_date), msg, msg)
 
 
 # ---- back up the whole data store to this computer's mirror -------------------
