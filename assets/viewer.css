@@ -6,7 +6,7 @@ input[type="checkbox"],
 input[type="radio"] {
     vertical-align: middle;
     position: relative;
-    top: 0.5px;            /* moved the square up ~35% of its ~13px height (5px -> 0.5px); text unchanged */
+    top: 0.84px;           /* from 5px, square moved up 0.32 × ~13px height (≈4.16px); text unchanged */
     margin-top: 0;
     margin-bottom: 0;
 }
