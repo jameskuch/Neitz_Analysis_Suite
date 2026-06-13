@@ -309,6 +309,19 @@ _FIELD = {"marginBottom": "6px"}                    # stacked label+control bloc
 _LBL = {"fontSize": "11px", "fontWeight": "bold", "color": "#444", "display": "block"}
 
 
+def ov(**pos):
+    """A semi-transparent control overlay pinned to a graph corner (absolute)."""
+    s = {"position": "absolute", "zIndex": 20, "background": "rgba(255,255,255,0.85)",
+         "padding": "1px 5px", "borderRadius": "4px", "fontSize": "11px",
+         "display": "flex", "alignItems": "center", "gap": "4px",
+         "boxShadow": "0 0 3px rgba(0,0,0,0.18)"}
+    s.update(pos)
+    return s
+
+
+_OVL = {"fontSize": "11px", "color": "#444", "fontWeight": "bold"}    # inline label inside an overlay
+
+
 # ============================================================
 # Data Explorer (pop-out): dates -> cell thumbnails -> file preview + manifest JSON
 # ============================================================
@@ -656,7 +669,8 @@ app.layout = html.Div(
                                    labelStyle={"display": "block", "fontSize": "11px",
                                                "whiteSpace": "nowrap", "overflow": "hidden",
                                                "textOverflow": "ellipsis", "breakInside": "avoid"},
-                                   inputStyle={"marginRight": "4px"}),
+                                   inputStyle={"marginRight": "4px", "verticalAlign": "middle",
+                                               "position": "relative", "top": "-1px"}),
                      style={"maxHeight": "150px", "overflowY": "auto", "columnWidth": "110px",
                             "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
             html.Div(id="meta", style={"fontSize": "10px", "color": "#333", "lineHeight": "1.45",
@@ -738,35 +752,7 @@ app.layout = html.Div(
                                             "marginTop": "3px", "wordBreak": "break-all"}),
         ]),
 
-        # ---- compartment: region & display ----
-        card("Region & display", [
-            html.Div([
-                html.Div([html.Label("region start (s)", style=_LBL),
-                          dcc.Input(id="region-start", type="number", debounce=True,
-                                    style={"width": "95px"})]),
-                html.Div([html.Label("region end (s)", style=_LBL),
-                          dcc.Input(id="region-end", type="number", debounce=True,
-                                    style={"width": "95px"})], style={"marginLeft": "10px"}),
-            ], style={"display": "flex", "marginBottom": "6px"}),
-            html.Div([html.Label("excluded regions", style=_LBL),
-                      dcc.RadioItems(id="region-mode",
-                                     options=[{"label": " show", "value": "show"},
-                                              {"label": " crop", "value": "crop"},
-                                              {"label": " baseline", "value": "baseline"}],
-                                     value="show", inline=True,
-                                     labelStyle={"fontSize": "12px", "marginRight": "8px"},
-                                     **PERSIST)], style=_FIELD),
-            html.Div([html.Label("display", style=_LBL),
-                      dcc.Checklist(id="dispopts",
-                                    options=[{"label": " stagger frame syncs", "value": "stagger"},
-                                             {"label": " hide detected spikes", "value": "hide_spikes"},
-                                             {"label": " spike-train view (0/1)", "value": "spike_train"}],
-                                    value=[], labelStyle={"display": "block", "fontSize": "12px"},
-                                    **PERSIST)], style=_FIELD),
-            html.Div([html.Label("spike-train bin (ms, 0=impulses)", style=_LBL),
-                      dcc.Input(id="train-bin", type="number", value=0, min=0, debounce=True,
-                                style={"width": "110px"}, **PERSIST)], style=_FIELD),
-        ]),
+        # (the region & display controls now live as overlays ON the graphs, right)
 
         # ---- compartment: cell outputs (click to enlarge) ----
         card("Cell outputs (click to enlarge)", [
@@ -782,16 +768,54 @@ app.layout = html.Div(
                     "display": "flex", "flexDirection": "column"}, children=[
         html.Div(id="readout", style={"fontWeight": "bold", "fontSize": "12px",
                                       "padding": "2px 0", "flex": "0 0 auto"}),
-        # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height
-        html.Div(dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True}),
-                 style={"flex": "3 1 0", "minHeight": 0}),
+        # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height.
+        # Region & display controls float in the corners, hugging the graph.
+        html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
+            dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True}),
+            # top-left: region start
+            html.Div([html.Span("start (s)", style=_OVL),
+                      dcc.Input(id="region-start", type="number", debounce=True,
+                                style={"width": "70px"})],
+                     style=ov(top="2px", left="6px")),
+            # top-right: region end + show/crop/baseline (right-justified)
+            html.Div([html.Span("end (s)", style=_OVL),
+                      dcc.Input(id="region-end", type="number", debounce=True,
+                                style={"width": "70px"}),
+                      dcc.RadioItems(id="region-mode",
+                                     options=[{"label": " show", "value": "show"},
+                                              {"label": " crop", "value": "crop"},
+                                              {"label": " baseline", "value": "baseline"}],
+                                     value="show", inline=True,
+                                     labelStyle={"fontSize": "11px", "marginLeft": "5px"},
+                                     inputStyle={"marginRight": "2px"}, **PERSIST)],
+                     style=ov(top="2px", right="6px")),
+            # bottom-left of the frame-sync: hide spikes + spike-train view
+            dcc.Checklist(id="disp-lr",
+                          options=[{"label": " hide spikes", "value": "hide_spikes"},
+                                   {"label": " spike-train", "value": "spike_train"}],
+                          value=[], inline=True,
+                          labelStyle={"fontSize": "11px", "marginRight": "8px"},
+                          inputStyle={"marginRight": "3px"},
+                          style=ov(bottom="2px", left="6px"), **PERSIST),
+            # bottom-right of the frame-sync: stagger frame syncs
+            dcc.Checklist(id="disp-stagger",
+                          options=[{"label": " stagger frame syncs", "value": "stagger"}],
+                          value=[], inline=True, labelStyle={"fontSize": "11px"},
+                          inputStyle={"marginRight": "3px"},
+                          style=ov(bottom="2px", right="6px"), **PERSIST),
+        ]),
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
                  children=[
             html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True}),
                      style={"flex": "1 1 0", "minWidth": 0}),
-            html.Div(dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True}),
-                     style={"flex": "1 1 0", "minWidth": 0}),
+            # ISI histogram with the spike-train bin control floated inside, upper-right
+            html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True}),
+                      html.Div([html.Span("bin (ms)", style=_OVL),
+                                dcc.Input(id="train-bin", type="number", value=0, min=0,
+                                          debounce=True, style={"width": "60px"}, **PERSIST)],
+                               style=ov(top="2px", right="10px"))],
+                     style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}),
         ]),
     ]),
 
@@ -948,10 +972,11 @@ def load_meta(files):
               Input("polarity", "value"), Input("method", "value"), Input("k", "value"),
               Input("absth", "value"), Input("refr", "value"),
               Input("region-start", "value"), Input("region-end", "value"),
-              Input("dispopts", "value"), Input("region-mode", "value"), Input("train-bin", "value"),
+              Input("disp-lr", "value"), Input("disp-stagger", "value"),
+              Input("region-mode", "value"), Input("train-bin", "value"),
               Input("absth-map", "data"), Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
-           dispopts, region_mode, train_bin, absth_map, relayout):
+           disp_lr, disp_stagger, region_mode, train_bin, absth_map, relayout):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -968,7 +993,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                refractory_s=(float(refr) / 1000.0) if refr else 0.002)
     amap = absth_map or {}                          # per-trace absolute thresholds
     multi = len(files) > 1
-    opts = dispopts or []
+    opts = (disp_lr or []) + (disp_stagger or [])
     stagger = "stagger" in opts
     hide_spikes = "hide_spikes" in opts
     spike_train = "spike_train" in opts
