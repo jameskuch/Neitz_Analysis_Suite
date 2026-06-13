@@ -918,7 +918,7 @@ app.layout = html.Div(
                               labelStyle={"fontSize": "10px", "display": "inline-flex",
                                           "alignItems": "center"},
                               inputStyle={"marginRight": "3px"}),
-            ], style=ov(bottom="38%", right="6px", height="20px")),   # right-justified, under Im_prime
+            ], style=ov(bottom="calc(38% + 25px)", right="6px", height="20px")),   # up 1.25×height, under Im_prime
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
