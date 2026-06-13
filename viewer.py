@@ -238,15 +238,16 @@ _MODAL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
                 "zIndex": 2000, "alignItems": "center", "justifyContent": "center"}
 
 
-def card(title, children):
-    """A bordered, titled compartment for the left control sidebar."""
-    return html.Div([
-        html.Div(title, style={"fontWeight": "bold", "fontSize": "12px", "color": "#234",
-                               "borderBottom": "1px solid #e3e3e3", "paddingBottom": "3px",
-                               "marginBottom": "6px"}),
-        html.Div(children),
-    ], style={"border": "1px solid #dcdcdc", "borderRadius": "6px", "padding": "8px",
-              "marginBottom": "8px", "background": "white"})
+def card(title, children, opened=True):
+    """A collapsible, titled compartment (native <details>/<summary>) for the sidebar."""
+    return html.Details(open=opened, style={
+        "border": "1px solid #dcdcdc", "borderRadius": "6px",
+        "marginBottom": "8px", "background": "white"}, children=[
+        html.Summary(title, style={"fontWeight": "bold", "fontSize": "12px", "color": "#234",
+                                   "padding": "6px 8px", "cursor": "pointer",
+                                   "userSelect": "none"}),
+        html.Div(children, style={"padding": "8px", "borderTop": "1px solid #eee"}),
+    ])
 
 
 _FIELD = {"marginBottom": "6px"}                    # stacked label+control block
@@ -266,7 +267,7 @@ app.layout = html.Div(
     children=[
 
     # ================= LEFT SIDEBAR: controls (≤ 1/3 width, scrollable) =========
-    html.Div(style={"flex": "0 0 33%", "maxWidth": "33%", "minWidth": "320px",
+    html.Div(style={"flex": "0 0 20%", "maxWidth": "20%", "minWidth": "230px",
                     "height": "100%", "overflowY": "auto", "paddingRight": "6px",
                     "boxSizing": "border-box"}, children=[
 
@@ -351,6 +352,10 @@ app.layout = html.Div(
                                     style={"width": "85px"}, **PERSIST)],
                          style={"marginLeft": "10px"}),
             ], style={"display": "flex"}),
+            html.Button("🎯 auto abs (per trace)", id="auto-absth", n_clicks=0,
+                        style={"marginTop": "6px", "fontSize": "11px", "width": "100%"}),
+            html.Div(id="absth-msg", style={"fontSize": "10px", "color": "#666",
+                                            "marginTop": "3px", "wordBreak": "break-all"}),
         ]),
 
         # ---- compartment: region & display ----
@@ -392,20 +397,28 @@ app.layout = html.Div(
         ]),
     ]),
 
-    # ================= RIGHT PANEL: graphs (2/3 width, full height) =============
+    # ================= RIGHT PANEL: graphs (80% width, full height) =============
     html.Div(style={"flex": "1 1 0", "minWidth": 0, "height": "100%",
                     "display": "flex", "flexDirection": "column"}, children=[
         html.Div(id="readout", style={"fontWeight": "bold", "fontSize": "12px",
                                       "padding": "2px 0", "flex": "0 0 auto"}),
+        # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height
         html.Div(dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True}),
-                 style={"flex": "2 1 0", "minHeight": 0}),
-        html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True}),
-                 style={"flex": "1 1 0", "minHeight": 0}),
+                 style={"flex": "3 1 0", "minHeight": 0}),
+        # bottom strip (less tall): FFT at half width + ISI histogram at the other half
+        html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
+                 children=[
+            html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True}),
+                     style={"flex": "1 1 0", "minWidth": 0}),
+            html.Div(dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True}),
+                     style={"flex": "1 1 0", "minWidth": 0}),
+        ]),
     ]),
 
     # ---- invisible state + overlays ----
     dcc.Store(id="sel-cell"),
     dcc.Store(id="gallery-trigger"),
+    dcc.Store(id="absth-map"),                            # {file path: per-trace abs threshold}
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
     dcc.Interval(id="once", interval=300, max_intervals=1),
     # ---- full-screen pop-out for an output image ----
@@ -490,24 +503,26 @@ def load_meta(files):
 
 
 # ---- render time + fft -----------------------------------------------------
-@app.callback(Output("time", "figure"), Output("fft", "figure"), Output("readout", "children"),
+@app.callback(Output("time", "figure"), Output("fft", "figure"), Output("isi", "figure"),
+              Output("readout", "children"),
               Input("file", "value"), Input("chan", "value"), Input("ttl", "value"),
               Input("polarity", "value"), Input("method", "value"), Input("k", "value"),
               Input("absth", "value"), Input("refr", "value"),
               Input("region-start", "value"), Input("region-end", "value"),
               Input("dispopts", "value"), Input("region-mode", "value"), Input("train-bin", "value"),
-              Input("time", "relayoutData"), prevent_initial_call=True)
+              Input("absth-map", "data"), Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
-           dispopts, region_mode, train_bin, relayout):
+           dispopts, region_mode, train_bin, absth_map, relayout):
     files = [f for f in (files or []) if f]
     if not files:
-        return blank_fig("No file selected"), blank_fig(""), "No file selected."
+        return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
     if not chan:
-        return no_update, no_update, no_update
+        return no_update, no_update, no_update, no_update
 
     det = dict(polarity=polarity, method=method, k=float(k),
                abs_threshold=float(absth) if absth is not None else None,
                refractory_s=(float(refr) / 1000.0) if refr else 0.002)
+    amap = absth_map or {}                          # per-trace absolute thresholds
     multi = len(files) > 1
     opts = dispopts or []
     stagger = "stagger" in opts
@@ -541,9 +556,9 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
             x0, x1 = rs, re_
 
     time_fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
-                             row_heights=[0.7, 0.3])
+                             row_heights=[0.625, 0.375])     # frame-sync row enlarged ×1.25
     fft_fig = go.Figure()
-    per_file_rates, stim_freqs, readbits = [], [], []
+    per_file_rates, stim_freqs, readbits, isi_all = [], [], [], []
 
     # vertical stagger step for frame syncs (from first file's TTL peak-to-peak)
     ttl_step = 0.0
@@ -568,8 +583,14 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         if i1 <= i0:
             i0, i1 = 0, len(y)
 
-        st = detect_spikes(y, fs, **det)
+        eff_abs = amap.get(path)                     # this trace's own value, if set
+        if eff_abs is None:
+            eff_abs = float(absth) if absth is not None else None
+        det_i = dict(det, abs_threshold=(float(eff_abs) if eff_abs is not None else None))
+        st = detect_spikes(y, fs, **det_i)
         in_reg = st.times[(st.times >= rs) & (st.times <= re_)]
+        if len(in_reg) > 1:
+            isi_all.append(np.diff(in_reg) * 1000.0)     # ms, for the ISI histogram
         excl = (t < rs) | (t > re_)                       # excluded-region mask
         inmask = ~excl
         if baseline_mode:                                 # flatten excluded region to in-region baseline (median)
@@ -640,7 +661,10 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
             fft_fig.add_trace(go.Scatter(x=f, y=amp, mode="lines", legendgroup=name,
                                          line=dict(width=(1 if multi else 2), color=color),
                                          opacity=(0.45 if multi else 1.0), name=name))
-        readbits.append(f"{name}: {len(in_reg)} spk in region"
+        thr_txt = (f", thr {det_i['abs_threshold']:.1f}"
+                   if (method in ("abs", "mad_floor") and det_i["abs_threshold"] is not None)
+                   else "")
+        readbits.append(f"{name}: {len(in_reg)} spk in region" + thr_txt
                         + (f", stim {fl.freq:.2f}Hz" if fl else ", no flicker"))
 
     if not crop:                                   # shade excluded blocks (skip when cropped out)
@@ -679,12 +703,59 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                     bgcolor="rgba(255,255,255,0.65)", bordercolor="#ccc", borderwidth=1),
         showlegend=True)
 
+    # ISI histogram: pooled in-region inter-spike intervals (companion to the FFT)
+    if isi_all:
+        isis = np.concatenate(isi_all)
+        hi = np.percentile(isis, 99) if len(isis) else 0.0
+        shown = isis[isis <= hi] if hi > 0 else isis
+        isi_fig = go.Figure(go.Histogram(x=shown, nbinsx=60, marker_color="#3367d6"))
+        isi_fig.update_layout(
+            title=dict(text=f"ISI histogram ({len(isis)} intervals, ≤99th pct)", x=0.5,
+                       xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
+            xaxis_title="inter-spike interval (ms)", yaxis_title="count",
+            margin=dict(l=50, r=12, t=34, b=40), bargap=0.03, showlegend=False)
+    else:
+        isi_fig = blank_fig("no spikes in region for ISI")
+
     view = ("spike-train" if spike_train else "analog")
     mode = (f"GROUP of {len(files)} (avg→FFT; {view} view"
             + ("; spikes shown" if (show_spikes and not spike_train) else "")
             + "; frame syncs overlaid)" if multi else f"single-file inspect ({view})")
     readout = f"[{mode}]  region {rs:.2f}-{re_:.2f}s  |  " + "  |  ".join(readbits)
-    return time_fig, fft_fig, readout
+    return time_fig, fft_fig, isi_fig, readout
+
+
+# ---- auto absolute threshold: one value PER TRACE (k·MAD of each file) --------
+@app.callback(Output("absth-map", "data"), Output("absth-msg", "children"),
+              Output("method", "value", allow_duplicate=True),
+              Input("auto-absth", "n_clicks"),
+              State("file", "value"), State("chan", "value"), State("k", "value"),
+              prevent_initial_call=True)
+def auto_absth(_n, files, chan, k):
+    files = [f for f in (files or []) if f]
+    if not files or not chan:
+        return no_update, "select file(s) + a signal channel first", no_update
+    amap, bits = {}, []
+    for path in files:
+        try:
+            y = get_channel(path, chan)
+            sigma = float(np.median(np.abs(y - np.median(y))) * 1.4826)   # robust σ
+            thr = round(float(k) * sigma, 2)
+            amap[path] = thr
+            bits.append(f"{os.path.basename(path)}={thr:g}")
+        except Exception:
+            pass
+    if not amap:
+        return no_update, "could not compute thresholds", no_update
+    return amap, "auto abs (k·MAD per trace) → " + ", ".join(bits), "abs"
+
+
+# ---- typing a single abs value reverts to ONE uniform threshold for all traces -
+@app.callback(Output("absth-map", "data", allow_duplicate=True),
+              Output("absth-msg", "children", allow_duplicate=True),
+              Input("absth", "value"), prevent_initial_call=True)
+def clear_absmap(_v):
+    return {}, "abs thresh: uniform across all traces"
 
 
 # ---- data store: pick a cell -> load its recordings + prefill stimulus -------
