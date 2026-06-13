@@ -187,6 +187,15 @@ def power_w(rate, bin_rate=BIN_RATE):
     return f[keep], p[keep]
 
 
+def power_db(pw):
+    """Power (W) -> dB, with empty bins floored at 80 dB below the spectrum's peak so
+    they don't drag the y-axis to -inf."""
+    pw = np.asarray(pw, dtype=float)
+    pk = float(pw.max()) if pw.size else 0.0
+    floor = pk * 1e-8 if pk > 0 else 1e-20
+    return 10.0 * np.log10(np.maximum(pw, floor))
+
+
 def blank_fig(msg=""):
     """Empty placeholder figure (cleared graph when nothing is selected)."""
     f = go.Figure()
@@ -332,7 +341,7 @@ _OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "
         "textAlign": "right"}                                        # compact overlay textbox
 # region start/end overlays: same fixed height; start flush with the plot's left (l margin),
 # end flush with the plot's right (r margin). Shared so a callback can hide them when cropping.
-_START_OV = ov(top="34px", left="60px", height="20px")
+_START_OV = ov(top="34px", left="78px", height="20px")
 _END_OV = ov(top="34px", right="20px", height="20px")
 _END_FIELDS = {"display": "flex", "alignItems": "center", "gap": "3px"}   # end (s) label+input
 
@@ -898,7 +907,7 @@ app.layout = html.Div(
                               labelStyle={"fontSize": "10px", "display": "inline-flex",
                                           "alignItems": "center"},
                               inputStyle={"marginRight": "3px"}),
-            ], style=ov(bottom="26px", left="6px", height="20px")),
+            ], style=ov(bottom="38%", right="6px", height="20px")),   # right-justified, under Im_prime
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -1274,7 +1283,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         if rate is not None:
             per_file_rates.append(rate)
             f, pw = power_w(rate)
-            fft_fig.add_trace(go.Scatter(x=f, y=pw, mode="lines", legendgroup=name,
+            fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines", legendgroup=name,
                                          line=dict(width=(1 if multi else 2), color=color),
                                          opacity=(0.45 if multi else 1.0), name=name))
         thr_txt = (f", thr {det_i['abs_threshold']:.1f}"
@@ -1302,7 +1311,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     if multi and len(per_file_rates) >= 2:
         n = min(len(r) for r in per_file_rates)
         f, pw = power_w(np.mean([r[:n] for r in per_file_rates], axis=0))
-        fft_fig.add_trace(go.Scatter(x=f, y=pw, mode="lines",
+        fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines",
                                      line=dict(width=3, color="black"), name="GROUP AVG"))
     sfreqs = [s for s in stim_freqs if s]
     if sfreqs:
@@ -1312,9 +1321,9 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                           annotation_position="bottom right",
                           annotation=dict(font=dict(size=10, color="#c60")))
     fft_fig.update_layout(
-        title=dict(text="spike-train power  2|X[k]|²/N²  (inside region)", x=0.5,
+        title=dict(text="spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region)", x=0.5,
                    xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
-        xaxis_title="frequency (Hz)", yaxis_title="power (W, R=1Ω)",
+        xaxis_title="frequency (Hz)", yaxis_title="power (dB, R=1Ω)",
         xaxis_range=[0, FMAX], margin=dict(l=55, r=15, t=34, b=40),
         legend=dict(x=0.99, y=0.97, xanchor="right", yanchor="top", font=dict(size=9),
                     bgcolor="rgba(255,255,255,0.65)", bordercolor="#ccc", borderwidth=1),
