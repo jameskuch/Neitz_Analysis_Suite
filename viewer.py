@@ -21,11 +21,17 @@ Run:  /Users/j/miniconda3/bin/python viewer.py   ->  http://127.0.0.1:8050
 
 from __future__ import annotations
 import os
+import io
+import json
 import glob
 import base64
 import platform
 import subprocess
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")                       # headless: render sparkline thumbnails to PNG bytes
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import plotly.graph_objects as go
 import plotly.colors as pc
 from plotly.subplots import make_subplots
@@ -235,7 +241,7 @@ def output_gallery(date, cell):
 
 _MODAL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
                 "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.88)",
-                "zIndex": 2000, "alignItems": "center", "justifyContent": "center"}
+                "zIndex": 3000, "alignItems": "center", "justifyContent": "center"}
 
 
 def card(title, children, opened=True):
@@ -252,6 +258,190 @@ def card(title, children, opened=True):
 
 _FIELD = {"marginBottom": "6px"}                    # stacked label+control block
 _LBL = {"fontSize": "11px", "fontWeight": "bold", "color": "#444", "display": "block"}
+
+
+# ============================================================
+# Data Explorer (pop-out): dates -> cell thumbnails -> file preview + manifest JSON
+# ============================================================
+_SPARK_CACHE: dict = {}                             # (path, mtime) -> sparkline data-URI
+
+
+def sparkline_datauri(path, width_in=2.6, height_in=0.72):
+    """Tiny decimated waveform PNG (data-URI) for a raw recording; cached by mtime."""
+    try:
+        key = (path, os.path.getmtime(path))
+    except OSError:
+        key = (path, 0.0)
+    if key in _SPARK_CACHE:
+        return _SPARK_CACHE[key]
+    uri = None
+    try:
+        rec = get_recording(path)
+        y = rec.channel(rec.channel_names[0])
+        step = max(1, len(y) // 1500)
+        ys = y[::step]
+        fig = Figure(figsize=(width_in, height_in), dpi=64)
+        ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
+        ax.plot(ys, color="#27408b", linewidth=0.5)
+        ax.margins(x=0, y=0.05)
+        buf = io.BytesIO(); FigureCanvasAgg(fig).print_png(buf)
+        uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception:
+        uri = None
+    _SPARK_CACHE[key] = uri
+    return uri
+
+
+def _latest_output_datauri(cm):
+    outdir = cm.dir / "outputs"
+    if outdir.exists():
+        pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if pngs:
+            return _img_datauri(str(pngs[0]))
+    return None
+
+
+_THUMB_IMG = {"height": "62px", "border": "1px solid #ccc", "background": "white",
+              "display": "block", "marginBottom": "2px"}
+
+
+def explorer_dates_rail(active=None):
+    """Left rail: one button per date (newest first), with a cell count."""
+    idx = DataStore().index()
+    by_date = {}
+    for c in idx:
+        by_date.setdefault(c["date"], 0)
+        by_date[c["date"]] += 1
+    rows = []
+    for d in sorted(by_date, reverse=True):
+        is_active = (d == active)
+        rows.append(html.Div(
+            f"{d}   ·   {by_date[d]} cell{'s' if by_date[d] != 1 else ''}",
+            id={"type": "exp-date", "date": d}, n_clicks=0,
+            style={"padding": "8px 10px", "cursor": "pointer", "fontSize": "12px",
+                   "borderBottom": "1px solid #2a2a35", "color": "white",
+                   "background": ("#3367d6" if is_active else "transparent"),
+                   "fontWeight": ("bold" if is_active else "normal")}))
+    return rows or [html.Div("no cells in store", style={"color": "#999", "padding": "10px"})]
+
+
+def explorer_day_cards(date):
+    """Center grid for a date: one card per cell (latest output + waveform)."""
+    ds = DataStore()
+    cells = [c for c in ds.index() if c["date"] == date]
+    cards = []
+    for c in cells:
+        cm = ds.cell(date, c["cell"])
+        files = cell_data_files(cm)
+        out = _latest_output_datauri(cm)
+        spark = sparkline_datauri(files[0]) if files else None
+        imgs = []
+        if out:
+            imgs.append(html.Img(src=out, style=dict(_THUMB_IMG, height="84px")))
+        if spark:
+            imgs.append(html.Img(src=spark, style=dict(_THUMB_IMG, width="100%")))
+        if not imgs:
+            imgs.append(html.Div("no preview", style={"color": "#999", "fontSize": "11px",
+                                                      "height": "62px"}))
+        label = c.get("label") or ""
+        ctype = c.get("cell_type")
+        cards.append(html.Div(
+            imgs + [
+                html.Div(c["cell"], style={"fontWeight": "bold", "fontSize": "13px"}),
+                html.Div(label, style={"fontSize": "11px", "color": "#444",
+                                       "wordBreak": "break-word"}),
+                html.Div((f"{ctype} · " if ctype else "")
+                         + f"{c.get('n_recordings', 0)} rec · {c.get('n_outputs', 0)} out",
+                         style={"fontSize": "10px", "color": "#777"}),
+            ],
+            id={"type": "exp-cell", "cell": c["cell"]}, n_clicks=0,
+            style={"width": "200px", "border": "1px solid #ccc", "borderRadius": "6px",
+                   "padding": "8px", "background": "white", "cursor": "pointer",
+                   "boxShadow": "0 1px 3px rgba(0,0,0,0.2)"}))
+    return cards or [html.Div("no cells on this date", style={"color": "#ccc"})]
+
+
+def explorer_file_options(date, cell):
+    """Center checklist for a cell: each raw recording as a checkbox + waveform thumb."""
+    cm = DataStore().cell(date, cell)
+    opts = []
+    for r in cm.data.get("recordings", []):
+        if not str(r.get("file", "")).endswith((".abf", ".csv")):
+            continue
+        p = str(cm.dir / r["file"])
+        spark = sparkline_datauri(p)
+        stim = (r.get("stimulus") or {}).get("type")
+        thumb = html.Div([
+            html.Img(src=spark, style=dict(_THUMB_IMG, width="220px")) if spark
+            else html.Div("—", style={"height": "62px", "color": "#999"}),
+            html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all"}),
+            html.Div(f"stim: {stim}" if stim else "stim: —",
+                     style={"fontSize": "10px", "color": "#777"}),
+        ], style={"display": "inline-block", "verticalAlign": "top"})
+        opts.append({"label": thumb, "value": p})
+    return opts
+
+
+def _json_tree(obj, key=None, top=False):
+    """Recursive collapsible tree for a JSON-able object (manifest.json)."""
+    klab = "" if key is None else f"{key}: "
+    if isinstance(obj, dict):
+        return html.Details(open=top, children=[
+            html.Summary(f"{klab}{{{len(obj)} keys}}",
+                         style={"cursor": "pointer", "fontSize": "11px", "color": "#226"}),
+            html.Div([_json_tree(v, k) for k, v in obj.items()],
+                     style={"marginLeft": "12px"})])
+    if isinstance(obj, list):
+        return html.Details(open=top, children=[
+            html.Summary(f"{klab}[{len(obj)} items]",
+                         style={"cursor": "pointer", "fontSize": "11px", "color": "#226"}),
+            html.Div([_json_tree(v, i) for i, v in enumerate(obj)],
+                     style={"marginLeft": "12px"})])
+    return html.Div([html.Span(klab, style={"color": "#999"}),
+                     html.Span(json.dumps(obj), style={"color": "#063"})],
+                    style={"fontFamily": "monospace", "fontSize": "11px", "marginLeft": "2px"})
+
+
+def explorer_detail(date, cell):
+    """Right pane for a cell: manifest JSON tree + output thumbnails (click to enlarge)."""
+    cm = DataStore().cell(date, cell)
+    outdir = cm.dir / "outputs"
+    pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) \
+        if outdir.exists() else []
+    out_thumbs = [html.Img(src=_img_datauri(str(p)),
+                           id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
+                           style={"height": "90px", "border": "1px solid #ccc", "margin": "3px",
+                                  "cursor": "pointer", "background": "white"})
+                  for p in pngs]
+    return [
+        html.Div(f"{date} / {cell}", style={"fontWeight": "bold", "fontSize": "13px",
+                                            "marginBottom": "4px"}),
+        html.Div("manifest.json", style={"fontWeight": "bold", "fontSize": "11px",
+                                         "color": "#555", "marginTop": "6px"}),
+        html.Div(_json_tree(cm.data, top=True),
+                 style={"maxHeight": "40vh", "overflowY": "auto", "border": "1px solid #eee",
+                        "padding": "6px", "background": "#fbfbfb"}),
+        html.Div("output figures (click to enlarge)",
+                 style={"fontWeight": "bold", "fontSize": "11px", "color": "#555",
+                        "marginTop": "8px"}),
+        html.Div(out_thumbs or [html.Span("none yet", style={"color": "#999",
+                                                             "fontSize": "11px"})],
+                 style={"display": "flex", "flexWrap": "wrap"}),
+    ]
+
+
+def explorer_breadcrumb(date, cell):
+    parts = [html.Span(f"📂 {date}", style={"fontWeight": "bold"})]
+    if cell:
+        parts += [html.Span("  ›  ", style={"color": "#888"}),
+                  html.Span(cell, style={"fontWeight": "bold"})]
+    return parts
+
+
+_EXPLORER_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
+                   "width": "100%", "height": "100%", "background": "rgba(18,18,26,0.97)",
+                   "zIndex": 2500, "flexDirection": "column", "padding": "10px",
+                   "boxSizing": "border-box"}
 
 
 # ============================================================
@@ -277,6 +467,8 @@ app.layout = html.Div(
         # ---- compartment: data store ----
         card("Data store", [
             html.Button("📥 Import data…", id="import-data", n_clicks=0,
+                        style={"fontWeight": "bold", "width": "100%", "marginBottom": "4px"}),
+            html.Button("📂 Data explorer…", id="open-explorer", n_clicks=0,
                         style={"fontWeight": "bold", "width": "100%", "marginBottom": "6px"}),
             html.Div([html.Label("cell", style=_LBL),
                       dcc.Dropdown(id="cell-select", options=store_cell_options(),
@@ -419,6 +611,8 @@ app.layout = html.Div(
     dcc.Store(id="sel-cell"),
     dcc.Store(id="gallery-trigger"),
     dcc.Store(id="absth-map"),                            # {file path: per-trace abs threshold}
+    dcc.Store(id="exp-date"),                             # explorer: selected date
+    dcc.Store(id="exp-cell"),                             # explorer: selected cell (within date)
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
     dcc.Interval(id="once", interval=300, max_intervals=1),
     # ---- full-screen pop-out for an output image ----
@@ -429,6 +623,46 @@ app.layout = html.Div(
         html.Img(id="modal-img", style={"maxWidth": "94vw", "maxHeight": "92vh",
                                         "boxShadow": "0 0 24px #000", "background": "white"}),
     ]),
+
+    # ================= DATA EXPLORER pop-out (dates → cells → files + JSON) =====
+    html.Div(id="explorer-modal", children=[
+        # header bar
+        html.Div(style={"display": "flex", "alignItems": "center", "gap": "12px",
+                        "color": "white", "marginBottom": "8px", "flex": "0 0 auto"}, children=[
+            html.Span("📂 Data Explorer", style={"fontWeight": "bold", "fontSize": "16px"}),
+            html.Button("←  back to day", id="exp-back", n_clicks=0,
+                        style={"display": "none", "fontSize": "12px"}),
+            html.Span(id="exp-breadcrumb", style={"fontSize": "13px"}),
+            html.Div(style={"flex": "1"}),
+            html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
+                        style={"fontWeight": "bold"}),
+            html.Button("✕ close", id="exp-close", n_clicks=0),
+        ]),
+        # body: three panes
+        html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"},
+                 children=[
+            # left rail: dates
+            html.Div(id="exp-dates",
+                     style={"flex": "0 0 180px", "overflowY": "auto", "background": "#15151d",
+                            "border": "1px solid #2a2a35", "borderRadius": "6px"}),
+            # center: preview viewer (day cards OR cell file checklist)
+            html.Div(style={"flex": "1 1 0", "minWidth": 0, "overflowY": "auto",
+                            "background": "#23232c", "borderRadius": "6px", "padding": "10px"},
+                     children=[
+                html.Div(id="exp-cards",
+                         style={"display": "flex", "flexWrap": "wrap", "gap": "10px"}),
+                dcc.Checklist(id="exp-files", options=[], value=[],
+                              labelStyle={"display": "inline-block", "verticalAlign": "top",
+                                          "background": "white", "borderRadius": "5px",
+                                          "padding": "5px", "margin": "5px"},
+                              inputStyle={"marginRight": "5px", "verticalAlign": "top"}),
+            ]),
+            # right: manifest JSON tree + output thumbnails
+            html.Div(id="exp-detail",
+                     style={"flex": "0 0 30%", "overflowY": "auto", "background": "white",
+                            "borderRadius": "6px", "padding": "10px"}),
+        ]),
+    ], style={"display": "none"}),
 ])
 
 
@@ -844,6 +1078,76 @@ def toggle_modal(_thumbs, _close):
         if ctx.triggered and ctx.triggered[0].get("value"):       # a real click
             return _MODAL_SHOWN, _img_datauri(trig["src"])
     return no_update, no_update
+
+
+# ============================================================
+# Data Explorer callbacks
+# ============================================================
+@app.callback(Output("explorer-modal", "style"),
+              Output("exp-date", "data", allow_duplicate=True),
+              Output("exp-cell", "data", allow_duplicate=True),
+              Input("open-explorer", "n_clicks"), Input("exp-close", "n_clicks"),
+              prevent_initial_call=True)
+def toggle_explorer(_open, _close):
+    if ctx.triggered_id == "exp-close":
+        return {"display": "none"}, no_update, no_update
+    dates = sorted({c["date"] for c in DataStore().index()}, reverse=True)
+    return _EXPLORER_SHOWN, (dates[0] if dates else None), None
+
+
+@app.callback(Output("exp-date", "data"), Output("exp-cell", "data", allow_duplicate=True),
+              Input({"type": "exp-date", "date": ALL}, "n_clicks"), prevent_initial_call=True)
+def exp_pick_date(_clicks):
+    t = ctx.triggered_id
+    if isinstance(t, dict) and ctx.triggered and ctx.triggered[0].get("value"):
+        return t["date"], None
+    return no_update, no_update
+
+
+@app.callback(Output("exp-cell", "data"),
+              Input({"type": "exp-cell", "cell": ALL}, "n_clicks"), prevent_initial_call=True)
+def exp_pick_cell(_clicks):
+    t = ctx.triggered_id
+    if isinstance(t, dict) and ctx.triggered and ctx.triggered[0].get("value"):
+        return t["cell"]
+    return no_update
+
+
+@app.callback(Output("exp-cell", "data", allow_duplicate=True),
+              Input("exp-back", "n_clicks"), prevent_initial_call=True)
+def exp_back(_n):
+    return None
+
+
+@app.callback(Output("exp-dates", "children"), Output("exp-cards", "children"),
+              Output("exp-files", "options"), Output("exp-files", "value"),
+              Output("exp-detail", "children"), Output("exp-breadcrumb", "children"),
+              Output("exp-back", "style"),
+              Input("exp-date", "data"), Input("exp-cell", "data"), prevent_initial_call=True)
+def exp_render(date, cell):
+    if not date:
+        return ([no_update] * 7)
+    rail = explorer_dates_rail(active=date)
+    bc = explorer_breadcrumb(date, cell)
+    if not cell:                                       # DAY view: cell thumbnails
+        hint = [html.Div("select a cell to see its files + manifest",
+                         style={"color": "#999", "fontSize": "12px"})]
+        return rail, explorer_day_cards(date), [], [], hint, bc, {"display": "none"}
+    # CELL view: file checklist + manifest JSON
+    return (rail, [], explorer_file_options(date, cell), [],
+            explorer_detail(date, cell), bc, {"display": "inline-block", "fontSize": "12px"})
+
+
+@app.callback(Output("file", "options", allow_duplicate=True),
+              Output("file", "value", allow_duplicate=True),
+              Output("explorer-modal", "style", allow_duplicate=True),
+              Input("exp-open-viewer", "n_clicks"), State("exp-files", "value"),
+              prevent_initial_call=True)
+def exp_open_viewer(_n, sel):
+    sel = [s for s in (sel or []) if s]
+    if not sel:
+        return no_update, no_update, no_update
+    return file_options(sel), sel, {"display": "none"}
 
 
 # ---- import new experiment data into the store (copies + auto-groups by date) --
