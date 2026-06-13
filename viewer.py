@@ -777,14 +777,13 @@ app.layout = html.Div(
                       dcc.Input(id="region-start", type="number", debounce=True,
                                 style={"width": "70px"})],
                      style=ov(top="2px", left="6px")),
-            # top-right: region end + show/crop/baseline (right-justified)
+            # top-right: region end + show/crop (right-justified)
             html.Div([html.Span("end (s)", style=_OVL),
                       dcc.Input(id="region-end", type="number", debounce=True,
                                 style={"width": "70px"}),
                       dcc.RadioItems(id="region-mode",
                                      options=[{"label": " show", "value": "show"},
-                                              {"label": " crop", "value": "crop"},
-                                              {"label": " baseline", "value": "baseline"}],
+                                              {"label": " crop", "value": "crop"}],
                                      value="show", inline=True,
                                      labelStyle={"fontSize": "11px", "marginLeft": "5px"},
                                      inputStyle={"marginRight": "2px"}, **PERSIST)],
@@ -997,9 +996,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     stagger = "stagger" in opts
     hide_spikes = "hide_spikes" in opts
     spike_train = "spike_train" in opts
-    region_mode = region_mode or "show"
     crop = region_mode == "crop"           # show only the analysis region (drop excluded blocks)
-    baseline_mode = region_mode == "baseline"   # full axis, but flatten excluded blocks to each channel's baseline
     show_spikes = not hide_spikes          # spikes shown by default (single AND multi)
     tbin = float(train_bin) if train_bin else 0.0
 
@@ -1060,14 +1057,8 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         in_reg = st.times[(st.times >= rs) & (st.times <= re_)]
         if len(in_reg) > 1:
             isi_all.append(np.diff(in_reg) * 1000.0)     # ms, for the ISI histogram
-        excl = (t < rs) | (t > re_)                       # excluded-region mask
-        inmask = ~excl
-        if baseline_mode:                                 # flatten excluded region to in-region baseline (median)
-            base_y = float(np.median(y[inmask])) if inmask.any() else float(np.median(y))
-            y_disp = np.where(excl, base_y, y)
-        else:
-            y_disp = y
-        disp_spikes = in_reg if (baseline_mode or crop) else st.times   # hide excluded spikes when baseline/crop
+        y_disp = y
+        disp_spikes = in_reg if crop else st.times        # hide excluded spikes when cropped
 
         # ---- ROW 1: either the analog signal, or the spike train (0/1 or binned) ----
         if spike_train:
@@ -1109,12 +1100,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         if ttl_name and ttl_name != chan:
             try:
                 ttl = get_channel(path, ttl_name)
-                if baseline_mode:                          # flatten excluded frame-sync to its baseline (low level)
-                    base_ttl = float(np.median(ttl[inmask])) if inmask.any() else float(np.median(ttl))
-                    ttl_disp = np.where(excl, base_ttl, ttl)
-                else:
-                    ttl_disp = ttl
-                tt, ty = minmax_decimate((np.arange(len(ttl)) / fs)[i0:i1], ttl_disp[i0:i1])
+                tt, ty = minmax_decimate((np.arange(len(ttl)) / fs)[i0:i1], ttl[i0:i1])
                 time_fig.add_trace(go.Scattergl(x=tt, y=ty + idx * ttl_step, mode="lines",
                                                 legendgroup=name, showlegend=False,
                                                 line=dict(width=0.6, color=color),
@@ -1139,7 +1125,7 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     if not crop:                                   # shade excluded blocks (skip when cropped out)
         for (a, b, lbl) in [(t0_full, rs, "excluded (adapting)"), (re_, t1_full, "excluded")]:
             if b > a + 1e-6:
-                time_fig.add_vrect(x0=a, x1=b, fillcolor="gray", opacity=0.13, line_width=0,
+                time_fig.add_vrect(x0=a, x1=b, fillcolor="gray", opacity=0.4, line_width=0,
                                    annotation_text=lbl, annotation_position="top left",
                                    annotation=dict(font_size=10), row="all", col=1)
 
