@@ -2,18 +2,18 @@
    LOWER than centered so the label text reads above it (matches the manual
    before/after: text raised ~3px at actual UI scale).
    Dash auto-loads any .css in this assets/ folder. */
-/* The label is raised 1px so the TEXT moves up; the input is pushed back down by the same
-   1px so the SQUARE stays put at its 0.84px offset. */
+/* The label is raised 2px so the TEXT moves up; the input is pushed back down by the same
+   2px so the SQUARE stays put at its 0.84px offset. */
 input[type="checkbox"],
 input[type="radio"] {
     vertical-align: middle;
     position: relative;
-    top: 1.84px;           /* 0.84 (square offset) + 1 (cancels the label's 1px rise) */
+    top: 2.84px;           /* 0.84 (square offset) + 2 (cancels the label's 2px rise) */
     margin-top: 0;
     margin-bottom: 0;
 }
 label:has(> input[type="checkbox"]),
 label:has(> input[type="radio"]) {
     position: relative;
-    top: -1px;             /* raise the label text by 1px */
+    top: -2px;             /* raise the label text by 2px */
 }
