@@ -364,11 +364,10 @@ def sparkline_datauri(path, width_in=2.6, height_in=0.72):
     try:
         rec = get_recording(path)
         y = rec.channel(rec.channel_names[0])
-        step = max(1, len(y) // 1500)
-        ys = y[::step]
+        dx, dy = minmax_decimate(np.arange(len(y)), y, n_target=1000)  # min/max keeps spikes
         fig = Figure(figsize=(width_in, height_in), dpi=64)
         ax = fig.add_axes([0, 0, 1, 1]); ax.axis("off")
-        ax.plot(ys, color="#27408b", linewidth=0.5)
+        ax.plot(dx, dy, color="#27408b", linewidth=0.4)
         ax.margins(x=0, y=0.05)
         buf = io.BytesIO(); FigureCanvasAgg(fig).print_png(buf)
         uri = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
@@ -396,10 +395,10 @@ def big_waveform_datauri(path):
         y = rec.channel(ch)
         fs = rec.fs if (np.isfinite(rec.fs) and rec.fs > 0) else 1.0
         t = np.arange(len(y)) / fs
-        step = max(1, len(y) // 6000)
+        dt, dy = minmax_decimate(t, y, n_target=4000)   # min/max keeps spikes (matches main view)
         fig = Figure(figsize=(11, 4.2), dpi=110)
         ax = fig.add_subplot(111)
-        ax.plot(t[::step], y[::step], color="#27408b", linewidth=0.6)
+        ax.plot(dt, dy, color="#27408b", linewidth=0.6)
         ax.set_xlabel("time (s)"); ax.set_ylabel(f"{ch} ({rec.units(ch)})")
         ax.set_title(os.path.basename(path), fontsize=10)
         ax.margins(x=0)
