@@ -92,9 +92,13 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 
 ## Conventions & decisions (don't relearn these)
 
-- **"sq wave" is the user-facing name for `flicker`** — the GUI label says "sq wave" but the
-  stored stimulus value, folder (`outputs/flicker/`), and `run_cell_flicker` all stay `flicker`
-  for data compatibility. Don't rename the internals.
+- **"sq wave" stimulus type** (changed 2026-06): the stimulus metadata value is now stored as
+  `sq_wave` (GUI label "sq wave"). Existing manifests were migrated `flicker` → `sq_wave`, and the
+  GUI maps any legacy `flicker` value back to the "sq wave" option / display. BUT the *analysis*
+  internals stay `flicker` for data compatibility — the output folder (`outputs/flicker/`),
+  `run_cell_flicker`, and the default run name are all still `flicker`. Run dispatch keys off
+  `stimulus.type` (only `gaussian_noise` → STA; everything else incl. `sq_wave` → the flicker
+  analysis), so storing `sq_wave` doesn't change dispatch. Don't rename the analysis internals.
 - **Spike power graph** uses the explicit FFT formula `W = 2·|X[k]|² / N²` (single-sided,
   R=1Ω), NOT a Welch PSD — the user specifically wanted this. See `power_w()`.
 - **Per-trace abs thresholds** (methods `abs`/`mad_floor`/`matlab`): a "sync" checkbox (one value
@@ -125,6 +129,16 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   `FlickerParadigm.group_from_trials` so per-trace thresholds also drive the pooled ON/OFF.
   NOTE: signal/TTL **channel** is still NOT threaded (paradigm default `Im_prime`/`TTL`) — a
   known follow-up.
+- **Run Analysis also saves 4K Plotly exports** (added 2026-06, needs **kaleido** — in the `[gui]`
+  extras): the flicker branch calls `export_window_figures(...)` which rebuilds the GUI graphs via
+  the shared `build_figures(...)` (the `render` callback is now a thin wrapper over it) and writes,
+  at 3840×2160 (4K full-screen, regardless of the actual window), into `outputs/<name>/`:
+  `window_4k.{pdf,svg}` (all panels: signal+frame-sync, power, ISI), `power_4k.pdf`,
+  `analog_framesync_4k.pdf` (color signal+spikes / B&W no-spikes / color frame-syncs), and
+  `framesync_separated_4k.pdf` (each file's frame-sync in its own un-staggered panel). Each also
+  gets a lighter **`.png`** (1920×1080) so it surfaces in the Explorer/gallery (which glob
+  `outputs/**/*.png`); PDF/SVG stay 4K. Files are attached to the output record via
+  `_attach_output_files`. Wrapped in try/except so a kaleido failure never breaks the run.
 - **Run dispatch by stimulus type** (NOT guessed from file contents — driven by the manifest's
   explicit `stimulus.type`): `gaussian_noise` → `run_cell_noise` (reverse-correlation STA from
   the spike + stimulus CSVs, `outputs/sta/`); else → `run_cell_flicker`. Data format (abf-analog
@@ -155,7 +169,10 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   = **editable cell metadata** (type / stimulus type+params / notes) + **Save metadata**, over
   read-only recording facts + output figures (🗑 to delete) + a collapsible raw-manifest JSON.
   Metadata editing lives ONLY here now (not the sidebar). Escape closes the image pop-out first,
-  then the explorer.
+  then the explorer. Output figures' 🗑 is light-red (`#ff7a7a`) so it's visible on the dark theme.
+  Opening the Explorer from the Analysis View with **exactly one file checked** auto-jumps to that
+  file's cell and pre-checks it (`exp-autosel` store + `_date_cell_of`; `toggle_explorer` sets it,
+  `exp_render` consumes it one-shot).
 - Waveform sparklines / big waveforms are matplotlib-Agg PNG data-URIs, cached by mtime.
 - Responsive: CSS `zoom` media-queries scale the whole UI on smaller windows (root height
   counter-scaled). Dash 4.2 renders checklist/radio/dropdown options as `.dash-options-list-option`

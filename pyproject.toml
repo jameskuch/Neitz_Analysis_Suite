@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-gui = ["dash", "plotly"]
+gui = ["dash", "plotly", "kaleido"]   # kaleido: server-side Plotly -> PDF/SVG for the 4K Run-Analysis exports
 dev = ["pytest"]
 
 [project.scripts]

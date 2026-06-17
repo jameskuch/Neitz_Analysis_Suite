@@ -18,8 +18,15 @@ That's the program. A draggable splitter divides the **left sidebar** (controls)
   date / label / type sort); the checked **files** load into the graphs.
 - **▶ Run analysis** — dispatches on the cell's **stimulus type** (set in the Explorer):
   `gaussian_noise` → reverse-correlation **STA** (linear filter, from the spike + stimulus
-  CSVs); otherwise the square-wave ON/OFF analysis on the *checked* files. A **run name**
-  keeps variants side by side (blank = auto: `sta` / `flicker`); outputs → `<cell>/outputs/<name>/`.
+  CSVs); otherwise the square-wave ON/OFF analysis on the *checked* files. It uses the **live
+  spike-detection settings** (polarity / algorithm / k / per-trace abs / refractory) and records
+  them. A **run name** keeps variants side by side (blank = auto: `sta` / `flicker`) and is
+  preserved as the output's friendly label; outputs → `<cell>/outputs/<name>/`. The flicker run
+  also writes **4K PDF/SVG exports** of the current graphs (rendered at 3840×2160 regardless of
+  window size): the full window, the spike-train power graph, an analog panel (color signal +
+  spikes / B&W without spikes / color frame-syncs), and the frame-syncs separated per file. A
+  lighter **PNG preview** of each is saved too, so they appear (click-to-enlarge) in the Explorer's
+  Outputs grid alongside the analysis figures.
 - **Channels & spike detection** — signal / TTL channel, **polarity** (neg/pos/abs), and
   the **spike-detect algorithm**: `k·MAD`, `absolute`, `k·MAD ≥ floor`, or
   **MATLAB (Sara)** (a faithful port of `spikeDetectorOnline.m`: 500 Hz high-pass, max/3
@@ -30,13 +37,16 @@ That's the program. A draggable splitter divides the **left sidebar** (controls)
   type+params, notes) and **Saves** it, above read-only recording facts + output figures
   (click to enlarge, 🗑 to delete) + the raw manifest. **Import data** and **Backup mirror**
   live in the rail's bottom panel; **Open selected in viewer** (with a delete) appears when
-  files are checked. Deletes are confirmation-warned and trashed reversibly.
+  files are checked. Deletes are confirmation-warned and trashed reversibly. Switching here from
+  the Analysis View with exactly **one file checked** jumps straight to that file's cell and
+  pre-selects it. (The view switcher uses a thick ➤ arrow in an oval that grows on hover.)
 - **Graphs**: signal + per-file frame-sync (adjustable **stagger %**, auto-fits), a
   spike-train **power** spectrum (`W = 2·|X[k]|²/N²`), and an **ISI histogram**; live spike
   detection, an editable analysis **region** (start / end, optional **crop**), and a
   **spike-train** view — controls floated on the graphs; mouse-wheel for fine zoom.
 
-First time only (installs the package, the `neitz` command, and Dash):
+First time only (installs the package, the `neitz` command, Dash, and **kaleido** — the latter
+drives the 4K PDF/SVG exports; it bundles a headless Chromium on first use):
 ```bash
 pip install -e ".[gui]"
 ```
@@ -53,6 +63,7 @@ All data + outputs live **outside the repo** at `~/Documents/ephysdataio/`
     manifest.json                # recordings (stimulus type+params, labels) + outputs
     raw/   2026_06_02_0040.abf …
     outputs/flicker/  flicker_onoff.{png,pdf,svg}  metrics.csv  result.json
+                      window_4k.{pdf,svg,png}  power_4k.{pdf,png}  analog_framesync_4k.{pdf,png}  framesync_separated_4k.{pdf,png}
 ```
 
 The `manifest.json` is the source of truth: stimulus metadata, friendly labels, and

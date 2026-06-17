@@ -581,6 +581,7 @@ def explorer_file_options(date, cell):
         p = str(cm.dir / r["file"])
         spark = sparkline_datauri(p)
         stim = (r.get("stimulus") or {}).get("type")
+        stim = {"sq_wave": "sq wave", "flicker": "sq wave"}.get(stim, stim)   # friendly display
         thumb = html.Div([
             html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px"),
                      **{"data-ps": "wave|" + p}) if spark
@@ -684,7 +685,7 @@ def explorer_detail(date, cell):
                 html.Div(caption, style={"flex": "1", "minWidth": "0"}),
                 html.Button("🗑", id={"type": "del-output", "src": str(p)}, n_clicks=0,
                             title="delete this figure",
-                            style={"fontSize": "12px", "padding": "0 4px", "color": "#b00",
+                            style={"fontSize": "15px", "padding": "0 4px", "color": "#ff7a7a",
                                    "border": "none", "background": "none", "cursor": "pointer"}),
             ], style={"display": "flex", "alignItems": "center", "maxWidth": "180px"}),
         ], style={"margin": "3px"}))
@@ -1024,6 +1025,8 @@ app.layout = html.Div(
     dcc.Store(id="store-rev", data=0),                    # bumped when the store changes (rail refresh)
     dcc.Store(id="exp-date"),                             # explorer: selected date
     dcc.Store(id="exp-cell"),                             # explorer: selected cell (within date)
+    dcc.Store(id="exp-autosel"),                          # explorer: file path to auto-check on open
+                                                          # (one file selected in Analysis View)
     dcc.Store(id="last-folder", storage_type="local"),   # remembers data folder across sessions
     dcc.Interval(id="once", interval=300, max_intervals=1),
     dcc.Store(id="kb-dummy"),                             # clientside keydown wiring sink
@@ -1175,7 +1178,7 @@ app.layout = html.Div(
                                     style={"width": "100%", "boxSizing": "border-box"})]),
                 html.Div([html.Label("stimulus", style=_EXPLBL),
                           dcc.Dropdown(id="stim-type", style={"width": "100%"},
-                                       options=[{"label": "sq wave", "value": "flicker"},
+                                       options=[{"label": "sq wave", "value": "sq_wave"},
                                                 {"label": "gaussian_noise", "value": "gaussian_noise"},
                                                 {"label": "checkerboard", "value": "checkerboard"},
                                                 {"label": "(none)", "value": "(none)"}])]),
@@ -1291,6 +1294,14 @@ def toggle_disp_show(binned):
               Input("absth-map", "data"), Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, relayout):
+    return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
+                         disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
+                         relayout=relayout, trig=ctx.triggered_id)
+
+
+def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
+                  disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
+                  relayout=None, trig=None):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -1326,10 +1337,6 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     re_ = float(rend) if rend is not None else t1_full
 
     x0, x1 = t0_full, t1_full
-    try:
-        trig = ctx.triggered_id
-    except Exception:
-        trig = None
     if trig == "time" and relayout and "xaxis.range[0]" in relayout:
         x0, x1 = float(relayout["xaxis.range[0]"]), float(relayout["xaxis.range[1]"])
     x0, x1 = max(t0_full, x0), min(t1_full, x1)
@@ -1505,6 +1512,120 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
             + "; frame syncs overlaid)" if multi else f"single-file inspect ({view})")
     readout = f"[{mode}]  region {rs:.2f}-{re_:.2f}s  |  " + "  |  ".join(readbits)
     return time_fig, fft_fig, isi_fig, readout
+
+
+# ---- 4K Plotly exports saved on "Run Analysis" (kaleido → PDF/SVG, 3840×2160 = 4K full-screen).
+#      Built from the SAME build_figures() the GUI uses, so they're pixel-faithful regardless of the
+#      actual (possibly small) browser window. ----------------------------------------------------
+def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, method, k, absth, refr,
+                          rstart, rend, region_mode, stagger_pct, disp_show, disp_binned,
+                          train_bin, absth_map):
+    """Save the four requested 4K figures into outdir. Returns {name: Path} of what was written."""
+    import copy
+    import plotly.io as pio
+    W, H = 3840, 2160                                  # 4K (27" full-screen)
+    files = [f for f in (files or []) if f and loadable(f)]
+    if not files or not chan:
+        return {}
+    tf, ff, isf, _ = build_figures(files, chan, ttl_name, polarity, method, k, absth, refr,
+                                   rstart, rend, disp_show, disp_binned, stagger_pct,
+                                   region_mode, train_bin, absth_map)
+    cp = copy.deepcopy                                  # traces can't live in two figures at once
+    saved = {}
+
+    def _write(fig, name, fmts):
+        fig.update_layout(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white")
+        for ext in fmts:
+            p = outdir / f"{name}.{ext}"
+            w, h = (1920, 1080) if ext == "png" else (W, H)   # PNG = lighter preview for the gallery
+            pio.write_image(fig, str(p), format=ext, width=w, height=h)
+            saved[f"{name}_{ext}"] = p
+
+    sig = [t for t in tf.data if getattr(t, "yaxis", "y") != "y2"]      # signal + spike markers
+    ttl = [t for t in tf.data if getattr(t, "yaxis", "y") == "y2"]      # frame syncs
+    is_spike = lambda t: ("markers" in (getattr(t, "mode", "") or "")
+                          or str(getattr(t, "name", "")).endswith("spikes"))
+    try:
+        dur = len(get_channel(files[0], chan)) / get_recording(files[0]).fs
+    except Exception:
+        dur = None
+    rs = float(rstart) if rstart not in (None, "") else 0.0
+    re_ = float(rend) if rend not in (None, "") else (dur or 0.0)
+
+    # (1) full current window: signal+frame-sync (top), power | ISI (bottom) ----------------------
+    combo = make_subplots(rows=3, cols=2,
+                          specs=[[{"colspan": 2}, None], [{"colspan": 2}, None], [{}, {}]],
+                          row_heights=[0.42, 0.26, 0.32], vertical_spacing=0.09,
+                          horizontal_spacing=0.08,
+                          subplot_titles=("", "", "spike-train power", "ISI histogram"))
+    for t in sig:
+        combo.add_trace(cp(t), row=1, col=1)
+    for t in ttl:
+        combo.add_trace(cp(t), row=2, col=1)
+    for t in ff.data:
+        combo.add_trace(cp(t), row=3, col=1)
+    for t in isf.data:
+        combo.add_trace(cp(t), row=3, col=2)
+    combo.update_yaxes(title_text=(tf.layout.yaxis.title.text or chan), row=1, col=1)
+    combo.update_yaxes(title_text=(tf.layout.yaxis2.title.text or (ttl_name or "frame sync")), row=2, col=1)
+    combo.update_xaxes(title_text="time (s)", row=2, col=1)
+    combo.update_xaxes(title_text="frequency (Hz)", range=[0, FMAX], row=3, col=1)
+    combo.update_yaxes(title_text="power (dB)", row=3, col=1)
+    combo.update_xaxes(title_text="inter-spike interval (ms)", row=3, col=2)
+    combo.update_yaxes(title_text="count", row=3, col=2)
+    if dur and re_ > rs:                                # shade excluded blocks on the time rows
+        for r in (1, 2):
+            if rs > 0:
+                combo.add_vrect(x0=0, x1=rs, fillcolor="gray", opacity=0.22, line_width=0, row=r, col=1)
+            if re_ < dur:
+                combo.add_vrect(x0=re_, x1=dur, fillcolor="gray", opacity=0.22, line_width=0, row=r, col=1)
+    combo.update_layout(showlegend=False, margin=dict(l=70, r=40, t=80, b=60),
+                        title=dict(text=stem, x=0.5, xanchor="center", font=dict(size=22)))
+    _write(combo, "window_4k", ("pdf", "svg", "png"))
+
+    # (2) spike-train power graph ------------------------------------------------------------------
+    _write(go.Figure(ff), "power_4k", ("pdf", "png"))
+
+    # (3) analog: top = signal+spikes (color), middle = same B&W no spikes, bottom = frame syncs ----
+    a3 = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05,
+                       row_heights=[0.4, 0.3, 0.3])
+    for t in sig:
+        a3.add_trace(cp(t), row=1, col=1)
+    for t in sig:
+        if is_spike(t):
+            continue
+        bw = cp(t)
+        bw.update(line=dict(color="#222", width=getattr(t.line, "width", 0.6)), opacity=0.9)
+        a3.add_trace(bw, row=2, col=1)
+    for t in ttl:
+        a3.add_trace(cp(t), row=3, col=1)
+    a3.update_yaxes(title_text=f"{chan} (color)", row=1, col=1)
+    a3.update_yaxes(title_text=f"{chan} (B&W, no spikes)", row=2, col=1)
+    a3.update_yaxes(title_text=(ttl_name or "frame sync"), row=3, col=1)
+    a3.update_xaxes(title_text="time (s)", row=3, col=1)
+    a3.update_layout(showlegend=False, margin=dict(l=70, r=40, t=80, b=60),
+                     title=dict(text=f"{stem} — analog + frame sync", x=0.5, xanchor="center",
+                                font=dict(size=22)))
+    _write(a3, "analog_framesync_4k", ("pdf", "png"))
+
+    # (4) frame syncs, each file in its OWN panel (un-staggered so every carrier is visible) -------
+    tf0, _, _, _ = build_figures(files, chan, ttl_name, polarity, method, k, absth, refr,
+                                 rstart, rend, disp_show, disp_binned, 0, region_mode,
+                                 train_bin, absth_map)
+    sep_traces = [t for t in tf0.data if getattr(t, "yaxis", "y") == "y2"]
+    if sep_traces:
+        n = len(sep_traces)
+        sep = make_subplots(rows=n, cols=1, shared_xaxes=True, vertical_spacing=0.02,
+                            subplot_titles=[str(getattr(t, "name", "") or "").replace(" TTL", "")
+                                            for t in sep_traces])
+        for i, t in enumerate(sep_traces):
+            sep.add_trace(cp(t), row=i + 1, col=1)
+        sep.update_xaxes(title_text="time (s)", row=n, col=1)
+        sep.update_layout(showlegend=False, margin=dict(l=70, r=40, t=90, b=60),
+                          title=dict(text=f"{stem} — frame syncs (separated)", x=0.5,
+                                     xanchor="center", font=dict(size=22)))
+        _write(sep, "framesync_separated_4k", ("pdf", "png"))
+    return saved
 
 
 # ---- auto-seed the per-trace abs boxes with the MATLAB max/3 default the moment MATLAB is
@@ -1741,6 +1862,8 @@ def fill_cell_meta(cell, date):
     for r in cm.data.get("recordings", []):
         if r.get("stimulus"):
             stype = r["stimulus"].get("type")
+            if stype == "flicker":              # legacy value -> the current "sq wave" option
+                stype = "sq_wave"
             sparams = ", ".join(f"{k}={v}" for k, v in
                                 (r["stimulus"].get("params") or {}).items() if v is not None)
             break
@@ -1773,6 +1896,17 @@ def save_meta(_n, date, cell, stype, sparams, ctype, notes):
     return "✓ " + "; ".join(bits)
 
 
+def _attach_output_files(ds, date, cell, analysis, saved):
+    """Record extra files (e.g. the 4K exports) on the just-written output for <analysis>."""
+    cm = ds.cell(date, cell)
+    rec = next((o for o in reversed(cm.data.get("outputs", [])) if o.get("analysis") == analysis), None)
+    if rec is not None:
+        rec.setdefault("files", {}).update(
+            {k: os.path.relpath(str(p), cm.dir) for k, p in saved.items()})
+        cm.save()
+        ds.update_index()
+
+
 # ---- run the analysis for the selected cell(s), dispatched by their stimulus type --
 @app.callback(Output("store-msg", "children", allow_duplicate=True),
               Output("gallery-trigger", "data", allow_duplicate=True),
@@ -1780,8 +1914,13 @@ def save_meta(_n, date, cell, stype, sparams, ctype, notes):
               State("file", "value"), State("run-name", "value"),
               State("polarity", "value"), State("method", "value"), State("k", "value"),
               State("absth", "value"), State("refr", "value"), State("absth-map", "data"),
+              State("chan", "value"), State("ttl", "value"),
+              State("region-start", "value"), State("region-end", "value"),
+              State("region-mode", "value"), State("stagger-pct", "value"),
+              State("disp-show", "value"), State("disp-binned", "value"), State("train-bin", "value"),
               prevent_initial_call=True)
-def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth_map):
+def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
+             chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin):
     import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
@@ -1817,6 +1956,20 @@ def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth
                 p = r.tables["pooled_onoff"][0]
                 msgs.append(f"{tag} [{nm}]: {len(r.summary)} file(s), "
                             f"{p['flicker_hz']:.1f} Hz, '{p['verdict']}'")
+                try:                                     # also save the 4K window exports (kaleido)
+                    exp_files = sub or [str(cm.dir / rr["file"]) for rr in cm.data.get("recordings", [])
+                                        if str(rr.get("file", "")).endswith(".abf")]
+                    saved = export_window_figures(
+                        cm.output_dir(nm), f"{tag} [{raw_name or nm}]",
+                        files=exp_files, chan=chan, ttl_name=ttl, polarity=polarity, method=method,
+                        k=k, absth=absth, refr=refr, rstart=rstart, rend=rend, region_mode=region_mode,
+                        stagger_pct=stagger_pct, disp_show=disp_show, disp_binned=disp_binned,
+                        train_bin=train_bin, absth_map=abs_map)
+                    if saved:
+                        _attach_output_files(ds, s["date"], s["cell"], nm, saved)
+                        msgs[-1] += f" +{len(saved)} 4K file(s)"
+                except Exception as e:
+                    msgs[-1] += f" (4K export skipped: {e})"
         except SystemExit as e:
             msgs.append(f"{tag}: {e}")
         except Exception as e:
@@ -1934,16 +2087,34 @@ app.clientside_callback(
 # ============================================================
 # Data Explorer callbacks
 # ============================================================
+def _date_cell_of(path):
+    """(date, cell) parsed from a store file path <root>/<date>/<cell>/…, else (None, None)."""
+    try:
+        rel = os.path.relpath(path, str(DataStore().root))
+        parts = rel.split(os.sep)
+        if len(parts) >= 2 and not parts[0].startswith(".."):
+            return parts[0], parts[1]
+    except Exception:
+        pass
+    return None, None
+
+
 @app.callback(Output("explorer-modal", "style"),
               Output("exp-date", "data", allow_duplicate=True),
               Output("exp-cell", "data", allow_duplicate=True),
+              Output("exp-autosel", "data"),
               Input("open-explorer", "n_clicks"), Input("exp-close", "n_clicks"),
-              prevent_initial_call=True)
-def toggle_explorer(_open, _close):
+              State("file", "value"), prevent_initial_call=True)
+def toggle_explorer(_open, _close, files):
     if ctx.triggered_id == "exp-close":
-        return {"display": "none"}, no_update, no_update
+        return {"display": "none"}, no_update, no_update, None
+    sel = [f for f in (files or []) if f]
+    if len(sel) == 1:                          # exactly one file checked in Analysis View ->
+        d, c = _date_cell_of(sel[0])           # jump straight to it and pre-check it
+        if d and c:
+            return _EXPLORER_SHOWN, d, c, sel[0]
     dates = sorted({c["date"] for c in DataStore().index()}, reverse=True)
-    return _EXPLORER_SHOWN, (dates[0] if dates else None), None
+    return _EXPLORER_SHOWN, (dates[0] if dates else None), None, None
 
 
 @app.callback(Output("exp-date", "data"), Output("exp-cell", "data", allow_duplicate=True),
@@ -1976,23 +2147,31 @@ def exp_back(_n):
               Output("exp-files", "options"), Output("exp-files", "value"),
               Output("exp-detail", "children"), Output("exp-breadcrumb", "children"),
               Output("exp-prev", "children"),
-              Input("exp-date", "data"), Input("exp-cell", "data"), prevent_initial_call=True)
-def exp_render(date, cell):
+              Output("exp-autosel", "data", allow_duplicate=True),
+              Input("exp-date", "data"), Input("exp-cell", "data"),
+              State("exp-autosel", "data"), prevent_initial_call=True)
+def exp_render(date, cell, autosel):
     # reset the hover-preview on every navigation (no stale graph showing)
     prev = [html.Img(id="exp-prev-img", style={"width": "100%", "height": "100%",
                                                "objectFit": "contain", "display": "none"}),
             html.Span("hover any graph to preview it here", id="exp-prev-hint",
                       style={"color": "#999", "fontSize": "12px"})]
     if not date:
-        return ([no_update] * 5) + [prev]
+        return ([no_update] * 5) + [prev, no_update]
     bc = explorer_breadcrumb(date, cell)
     if not cell:                                       # DAY view: cell thumbnails
         hint = [html.Div("select a cell to see its files + manifest",
                          style={"color": "#999", "fontSize": "12px"})]
-        return explorer_day_cards(date), [], [], hint, bc, prev
+        return explorer_day_cards(date), [], [], hint, bc, prev, no_update
     # CELL view: file checklist + manifest JSON
-    return ([], explorer_file_options(date, cell), [],
-            explorer_detail(date, cell), bc, prev)
+    opts = explorer_file_options(date, cell)
+    checked, consume = [], no_update
+    if autosel:                                        # pre-check the file we jumped in from
+        if autosel in {o["value"] for o in opts}:
+            checked = [autosel]
+        consume = None                                 # one-shot: clear after this render
+    return ([], opts, checked,
+            explorer_detail(date, cell), bc, prev, consume)
 
 
 # ---- explorer rail: sort headers + per-column search rebuild the date rows -----
