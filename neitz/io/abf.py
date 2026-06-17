@@ -14,6 +14,7 @@ plotting side effects. Here a Recording just gives you clean access to channels
 
 from __future__ import annotations
 import os
+import threading
 import numpy as np
 import pyabf
 
@@ -23,6 +24,10 @@ class Recording:
 
     def __init__(self, abf: "pyabf.ABF", path: str):
         self._abf = abf
+        # pyabf.setSweep mutates shared state on the ABF object; serialize setSweep+read so two
+        # threads reading different channels of the same file can't interleave and return (and then
+        # cache) the wrong channel's data. One lock per Recording — different files don't contend.
+        self._lock = threading.Lock()
         self.path = path
         self.fs = float(abf.dataRate)
         self.n_sweeps = int(abf.sweepCount)
@@ -53,12 +58,14 @@ class Recording:
     def channel(self, channel, sweep: int = 0) -> np.ndarray:
         """Return one channel's data (a copy) for a sweep."""
         idx = self.resolve_channel(channel)
-        self._abf.setSweep(sweep, channel=idx)
-        return self._abf.sweepY.copy()
+        with self._lock:                       # setSweep + read must be atomic (see __init__)
+            self._abf.setSweep(sweep, channel=idx)
+            return self._abf.sweepY.copy()
 
     def time(self, sweep: int = 0) -> np.ndarray:
-        self._abf.setSweep(sweep, channel=0)
-        return self._abf.sweepX.copy()
+        with self._lock:
+            self._abf.setSweep(sweep, channel=0)
+            return self._abf.sweepX.copy()
 
     def units(self, channel) -> str:
         return self.channel_units[self.resolve_channel(channel)]
