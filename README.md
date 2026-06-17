@@ -11,24 +11,30 @@ cd /Users/j/Neitz_Analysis_Suite
 python viewer.py            # then open http://127.0.0.1:8050  (Ctrl-C to stop)
 ```
 
-That's the program. The GUI is a left sidebar (controls) + right graphs:
+That's the program. A draggable splitter divides the **left sidebar** (controls) from the
+**right graphs**, and an upper-left switcher flips between the **Analysis View** and the
+**Data Explorer**:
 - **cell(s)** — multi-select one or more `date / cell — label`s (with an inline
-  date / label / type sort); the checked **files** load into the graphs. Set
-  **stimulus type / params + Save metadata** to record what was shown.
-- **▶ Run analysis** — dispatches on the cell's **stimulus type**: `gaussian_noise` →
-  reverse-correlation **STA** (linear filter, from the spike + stimulus CSVs); otherwise the
-  square-wave ON/OFF analysis on the *checked* files. A **run name** keeps variants side by
-  side (blank = auto: `sta` / `flicker`); outputs land in `<cell>/outputs/<name>/`.
-- **📂 Data explorer** — browse the store by date → cell thumbnails (waveform + latest
-  output) → files; click to enlarge raw traces and figures; **Import data** new recordings;
-  delete a whole day (🗑 by each date), selected files, or a figure (a confirmation
-  warning; trashed reversibly). **⤓ Backup mirror**
-  copies the store to Google Drive.
-- **Graphs**: signal + per-file frame-sync (adjustable **stagger %**), a spike-train
-  **power** spectrum (`W = 2·|X[k]|²/N²`), and an **ISI histogram**; live spike detection
-  (polarity, k·MAD / absolute / floor, with per-trace thresholds), an editable analysis
-  **region** (start / end, optional **crop**), and a **spike-train** view — all floated as
-  controls on the graphs.
+  date / label / type sort); the checked **files** load into the graphs.
+- **▶ Run analysis** — dispatches on the cell's **stimulus type** (set in the Explorer):
+  `gaussian_noise` → reverse-correlation **STA** (linear filter, from the spike + stimulus
+  CSVs); otherwise the square-wave ON/OFF analysis on the *checked* files. A **run name**
+  keeps variants side by side (blank = auto: `sta` / `flicker`); outputs → `<cell>/outputs/<name>/`.
+- **Channels & spike detection** — signal / TTL channel, **polarity** (neg/pos/abs), and
+  the **spike-detect algorithm**: `k·MAD`, `absolute`, `k·MAD ≥ floor`, or
+  **MATLAB (Sara)** (a faithful port of `spikeDetectorOnline.m`: 500 Hz high-pass, max/3
+  threshold, 4σ noise gate). The absolute-threshold methods show a wrapping grid of
+  per-trace boxes, each with its own **auto** button, plus a global **sync**.
+- **Data Explorer** (dark, full-screen) — a resizable, sortable/searchable **rail** of
+  dates → cell thumbnails → files; the right pane **edits cell metadata** (type, stimulus
+  type+params, notes) and **Saves** it, above read-only recording facts + output figures
+  (click to enlarge, 🗑 to delete) + the raw manifest. **Import data** and **Backup mirror**
+  live in the rail's bottom panel; **Open selected in viewer** (with a delete) appears when
+  files are checked. Deletes are confirmation-warned and trashed reversibly.
+- **Graphs**: signal + per-file frame-sync (adjustable **stagger %**, auto-fits), a
+  spike-train **power** spectrum (`W = 2·|X[k]|²/N²`), and an **ISI histogram**; live spike
+  detection, an editable analysis **region** (start / end, optional **crop**), and a
+  **spike-train** view — controls floated on the graphs; mouse-wheel for fine zoom.
 
 First time only (installs the package, the `neitz` command, and Dash):
 ```bash
@@ -93,7 +99,7 @@ res = run_cell_flicker(ds, "2026-06-02", "c01")     # writes outputs into the ce
 ```
 
 - `io/` — `Recording` (abf), `CsvSpikeRecording`, `load_recording`, `csv` loaders, `save_figure` (PNG/PDF/SVG).
-- `spikes.py` — `detect_spikes` (`mad`, `abs`, `mad_floor = max(k·MAD, floor)`).
+- `spikes.py` — `detect_spikes` (`mad`, `abs`, `mad_floor = max(k·MAD, floor)`, `matlab` = Sara's `spikeDetectorOnline.m`).
 - `analysis/` — `revcorr` (STA/linear filter), `flicker` (PSTH, vector strength, shift test), `strf` (checkerboard).
 - `stimulus/` — `NoiseParadigm`, `FlickerParadigm`, `CheckerboardParadigm`.
 - `dataio/` — `DataStore`, `CellManifest`, mirror.    `run.py` — orchestration + `Result`.

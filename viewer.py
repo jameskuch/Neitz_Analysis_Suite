@@ -904,17 +904,12 @@ app.layout = html.Div(
             # HIDDEN as the carrier of the shared (synced) value that mirrors into the boxes.
             dcc.Input(id="absth", type="number", value=20, debounce=True,
                       style={"display": "none"}, **PERSIST),
-            # sync toggle + auto-abs button on one row (button to the right of the toggle)
-            html.Div([
-                dcc.Checklist(id="absth-sync",
-                              options=[{"label": " sync abs — use one threshold for all traces",
-                                        "value": "sync"}],
-                              value=["sync"], labelStyle={"fontSize": "11px"},
-                              style={"flex": "1", "minWidth": 0}, **PERSIST),
-                html.Button("🎯 auto abs (per trace)", id="auto-absth", n_clicks=0,
-                            style={"fontSize": "11px", "flex": "0 0 auto", "marginLeft": "8px",
-                                   "whiteSpace": "nowrap"}),
-            ], style={"display": "flex", "alignItems": "center", "marginTop": "6px"}),
+            # sync toggle (per-box "auto" buttons in the grid below replace the old global one)
+            dcc.Checklist(id="absth-sync",
+                          options=[{"label": " sync abs — use one threshold for all traces",
+                                    "value": "sync"}],
+                          value=["sync"], labelStyle={"fontSize": "11px"},
+                          style={"marginTop": "6px"}, **PERSIST),
             html.Div(id="absth-editor", style={"display": "none", "marginTop": "4px"}),
             html.Div(id="absth-msg", style={"fontSize": "10px", "color": "#666",
                                             "marginTop": "3px", "wordBreak": "break-all"}),
@@ -1492,43 +1487,6 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     return time_fig, fft_fig, isi_fig, readout
 
 
-# ---- auto absolute threshold: seed one value PER TRACE (k·MAD of each file) ----
-@app.callback(Output("absth-seed", "data"), Output("absth-sync", "value"),
-              Output("method", "value", allow_duplicate=True), Output("absth-msg", "children"),
-              Input("auto-absth", "n_clicks"),
-              State("file", "value"), State("chan", "value"), State("k", "value"),
-              State("method", "value"), State("polarity", "value"), prevent_initial_call=True)
-def auto_absth(_n, files, chan, k, method, polarity):
-    from neitz.spikes import _highpass_fft, HIGHPASS_SPIKES_HZ
-    files = [f for f in (files or []) if f and loadable(f)]
-    if not files or not chan:
-        return no_update, no_update, no_update, "select file(s) + a signal channel first"
-    seed, bits = {}, []
-    for path in files:
-        try:
-            y = get_channel(path, chan)
-            if method == "matlab":                       # the MATLAB technique's max/3 default
-                tr = _highpass_fft(y, get_recording(path).fs, HIGHPASS_SPIKES_HZ)
-                tr = tr - np.median(tr)
-                if polarity == "neg":
-                    tr = -tr
-                elif polarity == "abs":
-                    tr = np.abs(tr)
-                seed[path] = round(float(np.max(tr)) / 3.0, 2)
-            else:                                        # k·MAD of each file
-                sigma = float(np.median(np.abs(y - np.median(y))) * 1.4826)
-                seed[path] = round(float(k) * sigma, 2)
-            bits.append(f"{os.path.basename(path)}={seed[path]:g}")
-        except Exception:
-            pass
-    if not seed:
-        return no_update, no_update, no_update, "could not compute thresholds"
-    # keep the method if it already uses abs thresholds; else nudge plain k·MAD → absolute
-    new_method = method if method in ("abs", "mad_floor", "matlab") else "abs"
-    label = "max/3 per trace" if method == "matlab" else "k·MAD per trace"
-    return seed, [], new_method, f"auto abs ({label}) → " + ", ".join(bits)
-
-
 # ---- auto-seed the per-trace abs boxes with the MATLAB max/3 default the moment MATLAB is
 #      selected (or files/polarity change) — no need to click the auto-abs button -------------
 @app.callback(Output("absth-seed", "data", allow_duplicate=True),
@@ -1566,22 +1524,22 @@ def seed_matlab_threshold(method, files, polarity, chan):
 #      its value is mirrored into the rest) ----------------------------------------------
 # ---- enable/disable controls that aren't relevant to the chosen detection method --------
 @app.callback(Output("k", "disabled"), Output("k-wrap", "style"), Output("refr", "disabled"),
-              Output("auto-absth", "disabled"), Output("polarity", "options"),
+              Output("polarity", "options"),
               Output("absth-sync", "options"), Output("method-note", "children"),
               Input("method", "value"))
 def toggle_controls(method):
-    abs_on = method in ("abs", "mad_floor", "matlab")  # absolute thresholds are used
     k_off = method in ("abs", "matlab")                # k·MAD not used
+    abs_on = method in ("abs", "mad_floor", "matlab")  # absolute thresholds are used
     # dcc.Slider's `disabled` has no visible effect in this Dash build, so grey the wrapper
     k_style = {"flex": "1", "minWidth": 0, "opacity": (0.4 if k_off else 1),
                "pointerEvents": ("none" if k_off else "auto")}
     pol = [{"label": p, "value": p} for p in ("neg", "pos", "abs")]   # polarity used by all methods
     sync = [{"label": " sync abs — use one threshold for all traces", "value": "sync",
              "disabled": not abs_on}]
-    note = ("MATLAB (Sara): polarity sets orientation; the abs boxes set the threshold "
-            "(click ‘auto abs’ for the max/3 default); k & refractory are not used."
+    note = ("MATLAB (Sara): polarity sets orientation; the per-box ‘auto’ fills the max/3 "
+            "default; k & refractory are not used."
             if method == "matlab" else "")
-    return k_off, k_style, (method == "matlab"), (not abs_on), pol, sync, note
+    return k_off, k_style, (method == "matlab"), pol, sync, note
 
 
 # ---- build the per-trace abs-threshold grid (ALWAYS shown; one box per on-graph trace,

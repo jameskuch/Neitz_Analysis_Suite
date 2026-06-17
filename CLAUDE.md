@@ -29,7 +29,8 @@ productive immediately. Keep it current when the architecture changes.
 neitz/                         tested core (no GUI deps)
   io/      abf.py (Recording), csv.py (CsvSpikeRecording + siso loaders), figures.py (save PNG/PDF/SVG)
            io/__init__.py: load_recording(path) dispatches .abf vs .csv
-  spikes.py                    detect_spikes(signal, fs, polarity, method='mad'|'abs'|'mad_floor', k, abs_threshold, refractory_s) -> SpikeTrain
+  spikes.py                    detect_spikes(signal, fs, polarity, method='mad'|'abs'|'mad_floor'|'matlab', k, abs_threshold, refractory_s)
+                               'matlab' = detect_spikes_matlab = Sara's spikeDetectorOnline.m (500 Hz HP, max/3 threshold, 4σ noise gate; respects polarity)
   analysis/  revcorr.py (reverse_correlation, average_filter, normalize_filter 'max'|'std'),
              flicker.py (detect_flicker, cycle/transition PSTH, vector_strength, shift_test),
              strf.py (spatiotemporal reverse correlation)
@@ -96,8 +97,13 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   for data compatibility. Don't rename the internals.
 - **Spike power graph** uses the explicit FFT formula `W = 2·|X[k]|² / N²` (single-sided,
   R=1Ω), NOT a Welch PSD — the user specifically wanted this. See `power_w()`.
-- **Per-trace abs thresholds**: a "sync" checkbox (one value for all) vs a per-trace editor;
-  "auto abs" seeds each trace's `k·MAD` and keeps `mad_floor` if already selected.
+- **Per-trace abs thresholds** (methods `abs`/`mad_floor`/`matlab`): a "sync" checkbox (one value
+  for all, mirrored through the hidden `#absth` carrier) over an always-shown wrapping grid of
+  per-trace boxes, EACH with its own **"auto"** button (max/3 for `matlab`, k·MAD otherwise;
+  synced → only the first auto is active and it fills every box). The old global "auto abs"
+  button was removed as redundant. For `matlab`, selecting it auto-seeds the boxes with max/3.
+- **MATLAB (Sara) detection** respects polarity (neg flips / pos as-is / abs rectifies) and uses
+  the abs boxes as its threshold (max/3 default); k & refractory are not used (greyed).
 - **Deletes** (Data Explorer): a 🗑 on each date (whole day), a 🗑 under the checked files,
   and a 🗑 on each output figure — each pops a **confirmation-warning** modal (no password).
   Items are MOVED to a reversible `.trash/` inside the store (`<date>_<cell>/` for files,
@@ -117,17 +123,32 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 
 ## GUI structure (viewer.py)
 
-- Two-column flex shell: **left sidebar 20%** (collapsible `<details>` cards: Data store,
-  Channels & spike detection, Cell outputs) + **right 80%** graphs (signal+frame-sync on top,
-  FFT-power | ISI-histogram on the bottom).
-- The region/display controls are **overlays floated onto the graphs** (start top-left, end +
-  a `crop` checkbox top-right, hide-spikes/spike-train bottom-right, stagger% just above the
-  frame-sync x-axis, bin inside the ISI), via the `ov()` helper, positioned below the Plotly
-  toolbar. Compact `_OVI` textboxes.
-- **Data Explorer** pop-out (`📂`): dates rail → cell thumbnail cards (waveform + latest output)
-  → file checklist (middle) + detail/JSON/preview (right, split 75/25). Import lives here.
-  Escape closes the image pop-out first, then the explorer (clientside keydown handler).
+- Two-column flex shell with a **draggable splitter** (`#splitter`, `assets/splitter.js`,
+  width persisted as a window fraction): **left sidebar** (collapsible `<details>` cards: Data
+  store, Channels & spike detection, Cell outputs) + **right graphs** (signal+frame-sync on top,
+  FFT-power | ISI-histogram on the bottom). An upper-left `nav_toggle()` switcher flips between
+  **Analysis View** and the **Data Explorer** (same widget in both; the inactive side is the
+  clickable target, with a hover glow).
+- Channels card: signal/TTL dropdowns, then **polarity | spike-detect algorithm** side by side
+  (a `<hr>` above them), the k·MAD slider with **refractory** beside it, and the per-trace
+  abs-threshold grid (see conventions). The region/display controls are **overlays floated onto
+  the graphs** via `ov()` (start/end + `crop`, hide-spikes/spike-train, stagger%, ISI bin).
+- The time graph re-renders detail on zoom (relayout); **scrollZoom** enables fine zooming, and
+  the frame-sync y-axis re-autoranges on stagger via a per-axis `uirevision`.
+- **Data Explorer** (`#explorer-modal`, full-screen, all-dark): a **resizable** sortable/
+  searchable **rail** of dates (`#exp-rail`; column widths are CSS vars `--rc1/2/3` driven by
+  drag handles in `assets/rail-resize.js`, persisted; a dead spacer + fixed trash) with a
+  centered `date ← cell` **back** row on top and an **Import / Backup mirror** bottom panel ·
+  **middle** = cell thumbnails / file tiles over a hover-preview, with a bottom action bar
+  (**delete + Open selected**, shown only when files are checked) · **right** (`#exp-rightpane`)
+  = **editable cell metadata** (type / stimulus type+params / notes) + **Save metadata**, over
+  read-only recording facts + output figures (🗑 to delete) + a collapsible raw-manifest JSON.
+  Metadata editing lives ONLY here now (not the sidebar). Escape closes the image pop-out first,
+  then the explorer.
 - Waveform sparklines / big waveforms are matplotlib-Agg PNG data-URIs, cached by mtime.
+- Responsive: CSS `zoom` media-queries scale the whole UI on smaller windows (root height
+  counter-scaled). Dash 4.2 renders checklist/radio/dropdown options as `.dash-options-list-option`
+  — alignment/colors are set on those classes (labelStyle is ignored); see `assets/viewer.css`.
 
 ## How to work here
 
