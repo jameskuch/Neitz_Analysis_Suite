@@ -843,7 +843,8 @@ def nav_toggle(active, dark=False):
     de = pill("Data Explorer", "de", active == "explorer", "open-explorer")
     return html.Div([av, de], style={"display": "flex", "justifyContent": "space-between",
                                      "alignItems": "center", "width": "100%",
-                                     "gap": "12px", "flexWrap": "wrap"})
+                                     "gap": "12px", "flexWrap": "wrap",
+                                     "marginTop": "16px"})   # lower the row (room above for the gradient)
 
 app.layout = html.Div(
     style={"fontFamily": "sans-serif", "display": "flex", "gap": "10px",

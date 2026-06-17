@@ -70,25 +70,36 @@ html, body { margin: 0; }
     padding: 19px 26px;            /* taller row (~1.5×) + room so the gradient isn't cut off */
     border-radius: 13px;
 }
+/* The gradient is an ANISOTROPIC rounded radial behind the text: WIDE horizontal fade (lights the
+   whole label) but a SHORT vertical fade (top & bottom fade quickly). inset:0 keeps it INSIDE the
+   pill so it never bleeds above the pill and gets clipped by the top boundary. */
 .nav-pill::before {
     content: "";
     position: absolute;
     z-index: -1;
-    inset: 16% 8%;                 /* rounded-rect gradient behind the text (wider + taller now) */
+    inset: 0;
     border-radius: 12px;
-    filter: blur(8px);             /* feathered edges → fade into the bg, never clipped */
-    transition: inset .25s ease;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 100% 100%;     /* active view: full-strength gradient (fades slowly) */
+    transition: background-size .25s ease;
 }
-.nav-pill:hover::before { inset: 9% 4%; }          /* bloom a little on hover */
-
 .nav-av { color: #3a2c00; }                                                  /* dark text */
-.nav-av::before { background: linear-gradient(135deg, rgba(255,236,150,1), rgba(255,212,100,1)); }
+.nav-av::before { background-image: radial-gradient(ellipse 58% 33% at center,
+    rgba(255,224,120,1) 0%, rgba(255,224,120,0.95) 54%, rgba(255,224,120,0) 84%); }
 .nav-de { color: #eef2ff; }                                                  /* light text */
-.nav-de::before { inset: 16% 5%;                                             /* wider — light the whole label */
-    background: linear-gradient(135deg, #28406f, #355aa3); }
+.nav-de::before { background-image: radial-gradient(ellipse 60% 35% at center,
+    #3a60ab 0%, #2f4f9a 54%, rgba(47,79,154,0) 84%); }
+/* the NON-active (clickable) view: a smaller gradient that fades to the background FASTER */
+.nav-clickable::before { background-size: 80% 76%; }
+.nav-clickable:hover::before { background-size: 95% 90%; }     /* bloom a little on hover */
 .nav-clickable { cursor: pointer; }
-.nav-av.nav-sel { text-shadow: 0 0 13px rgba(245,196,0,0.95), 0 0 5px rgba(245,196,0,0.8); }
-.nav-de.nav-sel { text-shadow: 0 0 13px rgba(95,150,255,0.97), 0 0 5px rgba(135,178,255,0.85); }   /* grows on hover, but gently */
+/* the active view keeps its inner text glow AND gets a simple underline */
+.nav-sel { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; }
+.nav-av.nav-sel { text-shadow: 0 0 13px rgba(245,196,0,0.95), 0 0 5px rgba(245,196,0,0.8);
+    text-decoration-color: rgba(120,85,0,0.85); }
+.nav-de.nav-sel { text-shadow: 0 0 13px rgba(95,150,255,0.97), 0 0 5px rgba(135,178,255,0.85);
+    text-decoration-color: rgba(175,205,255,0.95); }
 
 /* The drag-to-zoom box dims everything outside the selection with a 40%-black overlay; since the
    x-only zoom selection is a thin full-height band, that darkened most of the graph. Soften it to a
