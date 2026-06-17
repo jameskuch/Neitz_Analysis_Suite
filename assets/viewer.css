@@ -62,6 +62,11 @@ html, body { margin: 0; }
 }
 .nav-oval:hover { background-size: 100% 118%; }   /* grows on hover, but gently */
 
+/* The drag-to-zoom box dims everything outside the selection with a 40%-black overlay; since the
+   x-only zoom selection is a thin full-height band, that darkened most of the graph. Soften it to a
+   faint blue tint so the drag region reads clearly without darkening the whole plot. */
+.zoombox { fill: rgba(90, 130, 255, 0.10) !important; }
+
 /* Sidebar | graphs splitter (drag handle) — see assets/splitter.js */
 #splitter:hover, #splitter:active { background: #9aa0c8 !important; }
 
