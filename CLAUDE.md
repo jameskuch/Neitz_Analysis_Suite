@@ -109,9 +109,21 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 - **MATLAB (Sara) detection** respects polarity (neg flips / pos as-is / abs rectifies) and uses
   the abs boxes as its threshold (max/3 default); k & refractory are not used (greyed).
 - **Deletes** (Data Explorer): a 🗑 on each date (whole day), a 🗑 under the checked files,
-  and a 🗑 on each output figure — each pops a **confirmation-warning** modal (no password).
-  Items are MOVED to a reversible `.trash/` inside the store (`<date>_<cell>/` for files,
-  `<date>_ALL/` for a whole day), not unlinked. `delete_files` / `delete_date` helpers.
+  a 🗑 on each output figure, AND a per-figure **select checkbox** (`out-check`, pattern id) + a
+  **🗑 Delete selected** button (`del-outputs`) for multi-deleting figures at once — each pops a
+  **confirmation-warning** modal (no password; `open_delete` builds the target list, all share
+  `confirm_delete`). Items are MOVED to a reversible `.trash/` inside the store (`<date>_<cell>/`
+  for files, `<date>_ALL/` for a whole day), not unlinked. `delete_files` / `delete_date` helpers.
+  (`del-outputs` is created dynamically by `explorer_detail`, so the app sets
+  `suppress_callback_exceptions=True`.)
+- **Returning to the Analysis View re-syncs it** (`resync_on_close` on `exp-close`): rebuilds the
+  `#file` options/value (existing files only, so anything deleted in the Explorer drops out),
+  refreshes `sel-cell`, and bumps `gallery-trigger` — so Explorer deletions take effect WITHOUT a
+  browser refresh and a subsequent Run no longer silently no-ops on a now-deleted file. `pick_cell`
+  and `resync_on_close` share the `_cell_files(vals)` helper.
+- **Run Analysis feedback**: `#store-msg` is wrapped in `dcc.Loading` (spinner during the run), and
+  a clientside callback shows an instant "⏳ Running analysis…" the moment the button is clicked
+  (the server callback — analysis + 4K kaleido exports — can take ~30–60 s).
 - **Some Sara CSVs aren't time-series** (e.g. `siso-DLP.csv` has a phase label in col 0).
   `CsvSpikeRecording` raises on those; the viewer's `loadable()` filters them and prefers
   spike-train CSVs. Don't "fix" by forcing them open.

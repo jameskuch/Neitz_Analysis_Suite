@@ -133,6 +133,11 @@ html, body { margin: 0; }
     background: #15151d !important; color: #e3e9ff !important; border-color: #33333f !important;
 }
 
+/* output-figure multi-select checkbox, overlaid on the thumbnail (Outputs grid) */
+.out-check { background: rgba(255,255,255,0.9); border: 1px solid #888; border-radius: 3px;
+             padding: 0 2px; line-height: 1; }
+.out-check input { cursor: pointer; width: 15px; height: 15px; }
+
 /* Data Explorer rail column resize handles */
 .rail-rz:hover, .rail-rz:active { background: #4a4a66; }
 

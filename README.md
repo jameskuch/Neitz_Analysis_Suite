@@ -26,7 +26,8 @@ That's the program. A draggable splitter divides the **left sidebar** (controls)
   window size): the full window, the spike-train power graph, an analog panel (color signal +
   spikes / B&W without spikes / color frame-syncs), and the frame-syncs separated per file. A
   lighter **PNG preview** of each is saved too, so they appear (click-to-enlarge) in the Explorer's
-  Outputs grid alongside the analysis figures.
+  Outputs grid alongside the analysis figures. A spinner + an "⏳ Running analysis…" message show
+  while it works (the 4K exports add ~30–60 s).
 - **Channels & spike detection** — signal / TTL channel, **polarity** (neg/pos/abs), and
   the **spike-detect algorithm**: `k·MAD`, `absolute`, `k·MAD ≥ floor`, or
   **MATLAB (Sara)** (a faithful port of `spikeDetectorOnline.m`: 500 Hz high-pass, max/3
@@ -37,9 +38,12 @@ That's the program. A draggable splitter divides the **left sidebar** (controls)
   type+params, notes) and **Saves** it, above read-only recording facts + output figures
   (click to enlarge, 🗑 to delete) + the raw manifest. **Import data** and **Backup mirror**
   live in the rail's bottom panel; **Open selected in viewer** (with a delete) appears when
-  files are checked. Deletes are confirmation-warned and trashed reversibly. Switching here from
-  the Analysis View with exactly **one file checked** jumps straight to that file's cell and
-  pre-selects it. (The view switcher uses a thick ➤ arrow in an oval that grows on hover.)
+  files are checked. Output figures can be deleted one at a time (🗑) or **multi-selected** (a
+  checkbox per figure + **Delete selected**). Deletes are confirmation-warned and trashed
+  reversibly. Switching here from the Analysis View with exactly **one file checked** jumps
+  straight to that file's cell and pre-selects it; switching **back** re-syncs the Analysis View
+  (files + output gallery) so Explorer deletions take effect without a browser refresh. (The view
+  switcher uses a thick ➤ arrow in an oval that grows on hover.)
 - **Graphs**: signal + per-file frame-sync (adjustable **stagger %**, auto-fits), a
   spike-train **power** spectrum (`W = 2·|X[k]|²/N²`), and an **ISI histogram**; live spike
   detection, an editable analysis **region** (start / end, optional **crop**), and a

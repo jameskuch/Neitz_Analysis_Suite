@@ -676,6 +676,10 @@ def explorer_detail(date, cell):
                                         "whiteSpace": "nowrap", "maxWidth": "160px"}),
                        caption[0]]
         out_thumbs.append(html.Div([
+            dcc.Checklist(id={"type": "out-check", "src": str(p)},      # select for multi-delete
+                          options=[{"label": "", "value": str(p)}], value=[],
+                          className="out-check",
+                          style={"position": "absolute", "top": "3px", "left": "3px", "zIndex": 3}),
             html.Img(src=_img_datauri(str(p)), className="gprev",
                      id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
                      **{"data-ps": "img|" + str(p)},
@@ -688,15 +692,22 @@ def explorer_detail(date, cell):
                             style={"fontSize": "15px", "padding": "0 4px", "color": "#ff7a7a",
                                    "border": "none", "background": "none", "cursor": "pointer"}),
             ], style={"display": "flex", "alignItems": "center", "maxWidth": "180px"}),
-        ], style={"margin": "3px"}))
+        ], style={"margin": "3px", "position": "relative"}))
 
     return [
         html.Div("Recording facts — read from the files",
                  style={"fontWeight": "bold", "fontSize": "13px", "color": "#555",
                         "marginTop": "4px"}),
         facts,
-        html.Div("Outputs (click to enlarge · 🗑 to delete)",
-                 style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
+        html.Div([
+            html.Span("Outputs (click to enlarge · ☑ + button or 🗑 to delete)",
+                      style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
+            html.Button("🗑 Delete selected", id="del-outputs", n_clicks=0,
+                        style={"marginLeft": "10px", "fontSize": "11px", "padding": "1px 8px",
+                               "color": "#ff7a7a", "background": "#2f3142",
+                               "border": "1px solid #555", "borderRadius": "4px", "cursor": "pointer"})
+            if out_thumbs else None,
+        ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
         html.Div(out_thumbs or [html.Span("none yet", style={"color": "#999", "fontSize": "13px"})],
                  style={"display": "flex", "flexWrap": "wrap", "marginBottom": "8px"}),
         html.Details([
@@ -771,7 +782,8 @@ _DEL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
 # ============================================================
 # App
 # ============================================================
-app = Dash(__name__)
+app = Dash(__name__, suppress_callback_exceptions=True)   # detail-pane buttons (e.g. del-outputs)
+                                                          # are created dynamically by explorer_detail
 app.title = "Neitz ABF Viewer"
 _files = discover_abf()
 
@@ -873,8 +885,10 @@ app.layout = html.Div(
                                 placeholder="auto (sq wave / sta)",
                                 style={"width": "100%", "boxSizing": "border-box"})],
                      style={"marginTop": "6px"}),
-            html.Div(id="store-msg", style={"fontSize": "11px", "color": "#070",
-                                            "marginTop": "6px"}),
+            dcc.Loading(type="dot", color="#3367d6", parent_style={"marginTop": "6px"},
+                        children=html.Div(id="store-msg",
+                                          style={"fontSize": "11px", "color": "#070",
+                                                 "minHeight": "14px"})),
         ]),
 
         # ---- compartment: channels & spike detection ----
@@ -1792,15 +1806,11 @@ def collect_absth(_vals, sync, _files):
 
 
 # ---- data store: pick a cell -> load its recordings + prefill stimulus -------
-@app.callback(Output("file", "options", allow_duplicate=True),
-              Output("file", "value", allow_duplicate=True),
-              Output("sel-cell", "data"), Output("recent-cells", "data"),
-              Input("cell-select", "value"), State("recent-cells", "data"),
-              State("last-session", "data"), prevent_initial_call=True)
-def pick_cell(vals, recent, sess):
+def _cell_files(vals):
+    """(file options, default-checked, sel-cell list, set of existing files) for date|cell value(s).
+    Only files that still exist on disk are listed — so it also drops anything deleted in the
+    Explorer."""
     vals = vals if isinstance(vals, list) else ([vals] if vals else [])
-    if not vals:
-        return no_update, no_update, [], no_update
     ds = DataStore()
     opts, checked, sel_list, seen = [], [], [], set()
     for v in vals:
@@ -1813,6 +1823,19 @@ def pick_cell(vals, recent, sess):
                 seen.add(p)
                 opts.append({"label": " " + os.path.basename(p), "value": p})
         checked += default
+    return opts, checked, sel_list, seen
+
+
+@app.callback(Output("file", "options", allow_duplicate=True),
+              Output("file", "value", allow_duplicate=True),
+              Output("sel-cell", "data"), Output("recent-cells", "data"),
+              Input("cell-select", "value"), State("recent-cells", "data"),
+              State("last-session", "data"), prevent_initial_call=True)
+def pick_cell(vals, recent, sess):
+    vals = vals if isinstance(vals, list) else ([vals] if vals else [])
+    if not vals:
+        return no_update, no_update, [], no_update
+    opts, checked, sel_list, seen = _cell_files(vals)
     # restore the exact files last worked on, if they belong to this selection (resume on reload)
     sess_files = [f for f in ((sess or {}).get("files") or []) if f in seen]
     if sess_files:
@@ -1820,6 +1843,24 @@ def pick_cell(vals, recent, sess):
     recent = [x for x in (recent or []) if x not in vals]        # most-recent-first, de-duped
     recent = list(vals) + recent
     return opts, checked, sel_list, recent[:50]
+
+
+# ---- returning to the Analysis View: re-sync its files + output gallery with the store, so
+#      deletions made in the Explorer take effect WITHOUT a browser refresh (and a run won't
+#      reference a now-deleted file). -----------------------------------------------------------
+@app.callback(Output("file", "options", allow_duplicate=True),
+              Output("file", "value", allow_duplicate=True),
+              Output("sel-cell", "data", allow_duplicate=True),
+              Output("gallery-trigger", "data", allow_duplicate=True),
+              Input("exp-close", "n_clicks"),
+              State("cell-select", "value"), State("file", "value"),
+              prevent_initial_call=True)
+def resync_on_close(_n, vals, checked):
+    if not _n or not vals:
+        return no_update, no_update, no_update, no_update
+    opts, default, sel_list, seen = _cell_files(vals)
+    keep = [f for f in (checked or []) if f in seen]    # drop files deleted in the Explorer
+    return opts, (keep or default), sel_list, (_n or 0) + 1
 
 
 # ---- persist the working session (cell + checked files) and auto-load it on startup --
@@ -1975,6 +2016,15 @@ def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth
         except Exception as e:
             msgs.append(f"{tag}: error {e}")
     return "ran → " + "  |  ".join(msgs) + "  (outputs saved; see gallery)", (_n or 1)
+
+
+# instant feedback the moment "Run analysis" is clicked (the server run_cell — analysis + 4K
+# kaleido exports — can take ~30-60s; the dcc.Loading spinner around #store-msg also spins).
+app.clientside_callback(
+    "function(n){ return n ? '⏳ Running analysis… computing + writing 4K exports "
+    "(this can take ~30–60 s — please wait)' : window.dash_clientside.no_update; }",
+    Output("store-msg", "children", allow_duplicate=True),
+    Input("run-cell", "n_clicks"), prevent_initial_call=True)
 
 
 # ---- output-image gallery for the selected cell + full-screen pop-out --------
@@ -2251,12 +2301,22 @@ def del_files_button(sel):
               Output("del-list", "children"),
               Input({"type": "del-date", "date": ALL}, "n_clicks"),
               Input({"type": "del-output", "src": ALL}, "n_clicks"),
-              Input("del-files", "n_clicks"),
+              Input("del-files", "n_clicks"), Input("del-outputs", "n_clicks"),
               State("exp-files", "value"), State("exp-date", "data"), State("exp-cell", "data"),
+              State({"type": "out-check", "src": ALL}, "value"),
               prevent_initial_call=True)
-def open_delete(_ddates, _douts, _dfiles, sel, date, cell):
+def open_delete(_ddates, _douts, _dfiles, _dmulti, sel, date, cell, out_checks):
     trig = ctx.triggered_id
     fired = bool(ctx.triggered and ctx.triggered[0].get("value"))
+    if trig == "del-outputs":                                           # multiple checked figures
+        checked = [v[0] for v in (out_checks or []) if v]               # each box is [] or [path]
+        if not fired or not checked:
+            return (no_update,) * 3
+        paths = sorted({str(x) for src in checked for x in Path(src).parent.glob(Path(src).stem + ".*")})
+        lst = [html.Div(f"{len(checked)} selected figure(s) (+ same-name pdf/svg/png):",
+                        style={"fontWeight": "bold", "color": "#b00"})] \
+            + [html.Div(os.path.basename(x)) for x in paths]
+        return _DEL_SHOWN, {"date": date, "cell": cell, "paths": paths}, lst
     if isinstance(trig, dict) and trig.get("type") == "del-date":       # a whole day
         if not fired:
             return (no_update,) * 3
