@@ -130,6 +130,14 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   background worker spawns from `viewer.py` import, so module-level code must stay import-safe.
 - **Output thumbnails**: 64px in the Explorer detail pane (`explorer_detail`); the Analysis-View
   "Cell outputs" gallery (`output_gallery`) is a separate 150px grid.
+- **Auto-refresh via polling** (`poll_refresh`, a 3 s `dcc.Interval`): diffs a cheap on-disk
+  fingerprint of the selected cell(s) (`_store_fingerprint` — #output PNGs + newest mtime, and the
+  raw-file set). When outputs change (a finished Run Analysis, or a figure deleted in the Explorer)
+  it bumps `gallery-trigger`; when the raw-file set changes (files deleted in the Explorer) it
+  refreshes the `#file` checklist. This force-refreshes the Analysis View **without** relying on the
+  background callback's result reaching the browser or on navigation — and makes outputs appear
+  progressively *during* a run. `_img_datauri` is mtime-cached so the repeated gallery rebuilds are
+  cheap. (Complements `resync_on_close`, which still syncs on the explicit Explorer→Analysis click.)
 - **Some Sara CSVs aren't time-series** (e.g. `siso-DLP.csv` has a phase label in col 0).
   `CsvSpikeRecording` raises on those; the viewer's `loadable()` filters them and prefers
   spike-train CSVs. Don't "fix" by forcing them open.

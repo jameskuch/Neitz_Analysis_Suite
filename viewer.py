@@ -279,9 +279,23 @@ def cell_default_files(cm):
     return files, (spikes or openable)
 
 
+_IMG_CACHE: dict = {}                                  # (path, mtime) -> data-URI (poll re-renders cheaply)
+
+
 def _img_datauri(path):
-    with open(path, "rb") as f:
-        return "data:image/png;base64," + base64.b64encode(f.read()).decode()
+    try:
+        mt = os.path.getmtime(str(path))
+    except OSError:
+        mt = 0
+    key = (str(path), mt)
+    uri = _IMG_CACHE.get(key)
+    if uri is None:
+        with open(path, "rb") as f:
+            uri = "data:image/png;base64," + base64.b64encode(f.read()).decode()
+        if len(_IMG_CACHE) > 300:
+            _IMG_CACHE.clear()
+        _IMG_CACHE[key] = uri
+    return uri
 
 
 def output_gallery(date, cell):
@@ -1045,6 +1059,8 @@ app.layout = html.Div(
     dcc.Store(id="last-session", storage_type="local"),   # last cell + checked files (auto-loaded on startup)
     dcc.Store(id="rail-sort", data={"col": "date", "dir": "desc"}),   # explorer rail sort
     dcc.Store(id="store-rev", data=0),                    # bumped when the store changes (rail refresh)
+    dcc.Store(id="store-fp"),                             # last-seen fingerprint of the selected cell(s)
+    dcc.Interval(id="poll", interval=3000),               # watches disk -> auto-refresh Analysis View
     dcc.Store(id="exp-date"),                             # explorer: selected date
     dcc.Store(id="exp-cell"),                             # explorer: selected cell (within date)
     dcc.Store(id="exp-autosel"),                          # explorer: file path to auto-check on open
@@ -1966,6 +1982,59 @@ def resync_on_close(_n, vals, checked):
     opts, default, sel_list, seen = _cell_files(vals)
     keep = [f for f in (checked or []) if f in seen]    # drop files deleted in the Explorer
     return opts, (keep or default), sel_list, (_n or 0) + 1
+
+
+def _store_fingerprint(vals):
+    """Cheap signature of the selected cell(s) on disk: (#output PNGs + newest mtime) and the raw-file
+    set. Lets the poll detect run-completion / Explorer deletions without a callback round-trip."""
+    vals = vals if isinstance(vals, list) else ([vals] if vals else [])
+    ds = DataStore()
+    out, fil = [], []
+    for v in vals:
+        try:
+            date, cell = v.split("|")
+            cm = ds.cell(date, cell)
+            od = cm.dir / "outputs"
+            n, mt = 0, 0.0
+            if od.exists():
+                for p in od.rglob("*.png"):
+                    n += 1
+                    m = p.stat().st_mtime
+                    if m > mt:
+                        mt = m
+            out.append(f"{v}#{n}#{mt:.1f}")
+            files, _ = cell_default_files(cm)
+            fil.append(v + "#" + ":".join(sorted(os.path.basename(f) for f in files)))
+        except Exception:
+            pass
+    return {"out": "|".join(out), "files": "|".join(fil)}
+
+
+# ---- POLL: every 3 s, diff the selected cell(s)' on-disk state. New/changed outputs (a finished
+#      Run Analysis, or a figure deleted in the Explorer) refresh the gallery; a changed raw-file set
+#      (files deleted in the Explorer) refreshes the file checklist. This force-refreshes the Analysis
+#      View automatically, independent of background-callback delivery or navigation. ----------------
+@app.callback(Output("gallery-trigger", "data", allow_duplicate=True),
+              Output("file", "options", allow_duplicate=True),
+              Output("file", "value", allow_duplicate=True),
+              Output("store-fp", "data"),
+              Input("poll", "n_intervals"),
+              State("cell-select", "value"), State("file", "value"), State("store-fp", "data"),
+              prevent_initial_call=True)
+def poll_refresh(_n, vals, checked, prev):
+    if not vals:
+        return no_update, no_update, no_update, no_update
+    fp = _store_fingerprint(vals)
+    if not prev:                                        # first tick: establish baseline, no refresh
+        return no_update, no_update, no_update, fp
+    if prev.get("out") == fp["out"] and prev.get("files") == fp["files"]:
+        return no_update, no_update, no_update, no_update      # nothing changed
+    gal = ((_n or 0) + 1) if prev.get("out") != fp["out"] else no_update   # outputs changed → gallery
+    if prev.get("files") != fp["files"]:                # raw files changed → refresh the checklist
+        opts, default, _sel, seen = _cell_files(vals)
+        keep = [f for f in (checked or []) if f in seen]
+        return gal, opts, (keep or default), fp
+    return gal, no_update, no_update, fp
 
 
 # ---- persist the working session (cell + checked files) and auto-load it on startup --
