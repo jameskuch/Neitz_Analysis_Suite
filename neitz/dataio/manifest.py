@@ -94,5 +94,12 @@ class CellManifest:
                "files": files, "summary": summary or {}}
         if label and label != analysis:          # the user's friendly run name (folder key is sanitized)
             out["label"] = label
-        self.data["outputs"].append(out)
+        # a re-run of the same analysis OVERWRITES its output folder, so REPLACE the existing
+        # record in place rather than appending (otherwise the manifest accrues stale duplicates).
+        outs = self.data.setdefault("outputs", [])
+        for i, o in enumerate(outs):
+            if o.get("analysis") == analysis:
+                outs[i] = out
+                return out
+        outs.append(out)
         return out
