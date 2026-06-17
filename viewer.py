@@ -723,12 +723,19 @@ def explorer_detail(date, cell):
         html.Div([
             html.Span("Outputs — grouped by analysis (drag to select · ☑ + button or 🗑 to delete)",
                       style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
-            html.Button("🗑 Delete selected", id="del-outputs", n_clicks=0,
+            html.Button("📂 Open in Finder", id="open-outputs-finder", n_clicks=0,
+                        title="reveal the selected figures' location(s) in Finder",
                         style={"marginLeft": "10px", "fontSize": "11px", "padding": "1px 8px",
+                               "color": "#cfe3ff", "background": "#2f3142",
+                               "border": "1px solid #555", "borderRadius": "4px", "cursor": "pointer"})
+            if out_groups else None,
+            html.Button("🗑 Delete selected", id="del-outputs", n_clicks=0,
+                        style={"marginLeft": "6px", "fontSize": "11px", "padding": "1px 8px",
                                "color": "#ff7a7a", "background": "#2f3142",
                                "border": "1px solid #555", "borderRadius": "4px", "cursor": "pointer"})
             if out_groups else None,
-        ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
+            html.Span(id="finder-msg", style={"marginLeft": "8px", "fontSize": "11px", "color": "#7fdc7f"}),
+        ], style={"display": "flex", "alignItems": "center", "gap": "4px", "flexWrap": "wrap"}),
         html.Div(out_groups or [html.Span("none yet", style={"color": "#999", "fontSize": "13px"})],
                  id="exp-outputs-grid", style={"marginBottom": "8px"}),
         html.Details([
@@ -817,36 +824,39 @@ _files = discover_abf()
 
 
 def nav_toggle(active, dark=False):
-    """Upper-left view switcher, identical in both windows: 'Analysis View … Data Explorer'.
-    The current view is emphasized; the other is a faded, clickable 'go to' target with an
-    arrow pointing toward it. The click ids (open-explorer / exp-close) are unchanged, so the
-    toggle_explorer callback keeps working. `dark=True` tints for the dark Explorer header."""
-    emph = {"fontWeight": "bold", "fontSize": "15px",
-            "color": "#e3e9ff" if dark else "#1f2a44"}
-    # the clickable "other view" target sits in an oval radial gradient that fades into its
-    # surroundings: dark page -> dark oval + light text; dark Explorer -> white oval + dark text.
-    # `backgroundImage` (not the `background` shorthand) so the .nav-oval class can size/grow the
-    # gradient's background-size (small at rest, grows on hover).
-    faded = {"fontSize": "15px", "cursor": "pointer", "fontWeight": "bold",
-             "padding": "8px 40px", "borderRadius": "60px", "lineHeight": "1",
-             "color": "#1f2a44" if dark else "#eef2ff",
-             "backgroundImage": ("radial-gradient(ellipse at center, #ffffff 0%, #ffffff 40%, rgba(27,27,36,0) 72%)"
-                                if dark else
-                                "radial-gradient(ellipse at center, #1f2a44 0%, #2b3a5e 38%, rgba(255,255,255,0) 72%)")}
-    arrow = lambda left=False: html.Span("➤", style=({"display": "inline-block",
-                                "transform": "scaleX(-1)"} if left else {}))
-    row = {"display": "flex", "alignItems": "center", "gap": "10px"}
-    if active == "analysis":
-        return html.Div([
-            html.Span("Analysis View", style=emph),
-            html.Span([arrow(), " Data Explorer"], id="open-explorer", n_clicks=0,
-                      className="nav-oval", title="open the Data Explorer", style=faded),
-        ], style=row)
-    return html.Div([
-        html.Span([arrow(left=True), " Analysis View"], id="exp-close", n_clicks=0,
-                  className="nav-oval", title="back to the analysis view", style=faded),
-        html.Span("Data Explorer", style=emph),
-    ], style=row)
+    """Upper view switcher: 'Analysis View' (left) … 'Data Explorer' (right), always both. Each sits
+    in a rounded-rect radial-gradient pill (larger than the text, fades into the surroundings, grows
+    on hover via .nav-oval). The SELECTED view gets an inner text glow (yellow for Analysis, blue for
+    Data Explorer) and isn't clickable; the OTHER view is the clickable target (ids open-explorer /
+    exp-close, unchanged so the toggle callback keeps working)."""
+    base = {"fontSize": "22px", "fontWeight": "bold", "padding": "13px 30px", "borderRadius": "14px",
+            "lineHeight": "1", "whiteSpace": "nowrap", "display": "inline-block"}
+    av_grad = ("radial-gradient(ellipse at center, rgba(255,234,150,0.95) 0%, "
+               "rgba(255,222,115,0.82) 46%, rgba(255,234,150,0) 72%)")        # warm — Analysis View
+    de_grad = ("radial-gradient(ellipse at center, #243a6e 0%, #305199 44%, "
+               "rgba(36,58,110,0) 72%)")                                      # cool — Data Explorer
+    yellow_glow = "0 0 13px rgba(245,196,0,0.95), 0 0 5px rgba(245,196,0,0.75)"
+    blue_glow = "0 0 13px rgba(95,150,255,0.95), 0 0 5px rgba(130,175,255,0.85)"
+
+    av_base = {**base, "color": "#3a2c00", "backgroundImage": av_grad}        # Analysis View (left)
+    if active == "analysis":                                                  # selected here
+        av = html.Span("Analysis View", className="nav-oval",
+                       style={**av_base, "textShadow": yellow_glow})
+    else:                                                                     # clickable target
+        av = html.Span("Analysis View", id="exp-close", n_clicks=0, className="nav-oval",
+                       style={**av_base, "cursor": "pointer"}, title="go to the Analysis View")
+
+    de_base = {**base, "color": "#eef2ff", "backgroundImage": de_grad}        # Data Explorer (right)
+    if active == "explorer":                                                  # selected here
+        de = html.Span("Data Explorer", className="nav-oval",
+                       style={**de_base, "textShadow": blue_glow})
+    else:                                                                     # clickable target
+        de = html.Span("Data Explorer", id="open-explorer", n_clicks=0, className="nav-oval",
+                       style={**de_base, "cursor": "pointer"}, title="open the Data Explorer")
+
+    return html.Div([av, de], style={"display": "flex", "justifyContent": "space-between",
+                                     "alignItems": "center", "width": "100%",
+                                     "gap": "10px", "flexWrap": "wrap"})
 
 app.layout = html.Div(
     style={"fontFamily": "sans-serif", "display": "flex", "gap": "10px",
@@ -2547,6 +2557,28 @@ def del_files_button(sel):
         return {"display": "none"}, "", {"display": "none"}
     return (dict(base, display="inline-block"), f"🗑 delete {len(sel)} selected",
             {"display": "inline-block", "fontWeight": "bold"})
+
+
+# ---- Data Explorer: reveal the SELECTED output figures' location(s) in the OS file browser ------
+@app.callback(Output("finder-msg", "children"),
+              Input("open-outputs-finder", "n_clicks"),
+              State({"type": "out-check", "src": ALL}, "value"), prevent_initial_call=True)
+def open_outputs_in_finder(_n, out_checks):
+    checked = [v[0] for v in (out_checks or []) if v]
+    if not checked:
+        return "select figure(s) first"
+    folders = sorted({os.path.dirname(p) for p in checked})
+    try:
+        sysname = platform.system()
+        if sysname == "Darwin":
+            subprocess.run(["open", "-R", *checked])          # reveal + select all in Finder
+            return f"✓ revealed {len(checked)} figure(s) in Finder"
+        opener = ["explorer"] if sysname == "Windows" else ["xdg-open"]
+        for d in folders:
+            subprocess.run(opener + [d])
+        return f"✓ opened {len(folders)} location(s)"
+    except Exception as e:
+        return f"open failed: {e}"
 
 
 # ---- delete: open the (warning-only) confirmation modal -------------------------

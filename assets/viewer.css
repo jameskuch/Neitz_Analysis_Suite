@@ -57,10 +57,12 @@ html, body { margin: 0; }
 .nav-oval {
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 72% 80%;      /* smaller oval at rest */
-    transition: background-size .2s ease;
+    background-size: 76% 82%;      /* gradient sits inside the larger rounded-rect pill, fading out */
+    transition: background-size .25s ease;
 }
-.nav-oval:hover { background-size: 100% 118%; }   /* grows on hover, but gently */
+/* on hover the gradient grows; because it fades to transparent well before the pill edge it never
+   hits a hard cutoff, it just blooms larger and still blends into the surrounding colour. */
+.nav-oval:hover { background-size: 124% 140%; }   /* grows on hover, but gently */
 
 /* The drag-to-zoom box dims everything outside the selection with a 40%-black overlay; since the
    x-only zoom selection is a thin full-height band, that darkened most of the graph. Soften it to a
