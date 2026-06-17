@@ -128,6 +128,10 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   refresh). `running=[…]` disables the run button + shows "⏳ Running… (~1-2 min)" during the run; a
   clientside callback shows an instant message; `#store-msg` is wrapped in `dcc.Loading`. The
   background worker spawns from `viewer.py` import, so module-level code must stay import-safe.
+  Feedback is a prominent **banner** in `#store-msg`: an amber "⏳ Running analysis…" the instant
+  the button is clicked (clientside callback returning a styled component spec) → a green
+  "✓ Analysis complete" banner with the summary when `run_cell` returns. (The old `dcc.Loading`
+  spinner was removed — the banners + the `running` button label are the feedback.)
 - **Output thumbnails**: 64px in the Explorer detail pane (`explorer_detail`); the Analysis-View
   "Cell outputs" gallery (`output_gallery`) is a separate 150px grid.
 - **Auto-refresh via polling** (`poll_refresh`, a 3 s `dcc.Interval`): diffs a cheap on-disk

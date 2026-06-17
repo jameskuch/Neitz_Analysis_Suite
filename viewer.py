@@ -907,10 +907,7 @@ app.layout = html.Div(
                                 placeholder="auto (sq wave / sta)",
                                 style={"width": "100%", "boxSizing": "border-box"})],
                      style={"marginTop": "6px"}),
-            dcc.Loading(type="dot", color="#3367d6", parent_style={"marginTop": "6px"},
-                        children=html.Div(id="store-msg",
-                                          style={"fontSize": "11px", "color": "#070",
-                                                 "minHeight": "14px"})),
+            html.Div(id="store-msg", style={"marginTop": "6px", "minHeight": "14px"}),
         ]),
 
         # ---- compartment: channels & spike detection ----
@@ -2192,14 +2189,32 @@ def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth
             msgs.append(f"{tag}: {e}")
         except Exception as e:
             msgs.append(f"{tag}: error {e}")
-    return "ran → " + "  |  ".join(msgs) + "  (outputs saved; see gallery)", (_n or 1)
+    banner = html.Div([
+        html.Span("✓ Analysis complete", style={"fontWeight": "bold", "fontSize": "16px"}),
+        html.Div("  ·  ".join(msgs), style={"fontSize": "12px", "marginTop": "3px"}),
+        html.Div("outputs saved — see the gallery below ↓",
+                 style={"fontSize": "11px", "marginTop": "2px", "opacity": 0.8}),
+    ], style={"background": "#e7f6e7", "border": "1.5px solid #4fae4f", "borderRadius": "6px",
+              "padding": "9px 11px", "color": "#0a5a0a"})
+    return banner, (_n or 1)
 
 
 # instant feedback the moment "Run analysis" is clicked (the server run_cell — analysis + 4K
 # kaleido exports — can take ~30-60s; the dcc.Loading spinner around #store-msg also spins).
 app.clientside_callback(
-    "function(n){ return n ? '⏳ Running analysis… computing + writing 4K exports "
-    "(this can take ~30–60 s — please wait)' : window.dash_clientside.no_update; }",
+    """function(n){
+        if(!n) return window.dash_clientside.no_update;
+        var H = 'dash_html_components';
+        return {namespace:H, type:'Div', props:{
+            children:[
+                {namespace:H, type:'Span', props:{children:'⏳ Running analysis…',
+                    style:{fontWeight:'bold', fontSize:'16px'}}},
+                {namespace:H, type:'Div', props:{children:'computing + writing the 4K figures (~2–4 min) — please wait; outputs appear below as they finish',
+                    style:{fontSize:'11px', marginTop:'2px', opacity:0.85}}}
+            ],
+            style:{background:'#fff6e0', border:'1.5px solid #e0a93a', borderRadius:'6px',
+                   padding:'9px 11px', color:'#8a5a00'}}};
+    }""",
     Output("store-msg", "children", allow_duplicate=True),
     Input("run-cell", "n_clicks"), prevent_initial_call=True)
 
