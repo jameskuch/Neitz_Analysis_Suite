@@ -831,12 +831,12 @@ def nav_toggle(active, dark=False):
     the OTHER is the clickable target (ids open-explorer / exp-close, unchanged)."""
     def pill(label, which, selected, click_id):
         cls = f"nav-pill nav-{which}" + (" nav-sel" if selected else " nav-clickable")
+        if selected:                                    # the current view: no arrow, not clickable
+            return html.Span(label, className=cls)
         arrow_l = html.Span("➤", style={"display": "inline-block", "transform": "scaleX(-1)",
                                          "marginRight": "7px"})
         arrow_r = html.Span("➤", style={"marginLeft": "7px"})
         kids = [arrow_l, label] if which == "av" else [label, arrow_r]   # arrow points its direction
-        if selected:
-            return html.Span(kids, className=cls)
         return html.Span(kids, id=click_id, n_clicks=0, className=cls,
                          title=("open the Data Explorer" if which == "de" else "go to the Analysis View"))
     av = pill("Analysis View", "av", active == "analysis", "exp-close")

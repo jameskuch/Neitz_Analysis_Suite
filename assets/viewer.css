@@ -61,28 +61,31 @@ html, body { margin: 0; }
 .nav-pill {
     position: relative;
     z-index: 0;
+    display: inline-block;         /* a real box so vertical padding builds the taller row */
+    box-sizing: content-box;       /* height = text + the full padding (not clamped) */
     font-size: 16px;
     font-weight: bold;
     line-height: 1;
     white-space: nowrap;
-    padding: 11px 22px;            /* small enough to sit side-by-side in the sidebar */
+    padding: 19px 26px;            /* taller row (~1.5×) + room so the gradient isn't cut off */
     border-radius: 13px;
 }
 .nav-pill::before {
     content: "";
     position: absolute;
     z-index: -1;
-    inset: 22% 14%;                /* small rounded-rect gradient at rest, centred behind the text */
-    border-radius: 11px;
+    inset: 16% 8%;                 /* rounded-rect gradient behind the text (wider + taller now) */
+    border-radius: 12px;
     filter: blur(8px);             /* feathered edges → fade into the bg, never clipped */
     transition: inset .25s ease;
 }
-.nav-pill:hover::before { inset: 10% 6%; }        /* bloom a little on hover */
+.nav-pill:hover::before { inset: 9% 4%; }          /* bloom a little on hover */
 
 .nav-av { color: #3a2c00; }                                                  /* dark text */
 .nav-av::before { background: linear-gradient(135deg, rgba(255,236,150,1), rgba(255,212,100,1)); }
 .nav-de { color: #eef2ff; }                                                  /* light text */
-.nav-de::before { background: linear-gradient(135deg, #28406f, #355aa3); }
+.nav-de::before { inset: 16% 5%;                                             /* wider — light the whole label */
+    background: linear-gradient(135deg, #28406f, #355aa3); }
 .nav-clickable { cursor: pointer; }
 .nav-av.nav-sel { text-shadow: 0 0 13px rgba(245,196,0,0.95), 0 0 5px rgba(245,196,0,0.8); }
 .nav-de.nav-sel { text-shadow: 0 0 13px rgba(95,150,255,0.97), 0 0 5px rgba(135,178,255,0.85); }   /* grows on hover, but gently */
