@@ -21,6 +21,21 @@ def test_detects_count_and_times():
     assert np.allclose(sorted(st.times), [0.5, 1.0, 1.5], atol=0.001)
 
 
+def test_matlab_method_recovers_spikes_and_gates_noise():
+    """Sara's spikeDetectorOnline: polarity-driven + max/3 threshold + 4σ noise gate."""
+    x, fs = make_signal(amp=-120.0, noise=2.0)          # 3 clear (negative) spikes
+    for pol in ("neg", "abs"):                          # both orient the downward spikes up
+        times = sorted(detect_spikes(x, fs, method="matlab", polarity=pol).times)
+        for true_t in (0.5, 1.0, 1.5):
+            assert any(abs(t - true_t) < 0.002 for t in times), f"{pol}: missed spike at {true_t}"
+    # an explicit threshold (well above the spikes) suppresses them — the abs boxes are wired in
+    assert len(detect_spikes(x, fs, method="matlab", polarity="neg", abs_threshold=500)) == 0
+    # pure noise → the 4σ noise gate must yield zero spikes
+    rng = np.random.default_rng(1)
+    noise_only = rng.normal(0.0, 2.0, int(fs * 2.0))
+    assert len(detect_spikes(noise_only, fs, method="matlab")) == 0
+
+
 def test_polarity():
     x, fs = make_signal(amp=+100.0)            # upward spikes
     assert len(detect_spikes(x, fs, polarity="pos", k=6)) == 3

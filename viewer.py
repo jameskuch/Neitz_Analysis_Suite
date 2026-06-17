@@ -324,6 +324,8 @@ def card(title, children, opened=True):
 
 _FIELD = {"marginBottom": "6px"}                    # stacked label+control block
 _LBL = {"fontSize": "11px", "fontWeight": "bold", "color": "#444", "display": "block"}
+_EXPLBL = {"fontSize": "12px", "fontWeight": "bold", "color": "#666", "display": "block",
+           "marginBottom": "2px"}     # field label inside the Data Explorer detail pane
 
 
 def ov(**pos):
@@ -339,10 +341,11 @@ def ov(**pos):
 _OVL = {"fontSize": "10px", "color": "#444", "fontWeight": "bold"}    # inline label inside an overlay
 _OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "border-box",
         "textAlign": "right"}                                        # compact overlay textbox
-# region start/end overlays: same fixed height; start flush with the plot's left (l margin),
-# end flush with the plot's right (r margin). Shared so a callback can hide them when cropping.
-_START_OV = ov(top="34px", left="78px", height="20px")
-_END_OV = ov(top="34px", right="20px", height="20px")
+# region start/end overlays: start flush with the plot's left (l margin), end flush with the
+# plot's right (r margin). Shared so a callback can hide them when cropping.
+_OV_H = "16px"   # shared overlay-box height: start / end+crop / show-spikes / stagger all equal
+_START_OV = ov(top="34px", left="78px", height=_OV_H)
+_END_OV = ov(top="34px", right="20px", height=_OV_H, justifyContent="flex-end")
 _END_FIELDS = {"display": "flex", "alignItems": "center", "gap": "3px"}   # end (s) label+input
 
 
@@ -449,12 +452,19 @@ def _date_rows_data():
     return rows
 
 
-_RAIL_DATE = {"flex": "0 0 70px"}
-_RAIL_N = {"flex": "0 0 26px", "textAlign": "center"}
-_RAIL_TRASH = {"flex": "0 0 22px"}
+# Rail columns are sized by CSS vars (--rc1/2/3 on #exp-rail) so the header, search row and every
+# data row stay in lock-step; drag handles (assets/rail-resize.js) update the vars + persist them.
+_RAIL_C1 = {"width": "var(--rc1)", "minWidth": 0, "boxSizing": "border-box", "position": "relative"}
+_RAIL_DATE = {"width": "var(--rc2)", "minWidth": 0, "boxSizing": "border-box", "position": "relative"}
+_RAIL_N = {"width": "var(--rc3)", "minWidth": 0, "textAlign": "center", "boxSizing": "border-box",
+           "position": "relative"}
+_RAIL_DEAD = {"flex": "1 1 0", "minWidth": "8px"}          # dead spacer column (not resizable)
+_RAIL_TRASH = {"flex": "0 0 22px"}                          # trash column (not resizable)
+_RZ_HANDLE = {"position": "absolute", "top": 0, "right": "-3px", "width": "7px", "height": "100%",
+              "cursor": "col-resize", "zIndex": 5}          # drag handle at a column's right edge
 _RAILHDR = {"background": "#222", "color": "#bcd", "border": "none", "cursor": "pointer",
-            "fontSize": "10px", "padding": "3px", "borderRadius": "3px", "fontWeight": "bold"}
-_RAILQ = {"fontSize": "10px", "padding": "1px 3px", "boxSizing": "border-box", "minWidth": 0,
+            "fontSize": "12px", "padding": "1px 4px", "borderRadius": "3px", "fontWeight": "bold"}
+_RAILQ = {"fontSize": "12px", "padding": "2px 4px", "boxSizing": "border-box", "minWidth": 0,
           "border": "1px solid #2a2a35", "background": "#0d0d12", "color": "white",
           "borderRadius": "3px"}
 
@@ -479,10 +489,11 @@ def explorer_dates_body(active=None, sort=None, search=None):
         out.append(html.Div([
             html.Div([
                 html.Div(r["label"] or "—", title=r["label"],
-                         style={"flex": "1", "minWidth": 0, "overflow": "hidden",
-                                "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+                         style=dict(_RAIL_C1, overflow="hidden", textOverflow="ellipsis",
+                                    whiteSpace="nowrap")),
                 html.Div(r["date"], style=_RAIL_DATE),
                 html.Div(str(r["n"]), style=_RAIL_N),
+                html.Div(style=_RAIL_DEAD),
             ], id={"type": "exp-date", "date": r["date"]}, n_clicks=0,
                style={"flex": "1", "minWidth": 0, "display": "flex", "gap": "4px",
                       "alignItems": "center", "cursor": "pointer"}),
@@ -490,7 +501,7 @@ def explorer_dates_body(active=None, sort=None, search=None):
                         title=f"delete all of {r['date']}",
                         style=dict(_RAIL_TRASH, border="none", background="none", color="#e66",
                                    cursor="pointer", fontSize="12px", padding="0")),
-        ], style={"padding": "6px 8px", "fontSize": "11px", "color": "white",
+        ], style={"padding": "6px 8px", "fontSize": "13px", "color": "white",
                   "display": "flex", "alignItems": "center", "gap": "4px",
                   "borderBottom": "1px solid #2a2a35",
                   "background": ("#3367d6" if is_active else "transparent")}))
@@ -574,10 +585,12 @@ def explorer_file_options(date, cell):
             html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px"),
                      **{"data-ps": "wave|" + p}) if spark
             else html.Div("—", style={"height": "62px", "color": "#999"}),
-            html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all"}),
+            html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all",
+                                                 "color": "#e3e9ff", "fontWeight": "bold"}),
             html.Div(f"stim: {stim}" if stim else "stim: —",
-                     style={"fontSize": "10px", "color": "#777"}),
-        ], style={"display": "inline-block", "verticalAlign": "top"})
+                     style={"fontSize": "10px", "color": "#9aa7c0"}),
+        ], style={"display": "inline-block", "verticalAlign": "top",
+                  "background": "#2a2a36", "borderRadius": "4px", "padding": "2px 4px"})
         opts.append({"label": thumb, "value": p})
     return opts
 
@@ -602,30 +615,47 @@ def _json_tree(obj, key=None, top=False):
                     style={"fontFamily": "monospace", "fontSize": "12px", "marginLeft": "2px"})
 
 
+def _fact_row(label, value):
+    return html.Tr([
+        html.Td(label, style={"color": "#777", "padding": "3px 12px 3px 0", "verticalAlign": "top",
+                              "whiteSpace": "nowrap"}),
+        html.Td(value, style={"padding": "3px 0"})])
+
+
 def explorer_detail(date, cell):
-    """Right pane for a cell: raw-trace thumbnails + manifest JSON + output figures,
-    everything click-to-enlarge; output figures get a per-figure delete button."""
+    """Lower part of the detail pane: read-only recording facts (from the files) + output
+    figures (click to enlarge, 🗑 to delete) + the raw manifest tucked in a disclosure.
+    The editable cell metadata above this is static layout, filled by `fill_cell_meta`."""
     cm = DataStore().cell(date, cell)
 
-    # raw analog recordings — click the waveform to enlarge (task 1)
-    raw_thumbs = []
-    for p in cell_data_files(cm):
-        if not loadable(p):
-            continue
-        spark = sparkline_datauri(p)
-        if not spark:
-            continue
-        raw_thumbs.append(html.Div([
-            html.Img(src=spark, id={"type": "raw-thumb", "src": p}, n_clicks=0, className="gprev",
-                     **{"data-ps": "wave|" + p},
-                     style={"width": "150px", "border": "1px solid #ccc", "cursor": "pointer",
-                            "background": "white", "display": "block"}),
-            html.Div(os.path.basename(p), style={"fontSize": "11px", "maxWidth": "150px",
-                                                 "overflow": "hidden", "textOverflow": "ellipsis",
-                                                 "whiteSpace": "nowrap"}),
-        ], style={"margin": "3px"}))
+    # recording facts read straight from the files (sample rate / duration / channels)
+    files = [p for p in cell_data_files(cm) if loadable(p)]
+    rates, durs, chans = set(), [], None
+    for p in files:
+        try:
+            rec = get_recording(p)
+            rates.add(round(rec.fs))
+            durs.append(rec.duration)
+            if chans is None:
+                chans = list(getattr(rec, "channel_names", []) or [])
+        except Exception:
+            pass
+    rec_names = ", ".join(os.path.basename(p) for p in files) or "none"
+    rate_txt = " · ".join(f"{r/1000:g} kHz" for r in sorted(rates)) if rates else "—"
+    if durs and round(min(durs)) != round(max(durs)):
+        dur_txt = f"{min(durs):.0f}–{max(durs):.0f} s per sweep"
+    elif durs:
+        dur_txt = f"{durs[0]:.0f} s"
+    else:
+        dur_txt = "—"
+    facts = html.Table([
+        _fact_row("Recordings", f"{len(files)} · {rec_names}"),
+        _fact_row("Sample rate", rate_txt),
+        _fact_row("Duration", dur_txt),
+        _fact_row("Channels", " · ".join(chans) if chans else "—"),
+    ], style={"fontSize": "14px", "borderCollapse": "collapse", "marginBottom": "10px"})
 
-    # processed output figures — click to enlarge, 🗑 to delete that figure (task 2)
+    # processed output figures — click to enlarge, 🗑 to delete that figure
     outdir = cm.dir / "outputs"
     pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) \
         if outdir.exists() else []
@@ -649,30 +679,36 @@ def explorer_detail(date, cell):
         ], style={"margin": "3px"}))
 
     return [
-        html.Div(f"{date} / {cell}", style={"fontWeight": "bold", "fontSize": "15px",
-                                            "marginBottom": "4px"}),
-        html.Div("raw recordings (click to enlarge)",
-                 style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
-        html.Div(raw_thumbs or [html.Span("none", style={"color": "#999", "fontSize": "13px"})],
-                 style={"display": "flex", "flexWrap": "wrap", "marginBottom": "6px"}),
-        html.Div("manifest.json", style={"fontWeight": "bold", "fontSize": "13px",
-                                         "color": "#555", "marginTop": "6px"}),
-        html.Div(_json_tree(cm.data, top=True),
-                 style={"maxHeight": "32vh", "overflowY": "auto", "border": "1px solid #eee",
-                        "padding": "6px", "background": "#fbfbfb"}),
-        html.Div("output figures (click to enlarge · 🗑 to delete)",
+        html.Div("Recording facts — read from the files",
                  style={"fontWeight": "bold", "fontSize": "13px", "color": "#555",
-                        "marginTop": "8px"}),
-        html.Div(out_thumbs or [html.Span("none yet", style={"color": "#999",
-                                                             "fontSize": "13px"})],
-                 style={"display": "flex", "flexWrap": "wrap"}),
+                        "marginTop": "4px"}),
+        facts,
+        html.Div("Outputs (click to enlarge · 🗑 to delete)",
+                 style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
+        html.Div(out_thumbs or [html.Span("none yet", style={"color": "#999", "fontSize": "13px"})],
+                 style={"display": "flex", "flexWrap": "wrap", "marginBottom": "8px"}),
+        html.Details([
+            html.Summary("raw manifest (JSON)",
+                         style={"fontSize": "12px", "color": "#888", "cursor": "pointer"}),
+            html.Div(_json_tree(cm.data, top=True),
+                     style={"maxHeight": "30vh", "overflowY": "auto", "border": "1px solid #eee",
+                            "padding": "6px", "background": "#fbfbfb", "marginTop": "4px"}),
+        ]),
     ]
 
 
 def explorer_breadcrumb(date, cell):
-    parts = [html.Span(f"📂 {date}", style={"fontWeight": "bold"})]
+    # 📂 date is itself the "back to day" control (the old button is gone): click it to
+    # drop back to the all-cells view. A left arrow separates it from the current cell.
+    parts = [html.Span(f"📂 {date}", id="exp-back", n_clicks=0,
+                       title="back to the day (all cells)",
+                       className=("glow-target" if cell else ""),
+                       style={"fontWeight": "bold",
+                              "cursor": "pointer" if cell else "default",
+                              "color": "#cfe0ff" if cell else "inherit"})]
     if cell:
-        parts += [html.Span("  ›  ", style={"color": "#888"}),
+        parts += [html.Span("  ←  ", style={"color": "#9fc0ff", "fontWeight": "bold",
+                                            "fontSize": "15px"}),
                   html.Span(cell, style={"fontWeight": "bold"})]
     return parts
 
@@ -711,7 +747,7 @@ def delete_files(date, cell, paths):
 
 
 _EXPLORER_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
-                   "width": "100%", "height": "100%", "background": "rgba(18,18,26,0.97)",
+                   "width": "100%", "height": "100%", "background": "#15151d",
                    "zIndex": 2500, "flexDirection": "column", "padding": "10px",
                    "boxSizing": "border-box"}
 
@@ -727,22 +763,42 @@ app = Dash(__name__)
 app.title = "Neitz ABF Viewer"
 _files = discover_abf()
 
+
+def nav_toggle(active, dark=False):
+    """Upper-left view switcher, identical in both windows: 'Analysis View … Data Explorer'.
+    The current view is emphasized; the other is a faded, clickable 'go to' target with an
+    arrow pointing toward it. The click ids (open-explorer / exp-close) are unchanged, so the
+    toggle_explorer callback keeps working. `dark=True` tints for the dark Explorer header."""
+    emph = {"fontWeight": "bold", "fontSize": "19px",
+            "color": "#e3e9ff" if dark else "#1f2a44"}
+    faded = {"fontSize": "19px", "cursor": "pointer",
+             "color": "#8b93a8" if dark else "#9aa7c0"}
+    row = {"display": "flex", "alignItems": "baseline", "gap": "10px"}
+    if active == "analysis":
+        return html.Div([
+            html.Span("Analysis View", style=emph),
+            html.Span("→ Data Explorer", id="open-explorer", n_clicks=0, className="glow-target",
+                      title="open the Data Explorer", style=faded),
+        ], style=row)
+    return html.Div([
+        html.Span("Analysis View ←", id="exp-close", n_clicks=0, className="glow-target",
+                  title="back to the analysis view", style=faded),
+        html.Span("Data Explorer", style=emph),
+    ], style=row)
+
 app.layout = html.Div(
     style={"fontFamily": "sans-serif", "display": "flex", "gap": "10px",
            "height": "100vh", "padding": "8px", "boxSizing": "border-box"},
     children=[
 
-    # ================= LEFT SIDEBAR: controls (≤ 1/3 width, scrollable) =========
-    html.Div(style={"flex": "0 0 20%", "maxWidth": "20%", "minWidth": "230px",
+    # ================= LEFT SIDEBAR: controls (drag the splitter to resize) =====
+    html.Div(id="sidebar", style={"flex": "0 0 20%", "maxWidth": "50%", "minWidth": "160px",
                     "height": "100%", "overflowY": "auto", "paddingRight": "6px",
                     "boxSizing": "border-box"}, children=[
 
-        # upper-left nav: click to jump to the Data Explorer
+        # upper-left view switcher (consistent layout in both windows)
         html.Div([
-            html.Div("Data Explorer ↱", id="open-explorer", n_clicks=0,
-                     title="open the Data Explorer",
-                     style={"fontWeight": "bold", "fontSize": "15px", "cursor": "pointer",
-                            "color": "#3367d6"}),
+            nav_toggle("analysis"),
             html.Div("Neitz ABF Viewer", style={"fontSize": "10px", "color": "#888"}),
         ], style={"marginBottom": "8px"}),
 
@@ -753,7 +809,7 @@ app.layout = html.Div(
             html.Div([
                 html.Label("cell(s)", style=dict(_LBL, marginBottom=0)),
                 dcc.RadioItems(id="cell-sort", value="recent", inline=True,
-                               options=[{"label": "opened recently", "value": "recent"},
+                               options=[{"label": "recent", "value": "recent"},
                                         {"label": "↓date", "value": "date_desc"},
                                         {"label": "↑date", "value": "date_asc"},
                                         {"label": "label", "value": "label"},
@@ -786,26 +842,10 @@ app.layout = html.Div(
                                        "borderRadius": "4px", "marginTop": "6px",
                                        "marginBottom": "8px"}),
 
-            # stimulus metadata — moved below the files
-            html.Div([html.Label("stimulus type", style=_LBL),
-                      dcc.Dropdown(id="stim-type", style={"width": "100%"},
-                                   options=[{"label": "sq wave", "value": "flicker"},
-                                            {"label": "gaussian_noise", "value": "gaussian_noise"},
-                                            {"label": "checkerboard", "value": "checkerboard"},
-                                            {"label": "(none)", "value": "(none)"}])],
-                     style=_FIELD),
-            html.Div([html.Label("stimulus params (k=v, …)", style=_LBL),
-                      dcc.Input(id="stim-params", type="text", debounce=True,
-                                placeholder="flicker_hz=2, frame_rate=60",
-                                style={"width": "100%", "boxSizing": "border-box"})],
-                     style=_FIELD),
-            html.Div([
-                html.Button("Save metadata", id="save-meta", n_clicks=0),
-                html.Button("▶ Run analysis", id="run-cell", n_clicks=0,
-                            style={"marginLeft": "4px"}),
-                html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
-                            style={"marginLeft": "4px"}),
-            ], style={"display": "flex", "flexWrap": "wrap", "gap": "4px"}),
+            # stimulus + cell metadata editing now lives in the Data Explorer; the analysis
+            # view only RUNS the analysis (dispatched by the cell's saved stimulus type).
+            html.Div(html.Button("▶ Run analysis", id="run-cell", n_clicks=0,
+                                 style={"width": "100%", "marginTop": "2px"})),
             html.Div([html.Label("run by the cell's stimulus type · run name keeps a variant "
                                  "(blank = auto)", style=dict(_LBL, fontWeight="normal")),
                       dcc.Input(id="run-name", type="text", value="", debounce=True,
@@ -826,37 +866,56 @@ app.layout = html.Div(
                           dcc.Dropdown(id="ttl", style={"width": "100%"})],
                          style={"flex": "1", "minWidth": 0, "marginLeft": "8px"}),
             ], style={"display": "flex", "marginBottom": "6px"}),
-            html.Div([html.Label("polarity", style=_LBL),
-                      dcc.RadioItems(id="polarity",
-                                     options=[{"label": p, "value": p} for p in ("neg", "pos", "abs")],
-                                     value="neg", inline=True, **PERSIST)], style=_FIELD),
-            html.Div([html.Label("threshold", style=_LBL),
-                      dcc.RadioItems(id="method",
-                                     options=[{"label": "k·MAD", "value": "mad"},
-                                              {"label": "absolute", "value": "abs"},
-                                              {"label": "k·MAD ≥ floor", "value": "mad_floor"}],
-                                     value="mad", inline=True, **PERSIST)], style=_FIELD),
-            html.Div([html.Label("k (MAD)", style=_LBL),
-                      dcc.Slider(id="k", min=2, max=15, step=0.5, value=6,
-                                 marks={2: "2", 6: "6", 10: "10", 15: "15"},
-                                 tooltip={"placement": "bottom"}, **PERSIST)], style=_FIELD),
+            # horizontal rule under the channel pickers, above polarity / spike-detect algorithm
+            html.Div(style={"borderTop": "1px solid #ccc", "margin": "2px 0 8px"}),
+            # polarity | spike detect algorithm — side by side, separated by a vertical divider
             html.Div([
-                html.Div([html.Label("abs thresh (all)", style=_LBL),
-                          dcc.Input(id="absth", type="number", value=20, debounce=True,
-                                    style={"width": "85px"}, **PERSIST)]),
+                html.Div([html.Label("polarity", style=_LBL),
+                          dcc.RadioItems(id="polarity",
+                                         options=[{"label": p, "value": p} for p in ("neg", "pos", "abs")],
+                                         value="neg", inline=True, **PERSIST)],
+                         style={"flex": "0 0 auto"}),
+                html.Div(style={"borderLeft": "1px solid #ccc", "alignSelf": "stretch",
+                                "margin": "0 10px"}),
+                html.Div([html.Label("spike detect algorithm", style=_LBL),
+                          dcc.RadioItems(id="method",
+                                         options=[{"label": "k·MAD", "value": "mad"},
+                                                  {"label": "absolute", "value": "abs"},
+                                                  {"label": "k·MAD ≥ floor", "value": "mad_floor"},
+                                                  {"label": "MATLAB (Sara)", "value": "matlab"}],
+                                         value="mad", inline=True, **PERSIST)],
+                         style={"flex": "1", "minWidth": 0}),
+            ], style=dict(_FIELD, display="flex", alignItems="flex-start")),
+            html.Div(id="method-note", style={"fontSize": "10px", "color": "#3367d6",
+                                              "marginTop": "-2px", "marginBottom": "4px"}),
+            # k·MAD slider (narrowed) with refractory to its right
+            html.Div([
+                html.Div([html.Label("k (MAD)", style=_LBL),
+                          dcc.Slider(id="k", min=2, max=15, step=0.5, value=6,
+                                     marks={2: "2", 6: "6", 10: "10", 15: "15"},
+                                     tooltip={"placement": "bottom"}, **PERSIST)],
+                         id="k-wrap", style={"flex": "1", "minWidth": 0}),
                 html.Div([html.Label("refractory (ms)", style=_LBL),
                           dcc.Input(id="refr", type="number", value=2, debounce=True,
-                                    style={"width": "85px"}, **PERSIST)],
-                         style={"marginLeft": "10px"}),
-            ], style={"display": "flex"}),
-            dcc.Checklist(id="absth-sync",
-                          options=[{"label": " sync — use one abs threshold for all traces",
-                                    "value": "sync"}],
-                          value=["sync"], style={"marginTop": "6px"},
-                          labelStyle={"fontSize": "11px"}, **PERSIST),
+                                    style={"width": "58px"}, **PERSIST)],
+                         style={"flex": "0 0 auto", "marginLeft": "12px"}),
+            ], style=dict(_FIELD, display="flex", alignItems="flex-end")),
+            # "abs thresh (all)" box removed — the per-trace grid replaces it. #absth is kept
+            # HIDDEN as the carrier of the shared (synced) value that mirrors into the boxes.
+            dcc.Input(id="absth", type="number", value=20, debounce=True,
+                      style={"display": "none"}, **PERSIST),
+            # sync toggle + auto-abs button on one row (button to the right of the toggle)
+            html.Div([
+                dcc.Checklist(id="absth-sync",
+                              options=[{"label": " sync abs — use one threshold for all traces",
+                                        "value": "sync"}],
+                              value=["sync"], labelStyle={"fontSize": "11px"},
+                              style={"flex": "1", "minWidth": 0}, **PERSIST),
+                html.Button("🎯 auto abs (per trace)", id="auto-absth", n_clicks=0,
+                            style={"fontSize": "11px", "flex": "0 0 auto", "marginLeft": "8px",
+                                   "whiteSpace": "nowrap"}),
+            ], style={"display": "flex", "alignItems": "center", "marginTop": "6px"}),
             html.Div(id="absth-editor", style={"display": "none", "marginTop": "4px"}),
-            html.Button("🎯 auto abs (per trace)", id="auto-absth", n_clicks=0,
-                        style={"marginTop": "6px", "fontSize": "11px", "width": "100%"}),
             html.Div(id="absth-msg", style={"fontSize": "10px", "color": "#666",
                                             "marginTop": "3px", "wordBreak": "break-all"}),
         ]),
@@ -872,6 +931,12 @@ app.layout = html.Div(
         ]),
     ]),
 
+    # draggable divider between the sidebar and the graphs (JS in assets/splitter.js;
+    # remembers the width as a fraction of the window so it adapts across screens)
+    html.Div(id="splitter", title="drag to resize",
+             style={"flex": "0 0 6px", "cursor": "col-resize", "background": "#dcdce4",
+                    "borderRadius": "3px", "alignSelf": "stretch"}),
+
     # ================= RIGHT PANEL: graphs (80% width, full height) =============
     html.Div(style={"flex": "1 1 0", "minWidth": 0, "height": "100%",
                     "display": "flex", "flexDirection": "column"}, children=[
@@ -880,7 +945,8 @@ app.layout = html.Div(
         # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height.
         # Region & display controls float in the corners, hugging the graph.
         html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
-            dcc.Graph(id="time", style={"height": "100%"}, config={"responsive": True},
+            dcc.Graph(id="time", style={"height": "100%"},
+                      config={"responsive": True, "scrollZoom": True, "doubleClick": "reset"},
                       figure=blank_fig("pick a cell, then check file(s) to display")),
             # top-left (flush with the plot's left): region start — hidden when cropping
             html.Div([html.Span("start (s)", style=_OVL),
@@ -893,31 +959,22 @@ app.layout = html.Div(
                                 dcc.Input(id="region-end", type="number", debounce=True,
                                           style=dict(_OVI, width="60px"))],
                                id="end-fields", style=_END_FIELDS),
-                      dcc.Checklist(id="region-mode",       # checkbox to the RIGHT of "crop"
+                      dcc.Checklist(id="region-mode", className="cb-right",  # right-handed: label left, box right
                                     options=[{"label": "crop", "value": "crop"}], value=[],
-                                    inline=True,
-                                    labelStyle={"fontSize": "10px", "marginLeft": "4px",
-                                                "display": "inline-flex", "alignItems": "center",
-                                                "flexDirection": "row-reverse"},
-                                    inputStyle={"marginLeft": "3px"}, **PERSIST)],
+                                    inline=True, labelStyle={"fontSize": "10px"}, **PERSIST)],
                      id="end-box", style=_END_OV),
             # bottom-LEFT, same level as "stagger frame sync %". "show detected spikes" (default
             # ON) HIDES when "show binned spikes" is checked, and keeps its value for when it
             # reappears.
             html.Div([
-                dcc.Checklist(id="disp-show",
+                dcc.Checklist(id="disp-show", className="cb-right",   # right-handed: label left, box right
                               options=[{"label": " show detected spikes", "value": "show_spikes"}],
-                              value=["show_spikes"], inline=True,
-                              labelStyle={"fontSize": "10px", "marginRight": "8px",
-                                          "display": "inline-flex", "alignItems": "center"},
-                              inputStyle={"marginRight": "3px"}),
-                dcc.Checklist(id="disp-binned",
+                              value=["show_spikes"], inline=True, labelStyle={"fontSize": "10px"}),
+                dcc.Checklist(id="disp-binned", className="cb-right",
                               options=[{"label": " show binned spikes", "value": "spike_train"}],
-                              value=[], inline=True,
-                              labelStyle={"fontSize": "10px", "display": "inline-flex",
-                                          "alignItems": "center"},
-                              inputStyle={"marginRight": "3px"}),
-            ], style=ov(bottom="calc(38% + 25px)", right="6px", height="20px")),   # up 1.25×height, under Im_prime
+                              value=[], inline=True, labelStyle={"fontSize": "10px"}),
+            ], style=ov(bottom="calc(38% + 25px)", right="6px", height=_OV_H,
+                        justifyContent="flex-end")),   # up 1.25×height, under Im_prime; checkboxes flush right
             # just above the frame-sync x-axis, right-aligned with "bin (ms)": stagger %
             html.Div([html.Span("stagger frame sync %", style=_OVL),
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
@@ -973,72 +1030,97 @@ app.layout = html.Div(
 
     # ================= DATA EXPLORER pop-out (dates → cells → files + JSON) =====
     html.Div(id="explorer-modal", children=[
-        # header bar — left nav back to Analysis, Import centered, Open selected at right
+        # header bar — view switcher + status message. (Import/Backup → rail bottom panel;
+        # Open-selected → thumbnails action bar; breadcrumb → rail top row.)
         html.Div(style={"display": "flex", "alignItems": "center", "gap": "12px",
-                        "color": "white", "marginBottom": "8px", "flex": "0 0 auto",
-                        "position": "relative"}, children=[
-            html.Div("↰ Analysis", id="exp-close", n_clicks=0, title="back to the analysis view",
-                     style={"fontWeight": "bold", "fontSize": "16px", "cursor": "pointer",
-                            "color": "#9fc0ff"}),
-            html.Button("←  back to day", id="exp-back", n_clicks=0,
-                        style={"display": "none", "fontSize": "12px"}),
-            html.Span(id="exp-breadcrumb", style={"fontSize": "13px"}),
+                        "color": "white", "marginBottom": "8px", "flex": "0 0 auto"}, children=[
+            nav_toggle("explorer", dark=True),
             html.Span(id="exp-msg", style={"fontSize": "12px", "color": "#7fdc7f"}),
-            html.Div(style={"flex": "1"}),
-            html.Button("📥 Import data…", id="import-data", n_clicks=0,
-                        style={"fontWeight": "bold", "position": "absolute", "left": "50%",
-                               "transform": "translateX(-50%)"}),
-            html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
-                        style={"fontWeight": "bold"}),
         ]),
         # body: left rail (full height) · middle (browser over a hover-preview) · right detail (full height)
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"},
                  children=[
-            # left rail: a sortable + searchable 4-column table of dates
+            # LEFT COLUMN: rail (fills) + a small bottom panel (Import / Backup mirror)
             html.Div(style={"flex": "0 0 380px", "minHeight": 0, "display": "flex",
+                            "flexDirection": "column", "gap": "6px"}, children=[
+              html.Div(id="exp-rail",
+                     style={"flex": "1 1 0", "minHeight": 0, "display": "flex",
                             "flexDirection": "column", "background": "#15151d",
                             "border": "1px solid #2a2a35", "borderRadius": "6px",
-                            "overflow": "hidden"}, children=[
-                # sortable column headers
+                            "overflow": "hidden",
+                            "--rc1": "150px", "--rc2": "76px", "--rc3": "30px"}, children=[
+                # top row: the date ← cell back control, centered over the experiments list
+                html.Div(id="exp-breadcrumb",
+                         style={"textAlign": "center", "fontSize": "15px", "color": "white",
+                                "padding": "4px", "borderBottom": "1px solid #2a2a35",
+                                "flex": "0 0 auto"}),
+                # sortable column headers — each (resizable) column carries a drag handle
                 html.Div([
-                    html.Button("experiment ⇅", id={"type": "rail-sort", "col": "label"},
-                                n_clicks=0, style=dict(_RAILHDR, flex="1", textAlign="left")),
-                    html.Button("date ⇅", id={"type": "rail-sort", "col": "date"}, n_clicks=0,
-                                style=dict(_RAILHDR, **_RAIL_DATE)),
-                    html.Button("# ⇅", id={"type": "rail-sort", "col": "cells"}, n_clicks=0,
-                                style=dict(_RAILHDR, **_RAIL_N)),
+                    html.Div([html.Button("experiment ⇅", id={"type": "rail-sort", "col": "label"},
+                                          n_clicks=0, style=dict(_RAILHDR, flex="1", textAlign="left")),
+                              html.Div(className="rail-rz", **{"data-col": "1"}, style=_RZ_HANDLE)],
+                             style=dict(_RAIL_C1, display="flex")),
+                    html.Div([html.Button("date ⇅", id={"type": "rail-sort", "col": "date"},
+                                          n_clicks=0, style=dict(_RAILHDR, flex="1")),
+                              html.Div(className="rail-rz", **{"data-col": "2"}, style=_RZ_HANDLE)],
+                             style=dict(_RAIL_DATE, display="flex")),
+                    html.Div([html.Button("# ⇅", id={"type": "rail-sort", "col": "cells"},
+                                          n_clicks=0, style=dict(_RAILHDR, flex="1")),
+                              html.Div(className="rail-rz", **{"data-col": "3"}, style=_RZ_HANDLE)],
+                             style=dict(_RAIL_N, display="flex")),
+                    html.Div(style=_RAIL_DEAD),
                     html.Span(style=_RAIL_TRASH),
-                ], style={"display": "flex", "gap": "4px", "padding": "4px 6px"}),
+                ], style={"display": "flex", "gap": "4px", "padding": "4px 8px",
+                          "alignItems": "stretch"}),
                 # per-column search
                 html.Div([
                     dcc.Input(id="rail-q-label", type="text", placeholder="search…", debounce=True,
-                              style=dict(_RAILQ, flex="1")),
+                              style=dict(_RAILQ, **_RAIL_C1)),
                     dcc.Input(id="rail-q-date", type="text", placeholder="date", debounce=True,
                               style=dict(_RAILQ, **_RAIL_DATE)),
                     dcc.Input(id="rail-q-cells", type="text", placeholder="#", debounce=True,
                               style=dict(_RAILQ, **_RAIL_N)),
+                    html.Div(style=_RAIL_DEAD),
                     html.Span(style=_RAIL_TRASH),
-                ], style={"display": "flex", "gap": "4px", "padding": "0 6px 4px"}),
+                ], style={"display": "flex", "gap": "4px", "padding": "0 8px 4px"}),
                 # the rows (rebuilt by a callback)
                 html.Div(id="exp-dates", style={"flex": "1 1 0", "overflowY": "auto"}),
+              ]),
+              # bottom panel (~10% height): Import + Backup mirror
+              html.Div([
+                  html.Button("📥 Import data…", id="import-data", n_clicks=0,
+                              style={"flex": "1", "fontWeight": "bold"}),
+                  html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
+                              style={"flex": "1", "fontWeight": "bold"}),
+              ], style={"flex": "0 0 10%", "minHeight": "44px", "background": "#15151d",
+                        "border": "1px solid #2a2a35", "borderRadius": "6px", "padding": "8px",
+                        "display": "flex", "alignItems": "center", "gap": "8px"}),
             ]),
             # middle column: browser (top 2/3) over the hover preview (bottom 1/3)
             html.Div(style={"flex": "1 1 0", "minWidth": 0, "display": "flex",
                             "flexDirection": "column", "gap": "6px"}, children=[
-                html.Div(style={"flex": "2 1 0", "minHeight": 0, "overflowY": "auto",
-                                "background": "#23232c", "borderRadius": "6px", "padding": "10px"},
-                         children=[
-                    html.Div(id="exp-cards",
-                             style={"display": "flex", "flexWrap": "wrap", "gap": "18px",
-                                    "alignItems": "flex-start"}),
-                    # files as a desktop-icon grid (wrap into rows/columns)
-                    dcc.Checklist(id="exp-files", options=[], value=[], inline=True,
-                                  labelStyle={"display": "inline-flex", "alignItems": "flex-start",
-                                              "verticalAlign": "top", "background": "white",
-                                              "borderRadius": "5px", "padding": "5px", "margin": "5px"},
-                                  inputStyle={"marginRight": "5px", "marginTop": "2px"}),
-                    html.Div(html.Button("", id="del-files", n_clicks=0, style={"display": "none"}),
-                             id="del-files-wrap", style={"marginTop": "6px"}),
+                html.Div(style={"flex": "2 1 0", "minHeight": 0, "display": "flex",
+                                "flexDirection": "column", "background": "#23232c",
+                                "borderRadius": "6px"}, children=[
+                    html.Div([
+                        html.Div(id="exp-cards",
+                                 style={"display": "flex", "flexWrap": "wrap", "gap": "18px",
+                                        "alignItems": "flex-start"}),
+                        # files as a desktop-icon grid (wrap into rows/columns)
+                        dcc.Checklist(id="exp-files", options=[], value=[], inline=True,
+                                      labelStyle={"display": "inline-flex", "alignItems": "flex-start",
+                                                  "verticalAlign": "top", "background": "#23232c",
+                                                  "borderRadius": "5px", "padding": "5px", "margin": "5px"},
+                                      inputStyle={"marginRight": "5px", "marginTop": "2px"}),
+                    ], style={"flex": "1 1 0", "minHeight": 0, "overflowY": "auto", "padding": "10px"}),
+                    # bottom action bar: delete (left) + Open selected (right) — shown when files chosen
+                    html.Div([
+                        html.Button("", id="del-files", n_clicks=0, style={"display": "none"}),
+                        html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
+                                    style={"display": "none", "fontWeight": "bold"}),
+                    ], style={"display": "flex", "justifyContent": "flex-end", "gap": "8px",
+                              "alignItems": "center", "padding": "6px 10px",
+                              "borderTop": "1px solid #333"}),
                 ]),
                 # bottom 1/3 of the middle column: hover preview (any graph you hover lands here)
                 html.Div(id="exp-prev",
@@ -1053,10 +1135,47 @@ app.layout = html.Div(
                               style={"color": "#999", "fontSize": "12px"}),
                 ]),
             ]),
-            # right: detail, full window height (larger base font)
-            html.Div(id="exp-detail",
-                     style={"flex": "0 0 30%", "minHeight": 0, "overflowY": "auto", "fontSize": "13px",
-                            "background": "white", "borderRadius": "6px", "padding": "10px"}),
+            # right: detail pane — editable cell metadata (Save / Backup live here now) above
+            # the callback-filled recording facts + outputs + raw JSON (exp-detail). Bigger font.
+            html.Div(id="exp-rightpane",
+                     style={"flex": "0 0 32%", "minHeight": 0, "overflowY": "auto",
+                            "background": "white", "borderRadius": "6px", "padding": "12px",
+                            "fontSize": "14px", "display": "flex", "flexDirection": "column",
+                            "gap": "8px"}, children=[
+                # header: cell label + actions
+                html.Div([
+                    html.Div(id="exp-cell-label",
+                             style={"fontWeight": "bold", "fontSize": "16px", "flex": "1",
+                                    "minWidth": 0}),
+                    html.Button("💾 Save metadata", id="save-meta", n_clicks=0,
+                                style={"fontSize": "12px"}),
+                ], style={"display": "flex", "alignItems": "center", "gap": "4px",
+                          "borderBottom": "1px solid #eee", "paddingBottom": "8px"}),
+                # editable cell metadata (type / stimulus / params / notes)
+                html.Div("Cell metadata — edit, then Save",
+                         style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
+                html.Div([html.Label("type", style=_EXPLBL),
+                          dcc.Input(id="cell-type", type="text", debounce=True,
+                                    placeholder="e.g. ipRGC",
+                                    style={"width": "100%", "boxSizing": "border-box"})]),
+                html.Div([html.Label("stimulus", style=_EXPLBL),
+                          dcc.Dropdown(id="stim-type", style={"width": "100%"},
+                                       options=[{"label": "sq wave", "value": "flicker"},
+                                                {"label": "gaussian_noise", "value": "gaussian_noise"},
+                                                {"label": "checkerboard", "value": "checkerboard"},
+                                                {"label": "(none)", "value": "(none)"}])]),
+                html.Div([html.Label("params (k=v, …)", style=_EXPLBL),
+                          dcc.Input(id="stim-params", type="text", debounce=True,
+                                    placeholder="flicker_hz=2, frame_rate=60",
+                                    style={"width": "100%", "boxSizing": "border-box"})]),
+                html.Div([html.Label("notes", style=_EXPLBL),
+                          dcc.Textarea(id="cell-notes",
+                                       style={"width": "100%", "boxSizing": "border-box",
+                                              "minHeight": "44px", "fontSize": "13px"})]),
+                html.Div(id="exp-save-msg", style={"fontSize": "12px", "color": "#070"}),
+                # callback-filled: recording facts + outputs + collapsible raw JSON
+                html.Div(id="exp-detail", style={"minHeight": 0}),
+            ]),
         ]),
     ], style={"display": "none"}),
 
@@ -1315,7 +1434,11 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
 
     ttl_ylab = (f"{ttl_name} (staggered)" if (stagger and multi) else (ttl_name or "TTL"))
     time_fig.update_yaxes(title_text=row1_ylab, row=1, col=1)
-    time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1)
+    # the frame-sync row's y gets its OWN uirevision tied to the staggered extent, so it
+    # re-autoranges (all traces fit) when the stagger % or the number of traces changes —
+    # the global uirevision="keep" would otherwise pin the old y-range and clip the spread.
+    time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1, autorange=True,
+                          uirevision=f"ttl-{stagger_pct}-{len(files)}")
     time_fig.update_xaxes(title_text="time (s)", row=2, col=1, range=[x0, x1])
     time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision="keep",
                            showlegend=False)   # file colors are evident from the Files list
@@ -1333,13 +1456,18 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                           annotation_text=f"stim {sf:.2f} Hz",
                           annotation_position="bottom right",
                           annotation=dict(font=dict(size=10, color="#c60")))
+    # legend OUTSIDE the plot on the right; the right margin grows with the longest label so the
+    # plot area shrinks to make room instead of the legend overlapping the data.
+    legend_names = [os.path.basename(p) for p in files] + (["GROUP AVG"] if multi else [])
+    maxlen = max((len(s) for s in legend_names), default=8)
+    r_margin = int(min(240, max(80, maxlen * 6.5 + 26)))
     fft_fig.update_layout(
         title=dict(text="spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region)", x=0.5,
                    xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
         xaxis_title="frequency (Hz)", yaxis_title="power (dB, R=1Ω)",
-        xaxis_range=[0, FMAX], margin=dict(l=55, r=15, t=34, b=40),
-        legend=dict(x=0.99, y=0.97, xanchor="right", yanchor="top", font=dict(size=9),
-                    bgcolor="rgba(255,255,255,0.65)", bordercolor="#ccc", borderwidth=1),
+        xaxis_range=[0, FMAX], margin=dict(l=55, r=r_margin, t=34, b=40),
+        legend=dict(x=1.02, y=1.0, xanchor="left", yanchor="top", font=dict(size=9),
+                    bgcolor="rgba(255,255,255,0.85)", bordercolor="#ccc", borderwidth=1),
         showlegend=True)
 
     # ISI histogram: pooled in-region inter-spike intervals (companion to the FFT)
@@ -1369,8 +1497,9 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
               Output("method", "value", allow_duplicate=True), Output("absth-msg", "children"),
               Input("auto-absth", "n_clicks"),
               State("file", "value"), State("chan", "value"), State("k", "value"),
-              State("method", "value"), prevent_initial_call=True)
-def auto_absth(_n, files, chan, k, method):
+              State("method", "value"), State("polarity", "value"), prevent_initial_call=True)
+def auto_absth(_n, files, chan, k, method, polarity):
+    from neitz.spikes import _highpass_fft, HIGHPASS_SPIKES_HZ
     files = [f for f in (files or []) if f and loadable(f)]
     if not files or not chan:
         return no_update, no_update, no_update, "select file(s) + a signal channel first"
@@ -1378,79 +1507,202 @@ def auto_absth(_n, files, chan, k, method):
     for path in files:
         try:
             y = get_channel(path, chan)
-            sigma = float(np.median(np.abs(y - np.median(y))) * 1.4826)   # robust σ
-            seed[path] = round(float(k) * sigma, 2)
+            if method == "matlab":                       # the MATLAB technique's max/3 default
+                tr = _highpass_fft(y, get_recording(path).fs, HIGHPASS_SPIKES_HZ)
+                tr = tr - np.median(tr)
+                if polarity == "neg":
+                    tr = -tr
+                elif polarity == "abs":
+                    tr = np.abs(tr)
+                seed[path] = round(float(np.max(tr)) / 3.0, 2)
+            else:                                        # k·MAD of each file
+                sigma = float(np.median(np.abs(y - np.median(y))) * 1.4826)
+                seed[path] = round(float(k) * sigma, 2)
             bits.append(f"{os.path.basename(path)}={seed[path]:g}")
         except Exception:
             pass
     if not seed:
         return no_update, no_update, no_update, "could not compute thresholds"
-    # works for both "absolute" and "k·MAD ≥ floor"; only nudge plain k·MAD over to absolute
-    new_method = method if method in ("abs", "mad_floor") else "abs"
-    return seed, [], new_method, "auto abs (k·MAD per trace) → " + ", ".join(bits)
+    # keep the method if it already uses abs thresholds; else nudge plain k·MAD → absolute
+    new_method = method if method in ("abs", "mad_floor", "matlab") else "abs"
+    label = "max/3 per trace" if method == "matlab" else "k·MAD per trace"
+    return seed, [], new_method, f"auto abs ({label}) → " + ", ".join(bits)
 
 
-# ---- build the per-trace abs-threshold editor (shown when NOT synced) ----------
+# ---- auto-seed the per-trace abs boxes with the MATLAB max/3 default the moment MATLAB is
+#      selected (or files/polarity change) — no need to click the auto-abs button -------------
+@app.callback(Output("absth-seed", "data", allow_duplicate=True),
+              Output("absth-sync", "value", allow_duplicate=True),
+              Output("absth-msg", "children", allow_duplicate=True),
+              Input("method", "value"), Input("file", "value"), Input("polarity", "value"),
+              State("chan", "value"), prevent_initial_call=True)
+def seed_matlab_threshold(method, files, polarity, chan):
+    if method != "matlab":
+        return no_update, no_update, no_update
+    from neitz.spikes import _highpass_fft, HIGHPASS_SPIKES_HZ
+    files = [f for f in (files or []) if f and loadable(f)]
+    if not files or not chan:
+        return no_update, no_update, no_update
+    seed, bits = {}, []
+    for path in files:
+        try:
+            tr = _highpass_fft(get_channel(path, chan), get_recording(path).fs, HIGHPASS_SPIKES_HZ)
+            tr = tr - np.median(tr)
+            if polarity == "neg":
+                tr = -tr
+            elif polarity == "abs":
+                tr = np.abs(tr)
+            seed[path] = round(float(np.max(tr)) / 3.0, 2)
+            bits.append(f"{os.path.basename(path)}={seed[path]:g}")
+        except Exception:
+            pass
+    if not seed:
+        return no_update, no_update, no_update
+    return seed, [], "MATLAB max/3 auto-seeded → " + ", ".join(bits)
+
+
+# ---- build the per-trace abs-threshold grid (ALWAYS shown; one box per on-graph trace,
+#      wrapping left→right. When synced, all boxes show but only the first is editable and
+#      its value is mirrored into the rest) ----------------------------------------------
+# ---- enable/disable controls that aren't relevant to the chosen detection method --------
+@app.callback(Output("k", "disabled"), Output("k-wrap", "style"), Output("refr", "disabled"),
+              Output("auto-absth", "disabled"), Output("polarity", "options"),
+              Output("absth-sync", "options"), Output("method-note", "children"),
+              Input("method", "value"))
+def toggle_controls(method):
+    abs_on = method in ("abs", "mad_floor", "matlab")  # absolute thresholds are used
+    k_off = method in ("abs", "matlab")                # k·MAD not used
+    # dcc.Slider's `disabled` has no visible effect in this Dash build, so grey the wrapper
+    k_style = {"flex": "1", "minWidth": 0, "opacity": (0.4 if k_off else 1),
+               "pointerEvents": ("none" if k_off else "auto")}
+    pol = [{"label": p, "value": p} for p in ("neg", "pos", "abs")]   # polarity used by all methods
+    sync = [{"label": " sync abs — use one threshold for all traces", "value": "sync",
+             "disabled": not abs_on}]
+    note = ("MATLAB (Sara): polarity sets orientation; the abs boxes set the threshold "
+            "(click ‘auto abs’ for the max/3 default); k & refractory are not used."
+            if method == "matlab" else "")
+    return k_off, k_style, (method == "matlab"), (not abs_on), pol, sync, note
+
+
+# ---- build the per-trace abs-threshold grid (ALWAYS shown; one box per on-graph trace,
+#      wrapping left→right. When synced, all boxes show but only the first is editable and
+#      its value is mirrored into the rest). Only relevant for the absolute-threshold methods.
 @app.callback(Output("absth-editor", "children"), Output("absth-editor", "style"),
               Input("absth-sync", "value"), Input("file", "value"), Input("absth-seed", "data"),
-              State("absth", "value"), prevent_initial_call=False)
-def build_absth_editor(sync, files, seed, single):
-    if "sync" in (sync or []):
+              Input("absth", "value"), Input("method", "value"), prevent_initial_call=False)
+def build_absth_editor(sync, files, seed, single, method):
+    if method not in ("abs", "mad_floor", "matlab"):  # abs thresholds unused → hide the grid
         return [], {"display": "none"}
     files = [f for f in (files or []) if f and loadable(f)]
+    if not files:
+        return ([html.Span("select file(s) to set per-trace thresholds",
+                           style={"fontSize": "10px", "color": "#999"})], {"display": "none"})
+    synced = "sync" in (sync or [])
     seed = seed or {}
     default = single if single is not None else 20
-    rows = [html.Div("per-trace abs threshold:", style={"fontSize": "10px", "color": "#555",
-                                                        "marginBottom": "2px"})]
-    for p in files:
-        rows.append(html.Div([
-            html.Span(os.path.basename(p), style={"fontSize": "10px", "flex": "1",
-                                                  "overflow": "hidden", "textOverflow": "ellipsis",
-                                                  "whiteSpace": "nowrap"}),
-            dcc.Input(id={"type": "absth-trace", "path": p}, type="number",
-                      value=seed.get(p, default), debounce=True,
-                      style={"width": "70px", "marginLeft": "4px"}),
-        ], style={"display": "flex", "alignItems": "center", "marginBottom": "2px"}))
-    if not files:
-        rows.append(html.Span("select file(s) to set per-trace thresholds",
-                              style={"fontSize": "10px", "color": "#999"}))
-    return rows, {"display": "block", "marginTop": "4px",
-                  "borderLeft": "2px solid #3367d6", "paddingLeft": "6px"}
+    cells = []
+    for i, p in enumerate(files):
+        locked = synced and i > 0                    # synced: only the first box is editable
+        val = default if synced else seed.get(p, default)
+        cells.append(html.Div([
+            html.Span(os.path.basename(p), title=os.path.basename(p),
+                      style={"fontSize": "10px", "color": "#555", "display": "block",
+                             "maxWidth": "100px", "overflow": "hidden",
+                             "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+            dcc.Input(id={"type": "absth-trace", "path": p}, type="number", value=val,
+                      debounce=True, disabled=locked,
+                      style={"width": "72px",
+                             "background": "#eee" if locked else "white"}),
+            # per-box "auto" — sets this trace's threshold (max/3 for MATLAB, k·MAD otherwise).
+            # When synced, only the first is active and it fills every box.
+            html.Button("auto", id={"type": "absth-auto", "path": p}, n_clicks=0, disabled=locked,
+                        style={"fontSize": "9px", "padding": "0 4px", "marginTop": "2px",
+                               "width": "50px", "lineHeight": "13px",
+                               "cursor": "default" if locked else "pointer",
+                               "opacity": 0.4 if locked else 1}),
+        ], style={"margin": "0 8px 5px 0"}))
+    head = ("one threshold (sync on): edit the first box — all match"
+            if synced else "per-trace abs thresholds")
+    return ([html.Div(head, style={"fontSize": "10px", "color": "#555",
+                                    "marginBottom": "3px", "width": "100%"}),
+             html.Div(cells, style={"display": "flex", "flexWrap": "wrap"})],
+            {"display": "block", "marginTop": "4px",
+             "borderLeft": "2px solid #3367d6", "paddingLeft": "6px"})
 
 
-# ---- collect the per-trace inputs into absth-map (render reads this) ------------
-@app.callback(Output("absth-map", "data"),
+# ---- per-box "auto": compute one trace's threshold and drop it in (all boxes when synced) ----
+@app.callback(Output({"type": "absth-trace", "path": ALL}, "value", allow_duplicate=True),
+              Input({"type": "absth-auto", "path": ALL}, "n_clicks"),
+              State("absth-sync", "value"), State("chan", "value"), State("method", "value"),
+              State("k", "value"), State("polarity", "value"), prevent_initial_call=True)
+def per_trace_auto(_clicks, sync, chan, method, k, polarity):
+    from neitz.spikes import _highpass_fft, HIGHPASS_SPIKES_HZ
+    outs = ctx.outputs_list[0] if ctx.outputs_list else []
+    trig = ctx.triggered_id
+    if not (isinstance(trig, dict) and ctx.triggered and ctx.triggered[0].get("value")):
+        return [no_update] * len(outs)
+    path = trig["path"]
+    try:
+        y = get_channel(path, chan)
+        if method == "matlab":
+            tr = _highpass_fft(y, get_recording(path).fs, HIGHPASS_SPIKES_HZ)
+            tr = tr - np.median(tr)
+            if polarity == "neg":
+                tr = -tr
+            elif polarity == "abs":
+                tr = np.abs(tr)
+            val = round(float(np.max(tr)) / 3.0, 2)
+        else:
+            val = round(float(k) * float(np.median(np.abs(y - np.median(y))) * 1.4826), 2)
+    except Exception:
+        return [no_update] * len(outs)
+    if "sync" in (sync or []):                          # synced → fill every box
+        return [val] * len(outs)
+    return [val if o["id"]["path"] == path else no_update for o in outs]   # else just this trace
+
+
+# ---- collect the per-trace inputs into absth-map (render reads this). When synced, the
+#      first (editable) box becomes the single shared threshold so the mirrors follow it. --
+@app.callback(Output("absth-map", "data"), Output("absth", "value", allow_duplicate=True),
               Input({"type": "absth-trace", "path": ALL}, "value"),
               Input("absth-sync", "value"), Input("file", "value"),
               prevent_initial_call=True)
 def collect_absth(_vals, sync, _files):
-    if "sync" in (sync or []):
-        return {}                                    # synced → render falls back to the single value
+    items = ctx.inputs_list[0] or []                 # each: {"id": {...,"path":p}, "value": v}
+    if "sync" in (sync or []):                        # synced → render uses the single value
+        master = no_update
+        for item in items:                            # first non-empty box drives the shared value
+            v = item.get("value")
+            if v is not None:
+                try:
+                    master = float(v)
+                except (TypeError, ValueError):
+                    master = no_update
+                break
+        return {}, master
     amap = {}
-    for item in (ctx.inputs_list[0] or []):          # each: {"id": {...,"path":p}, "value": v}
+    for item in items:
         v = item.get("value")
         if v is not None:
             try:
                 amap[item["id"]["path"]] = float(v)
             except (TypeError, ValueError):
                 pass
-    return amap
+    return amap, no_update
 
 
 # ---- data store: pick a cell -> load its recordings + prefill stimulus -------
 @app.callback(Output("file", "options", allow_duplicate=True),
               Output("file", "value", allow_duplicate=True),
-              Output("sel-cell", "data"), Output("stim-type", "value"),
-              Output("stim-params", "value"), Output("recent-cells", "data"),
+              Output("sel-cell", "data"), Output("recent-cells", "data"),
               Input("cell-select", "value"), State("recent-cells", "data"),
               State("last-session", "data"), prevent_initial_call=True)
 def pick_cell(vals, recent, sess):
     vals = vals if isinstance(vals, list) else ([vals] if vals else [])
     if not vals:
-        return no_update, no_update, [], None, None, no_update
+        return no_update, no_update, [], no_update
     ds = DataStore()
     opts, checked, sel_list, seen = [], [], [], set()
-    stype, sparams = None, None
     for v in vals:
         date, cell = v.split("|")
         sel_list.append({"date": date, "cell": cell})
@@ -1461,20 +1713,13 @@ def pick_cell(vals, recent, sess):
                 seen.add(p)
                 opts.append({"label": " " + os.path.basename(p), "value": p})
         checked += default
-        if stype is None:                            # prefill from the first stimulus found
-            for r in cm.data.get("recordings", []):
-                if r.get("stimulus"):
-                    stype = r["stimulus"].get("type")
-                    sparams = ", ".join(f"{k}={v}" for k, v in
-                                        (r["stimulus"].get("params") or {}).items() if v is not None)
-                    break
     # restore the exact files last worked on, if they belong to this selection (resume on reload)
     sess_files = [f for f in ((sess or {}).get("files") or []) if f in seen]
     if sess_files:
         checked = sess_files
     recent = [x for x in (recent or []) if x not in vals]        # most-recent-first, de-duped
     recent = list(vals) + recent
-    return opts, checked, sel_list, stype, sparams, recent[:50]
+    return opts, checked, sel_list, recent[:50]
 
 
 # ---- persist the working session (cell + checked files) and auto-load it on startup --
@@ -1501,26 +1746,52 @@ def sort_cells(sort, recent):
     return store_cell_options(sort or "recent", recent=recent)
 
 
-# ---- save stimulus metadata to the cell's data recordings --------------------
-@app.callback(Output("store-msg", "children"), Input("save-meta", "n_clicks"),
-              State("sel-cell", "data"), State("stim-type", "value"),
-              State("stim-params", "value"), prevent_initial_call=True)
-def save_meta(_n, sel, stype, sparams):
-    sels = sel if isinstance(sel, list) else ([sel] if sel else [])
-    if not sels or not stype:
-        return "pick a cell and a stimulus type first"
+# ---- Data Explorer: fill the editable cell-metadata fields for the selected cell ----
+@app.callback(Output("exp-cell-label", "children"),
+              Output("stim-type", "value"), Output("stim-params", "value"),
+              Output("cell-type", "value"), Output("cell-notes", "value"),
+              Input("exp-cell", "data"), State("exp-date", "data"),
+              prevent_initial_call=True)
+def fill_cell_meta(cell, date):
+    if not (date and cell):
+        return "", None, None, None, ""
+    cm = DataStore().cell(date, cell)
+    label = cm.data.get("label") or ""
+    title = f"{date} / {cell}" + (f" — {label}" if label else "")
+    stype, sparams = None, None
+    for r in cm.data.get("recordings", []):
+        if r.get("stimulus"):
+            stype = r["stimulus"].get("type")
+            sparams = ", ".join(f"{k}={v}" for k, v in
+                                (r["stimulus"].get("params") or {}).items() if v is not None)
+            break
+    return title, stype, sparams, cm.data.get("cell_type"), (cm.data.get("notes") or "")
+
+
+# ---- Data Explorer: Save metadata (stimulus + cell type + notes) for the selected cell --
+@app.callback(Output("exp-save-msg", "children"), Input("save-meta", "n_clicks"),
+              State("exp-date", "data"), State("exp-cell", "data"),
+              State("stim-type", "value"), State("stim-params", "value"),
+              State("cell-type", "value"), State("cell-notes", "value"),
+              prevent_initial_call=True)
+def save_meta(_n, date, cell, stype, sparams, ctype, notes):
+    if not (date and cell):
+        return "select a cell in the Explorer first"
     ds = DataStore()
+    cm = ds.cell(date, cell)
     params = parse_params(sparams)
-    total, cells = 0, []
-    for s in sels:
-        cm = ds.cell(s["date"], s["cell"])
-        n = 0
+    n = 0
+    if stype:
         for r in cm.data.get("recordings", []):
             if r.get("kind", "recording") == "recording" and str(r.get("file", "")).endswith((".abf", ".csv")):
                 cm.set_stimulus(r["id"], stype, params, source="user"); n += 1
-        cm.save(); total += n; cells.append(f"{s['date']}/{s['cell']}")
+    cm.data["cell_type"] = (ctype or None)
+    cm.data["notes"] = notes or ""
+    cm.save()
     ds.update_index()
-    return f"saved stimulus '{stype}' {params} to {total} recordings in " + ", ".join(cells)
+    bits = [f"stimulus '{stype}' {params} → {n} recordings"] if stype else []
+    bits.append(f"type={ctype or '—'}, notes saved")
+    return "✓ " + "; ".join(bits)
 
 
 # ---- run the analysis for the selected cell(s), dispatched by their stimulus type --
@@ -1708,13 +1979,15 @@ def exp_pick_cell(_clicks):
 @app.callback(Output("exp-cell", "data", allow_duplicate=True),
               Input("exp-back", "n_clicks"), prevent_initial_call=True)
 def exp_back(_n):
+    if not _n:                 # ignore the n_clicks reset when the breadcrumb rebuilds
+        return no_update
     return None
 
 
 @app.callback(Output("exp-cards", "children"),
               Output("exp-files", "options"), Output("exp-files", "value"),
               Output("exp-detail", "children"), Output("exp-breadcrumb", "children"),
-              Output("exp-back", "style"), Output("exp-prev", "children"),
+              Output("exp-prev", "children"),
               Input("exp-date", "data"), Input("exp-cell", "data"), prevent_initial_call=True)
 def exp_render(date, cell):
     # reset the hover-preview on every navigation (no stale graph showing)
@@ -1723,15 +1996,15 @@ def exp_render(date, cell):
             html.Span("hover any graph to preview it here", id="exp-prev-hint",
                       style={"color": "#999", "fontSize": "12px"})]
     if not date:
-        return ([no_update] * 6) + [prev]
+        return ([no_update] * 5) + [prev]
     bc = explorer_breadcrumb(date, cell)
     if not cell:                                       # DAY view: cell thumbnails
         hint = [html.Div("select a cell to see its files + manifest",
                          style={"color": "#999", "fontSize": "12px"})]
-        return explorer_day_cards(date), [], [], hint, bc, {"display": "none"}, prev
+        return explorer_day_cards(date), [], [], hint, bc, prev
     # CELL view: file checklist + manifest JSON
     return ([], explorer_file_options(date, cell), [],
-            explorer_detail(date, cell), bc, {"display": "inline-block", "fontSize": "12px"}, prev)
+            explorer_detail(date, cell), bc, prev)
 
 
 # ---- explorer rail: sort headers + per-column search rebuild the date rows -----
@@ -1793,14 +2066,16 @@ def exp_open_viewer(_n, sel):
 
 # ---- the 🗑 for the checked file(s) (appears at the bottom of the selection) -------
 @app.callback(Output("del-files", "style"), Output("del-files", "children"),
+              Output("exp-open-viewer", "style"),
               Input("exp-files", "value"), prevent_initial_call=False)
 def del_files_button(sel):
     sel = [s for s in (sel or []) if s]
     base = {"color": "white", "background": "#b00", "border": "none", "borderRadius": "4px",
             "padding": "4px 10px", "fontWeight": "bold", "fontSize": "12px", "cursor": "pointer"}
-    if not sel:
-        return {"display": "none"}, ""
-    return dict(base, display="inline-block"), f"🗑 delete {len(sel)} selected"
+    if not sel:                                          # nothing chosen → hide both action buttons
+        return {"display": "none"}, "", {"display": "none"}
+    return (dict(base, display="inline-block"), f"🗑 delete {len(sel)} selected",
+            {"display": "inline-block", "fontWeight": "bold"})
 
 
 # ---- delete: open the (warning-only) confirmation modal -------------------------
@@ -1921,7 +2196,7 @@ def import_data(_n, stype, sparams, rev):
 
 
 # ---- back up the whole data store to this computer's mirror -------------------
-@app.callback(Output("store-msg", "children", allow_duplicate=True),
+@app.callback(Output("exp-save-msg", "children", allow_duplicate=True),
               Input("backup-mirror", "n_clicks"), prevent_initial_call=True)
 def backup_mirror(_n):
     from neitz.dataio import mirror_dir, mirror_store

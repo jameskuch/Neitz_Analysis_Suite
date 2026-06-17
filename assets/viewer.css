@@ -1,19 +1,137 @@
-/* Align every checkbox / radio square with its label text. The square sits a bit
-   LOWER than centered so the label text reads above it (matches the manual
-   before/after: text raised ~3px at actual UI scale).
-   Dash auto-loads any .css in this assets/ folder. */
-/* The label is raised 2px so the TEXT moves up; the input is pushed back down by the same
-   2px so the SQUARE stays put at its 0.84px offset. */
-input[type="checkbox"],
-input[type="radio"] {
-    vertical-align: middle;
-    position: relative;
-    top: 2.84px;           /* 0.84 (square offset) + 2 (cancels the label's 2px rise) */
-    margin-top: 0;
-    margin-bottom: 0;
+/* ── Checkbox / radio alignment ───────────────────────────────────────────────
+   Dash 4.2 renders every dcc.Checklist, dcc.RadioItems, and multi-select Dropdown
+   option as a flex <label class="dash-options-list-option"> laid out as
+       [<span class="…-wrapper"><input></span>]  [<span class="…-text">label</span>]
+   Its default `align-items: baseline` drops the square ~3px ABOVE the text centre
+   (square looks high, text looks low). NOTE: this Dash version IGNORES the component's
+   `labelStyle` for layout, so alignment MUST be set on these classes, not inline.
+
+   One rule centres them everywhere at once — sidebar checklists & radios, the graph
+   overlays (crop / show spikes), AND the cell Dropdown menu (it shares the class).
+   `align-items: center` makes the square↔text centrelines coincide at any font size,
+   so a checkbox also lines up with adjacent inputs (e.g. the `end (s)` textbox).
+   `gap` is the single source of square↔text spacing. Dash auto-loads assets/*.css. */
+.dash-options-list-option {
+    align-items: center;
+    gap: 4px;
 }
-label:has(> input[type="checkbox"]),
-label:has(> input[type="radio"]) {
-    position: relative;
-    top: -2px;             /* raise the label text by 2px */
+.dash-options-list-option input {
+    margin: 0 !important;   /* spacing comes from `gap`, not per-control margins */
 }
+
+/* Right-handed checkbox: label on the LEFT, square on the RIGHT (same gap).
+   Default is left-handed (square left, label right). Opt in per control with
+   `className="cb-right"` on the dcc.Checklist / dcc.RadioItems. */
+.cb-right .dash-options-list-option {
+    flex-direction: row-reverse;
+}
+
+/* ── Responsive scaling ───────────────────────────────────────────────────────
+   The app is laid out in fixed pixels (inline styles), so it doesn't reflow on
+   smaller windows / lower-resolution screens. `zoom` scales EVERYTHING — text,
+   controls, graph overlays, and the Plotly graphs — proportionally, and (unlike
+   transform) it reflows, so on a window resize the graphs re-fit. The root Div is
+   `height: 100vh`; zoom would shrink that to z·100vh and leave blank space, so we
+   counter-scale its height to 100vh/z. Steps chosen so the 20% sidebar stays legible. */
+html, body { margin: 0; }
+
+@media (max-width: 1500px) {
+    body { zoom: 0.9; }
+    #react-entry-point > div { height: calc(100vh / 0.9) !important; }
+}
+@media (max-width: 1250px) {
+    body { zoom: 0.8; }
+    #react-entry-point > div { height: calc(100vh / 0.8) !important; }
+}
+@media (max-width: 1050px) {
+    body { zoom: 0.7; }
+    #react-entry-point > div { height: calc(100vh / 0.7) !important; }
+}
+@media (max-width: 870px) {
+    body { zoom: 0.6; }
+    #react-entry-point > div { height: calc(100vh / 0.6) !important; }
+}
+
+/* Sidebar | graphs splitter (drag handle) — see assets/splitter.js */
+#splitter:hover, #splitter:active { background: #9aa0c8 !important; }
+
+/* ── Denser sidebar: smaller fonts on selected controls (item 1) ──────────────── */
+#cell-select, #chan, #ttl, #run-name, #absth {    /* comboboxes + run-name (compact, 10px floor) */
+    font-size: 10px;
+}
+#polarity, #method, #refr { font-size: 12px; }    /* polarity / algorithm radios + refractory */
+#absth-editor { font-size: 10px; }
+#absth-editor input { font-size: 10px; }           /* per-trace abs boxes — small */
+.dash-slider-tooltip, .dash-slider-tooltip * { font-size: 12px !important; }  /* k·MAD value — matches the above */
+#k .dash-slider-mark { font-size: 10px; }              /* k·MAD scale numbers (2·6·10·15) */
+
+/* ...and shorter (item: heights to match the smaller font) */
+#absth { display: none !important; }   /* hidden carrier of the synced shared value */
+#run-name { height: 16px; padding: 0 6px; box-sizing: border-box; }
+#refr { height: 11px; padding: 0 4px; box-sizing: border-box; }
+#absth-editor input {                              /* abs-threshold boxes — short + narrow */
+    height: 9px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    width: 50px !important;
+}
+#cell-select, #chan, #ttl { min-height: 0; }
+#cell-select .dash-dropdown-trigger,
+#chan       .dash-dropdown-trigger,
+#ttl        .dash-dropdown-trigger {
+    padding-top: 1px;
+    padding-bottom: 1px;
+    min-height: 0;
+}
+#polarity .dash-options-list-option,
+#method   .dash-options-list-option { padding-top: 1px; padding-bottom: 1px; }
+
+/* ===== Item 5: all-dark Data Explorer (panels, cards, tiles, form controls) ===== */
+/* right detail pane: dark bg + light text (keep the save message green) */
+#exp-rightpane { background: #1b1b24 !important; }
+#exp-rightpane, #exp-rightpane td, #exp-rightpane span, #exp-rightpane div,
+#exp-rightpane label, #exp-rightpane summary { color: #dfe6ff !important; }
+#exp-rightpane #exp-save-msg { color: #7fdc7f !important; }
+#exp-detail details > div { background: #14141b !important; border-color: #2a2a35 !important; }
+/* hover-preview panel (bottom of the middle column) */
+#exp-prev { background: #14141b !important; }
+/* cell cards + file tiles in the middle column */
+#exp-cards > div { background: #2a2a36 !important; }
+#exp-cards > div, #exp-cards > div * { color: #dfe6ff !important; }
+#exp-files label { background: #2a2a36 !important; }
+#exp-files label, #exp-files label * { color: #dfe6ff !important; }
+/* dark form controls inside the Explorer */
+#explorer-modal input, #explorer-modal textarea {
+    background: #15151d !important; color: #e3e9ff !important;
+    border: 1px solid #33333f !important;
+}
+#explorer-modal input::placeholder, #explorer-modal textarea::placeholder { color: #6c7488 !important; }
+#explorer-modal .dash-dropdown, #explorer-modal .dash-dropdown-trigger,
+#explorer-modal .dash-dropdown-value, #explorer-modal .dash-dropdown-placeholder {
+    background: #15151d !important; color: #e3e9ff !important; border-color: #33333f !important;
+}
+
+/* Data Explorer rail column resize handles */
+.rail-rz:hover, .rail-rz:active { background: #4a4a66; }
+
+/* Item 4: inverted (dark) action buttons in the Data Explorer */
+#import-data, #exp-open-viewer, #save-meta, #backup-mirror {
+    background: #2f3142 !important; color: #e3e9ff !important; border: 1px solid #555 !important;
+}
+#import-data:hover, #exp-open-viewer:hover, #save-meta:hover, #backup-mirror:hover {
+    background: #3c3f56 !important;
+}
+
+/* Items 1+2: consistent Explorer button heights (delete = reference; Import/Backup double) */
+#del-files, #exp-open-viewer, #save-meta {
+    height: 24px !important; box-sizing: border-box; padding-top: 0; padding-bottom: 0;
+}
+#import-data, #backup-mirror { height: 48px !important; box-sizing: border-box; }
+
+/* Item 3: pulsing glow on hover — nav switch targets + the breadcrumb back-date */
+@keyframes neitz-glow {
+    0%, 100% { box-shadow: 0 0 5px 1px rgba(120,160,255,0.45); background: rgba(120,160,255,0.10); }
+    50%      { box-shadow: 0 0 16px 5px rgba(140,180,255,0.85); background: rgba(140,180,255,0.30); }
+}
+.glow-target { border-radius: 6px; transition: background .2s; padding: 0 6px; }
+.glow-target:hover { animation: neitz-glow 1.1s ease-in-out infinite; }

@@ -8,9 +8,9 @@ multi-panel figures used during development.
 - `flicker_onoff_psth.py` — per-file transition-triggered ON/OFF PSTHs
 - `extract_abf_spikes.py` — detect spikes → binary spike-train CSV (siso layout)
 
-> **Note:** their hardcoded `ABF_GLOBS` point at the old in-repo `data/ipRGC barak/…`
-> layout, which has moved into the data store (`~/Documents/ephysdataio/<date>/<cell>/`).
-> Update the glob (or use `neitz.run` / the `neitz` CLI / the GUI) to run them against
-> the store. They will be migrated to the manifest-driven flow in a later phase.
+> **Note:** their `ABF_GLOBS` read from the managed data store
+> (`~/Documents/ephysdataio/<date>/<cell>/`, override with `$EPHYSDATAIO_ROOT`),
+> defaulting to the `2026-06-02` cells. Edit the glob to target other cells, or use the
+> manifest-driven flow (`neitz.run` / the `neitz` CLI / the GUI) for routine work.
 
 For routine work prefer the CLI (`neitz flicker …`) or `neitz.run` — see `README_TEST.md`.

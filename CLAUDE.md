@@ -56,7 +56,38 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 - Import COPIES files into `<cell>/raw/` with proper names. Analysis writes figures
   (PNG+PDF+SVG) + metrics.csv + result.json into `<cell>/outputs/<name>/` and records them.
 - Optional per-computer mirror (Google Drive etc.): `neitz mirror --set PATH`; true rsync
-  mirror with deletes; auto after analysis.
+  mirror with deletes; auto after analysis. The config file `~/.config/neitz/config.json` must
+  be a JSON **object** `{"mirror": "…"}` — a bare quoted string is invalid JSON and is silently
+  ignored (`mirror_dir()` → None). Always set it via `neitz mirror --set`, never by hand. Note
+  `.trash/` lives inside the store, so deletes also propagate to the mirror on the next sync.
+
+## Data in the store & validated findings (durable science, not just code)
+
+- **2017-01-18/c01** (`20170118Bc4`, S-iso **gaussian noise**): the Python temporal-STA
+  reproduces Sara Patterson's MATLAB ground truth **exactly** — biphasic filter, peak
+  **22.2 ms OFF**, 15 epochs, low-pass tuning peaking ~18–20 Hz. Pinned as the
+  `test_run_cell_noise_sta_peak` regression. Normalization gotcha (made explicit in
+  `normalize_filter`): MATLAB divides the filter by `max(abs())` (trough → −1.0); dividing by
+  `std` instead yields the *same* filter at ~5× scale. Sara's reference math lives in
+  `MTFanalysis` inside `analyzeOnline.m` (case IsoSTA/GaussianNoise), not in the `iprgc4jim.m`
+  wrapper. (Her `SaraipRGC/` source tree was removed from the repo in the restructure.)
+- **2026-06-02/c01 (ipRGC) + c02 (notipRGC)** (Barak's recordings): **voltage-clamp**, ONE
+  continuous sweep ~79–92 s @ 20 kHz, 3 channels — ch0 `Im_prime` (current, pA), ch1 `Vm_sec`
+  (mV), ch2 `TTL` (frame clock). The "spikes" are **biphasic escaped action currents** on ch0
+  (~60–200 pA over ~2 pA noise) — detect on the inward (negative) peak at ~6×MAD. Stimulus is
+  **2 Hz black/white full-field flicker** (a light-sensitivity screen), NOT gaussian noise, and
+  its timing is **fully recoverable from the TTL** — no stimulus file needed. Finding: a pooled
+  circular-shift test shows **neither cell has a significant transient ON/OFF response** (ipRGC
+  ON 1.29× p=0.56 / OFF 1.23× p=0.66, 2931 spk; notipRGC ON 1.35× p=0.42 / OFF 1.26× p=0.67,
+  722 spk). Earlier per-trial ON/OFF labels were noise. The ipRGC recording is somewhat unstable
+  (action-current amplitude drifted ±30→±200 pA across trials).
+- **Rig caveat**: across otherwise-identical flicker trials the pre-flicker adapting block is
+  driven inconsistently — e.g. 0040's frame sync is flat (0 Hz carrier) where 0041 runs the
+  ~240 Hz carrier. Flag this if frame-sync timing matters for an analysis.
+- **Method caveat**: `flicker.shift_test`'s circular-shift null only *rotates* a periodic PSTH,
+  so its p-value has a floor (~latency-window/period) and low power. The default null is
+  `'jitter'` (per-spike), which actually detects locked responses; `'shift'` is kept for
+  reference only.
 
 ## Conventions & decisions (don't relearn these)
 

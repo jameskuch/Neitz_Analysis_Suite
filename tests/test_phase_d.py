@@ -23,16 +23,19 @@ def test_pick_cell_and_save_meta(tmp_path, monkeypatch):
 
     # pick_cell (multi-cell + recent tracking) lists the cell's files, returns sel as a
     # list, and prepends the pick to the recent-cells list. A single string is wrapped.
-    opts, files, sel, stype, sparams, recent = viewer.pick_cell("2026-06-02|c01", [], None)
+    opts, files, sel, recent = viewer.pick_cell("2026-06-02|c01", [], None)
     assert len(opts) == 1                                 # the cell's one recording is listed
     assert isinstance(files, list)                        # checked = openable files only
     assert sel == [{"date": "2026-06-02", "cell": "c01"}]
-    assert stype is None                                  # no stimulus yet
     assert recent == ["2026-06-02|c01"]                   # recorded as most-recently-opened
 
-    # save_meta writes stimulus into the manifest (the GUI metadata-query flow)
-    msg = viewer.save_meta(1, sel, "flicker", "flicker_hz=2, frame_rate=60")
-    assert "saved" in msg
+    # save_meta (now driven by the Data Explorer's selected date/cell) writes stimulus +
+    # cell type + notes into the manifest
+    msg = viewer.save_meta(1, "2026-06-02", "c01", "flicker",
+                           "flicker_hz=2, frame_rate=60", "ipRGC", "test note")
+    assert "stimulus" in msg
     reloaded = ds.cell("2026-06-02", "c01")
     stim = reloaded.get_stimulus("2026_06_02_0001")
     assert stim["type"] == "flicker" and stim["params"]["flicker_hz"] == 2.0
+    assert reloaded.data["cell_type"] == "ipRGC"
+    assert reloaded.data["notes"] == "test note"

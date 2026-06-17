@@ -45,6 +45,63 @@ class SpikeTrain:
         return train
 
 
+# --- Sara's MATLAB detector (spikeDetectorOnline.m, MHT/AIW), ported faithfully -----
+HIGHPASS_SPIKES_HZ = 500.0     # spikeDetectorOnline: high-pass to keep only spikes
+NOISE_SIGMA_FACTOR = 4.0       # AIW noise gate: mean spike must clear mean+4σ of non-spikes
+
+
+def _highpass_fft(x, fs, cut_hz):
+    """FFT high-pass — port of highPassFilter.m: zero the lowest `keep` FFT bins and
+    their conjugate mirror, keep the rest. keep = round(cut / (fs/L))."""
+    x = np.asarray(x, dtype=float)
+    L = x.size
+    keep = int(round(cut_hz * L / fs))
+    F = np.fft.fft(x)
+    if keep > 0:
+        F[:keep] = 0
+        F[-(keep + 1):] = 0           # matches MATLAB's end-FreqKeepPts:end
+    return np.real(np.fft.ifft(F))
+
+
+def _local_maxima(x):
+    """Indices of local maxima — port of getPeaks(x, +1): find(diff(diff(x)>0)<0)+1."""
+    rising = (np.diff(x) > 0).astype(np.int8)
+    return np.where(np.diff(rising) < 0)[0] + 1
+
+
+def detect_spikes_matlab(signal, fs, *, polarity: str = "neg", refractory_s: float = 0.002,
+                         highpass_hz: float = HIGHPASS_SPIKES_HZ,
+                         thresh: float = None) -> SpikeTrain:
+    """Port of Sara's spikeDetectorOnline.m. 500 Hz FFT high-pass → remove baseline (median)
+    → orient by `polarity` ('neg' flips, 'pos' as-is, 'abs' rectifies — the original MATLAB
+    auto-flips, but here the GUI's neg/pos/abs drives it) → threshold = `thresh` if given, else
+    1/3 of the max deflection → positive local maxima above threshold → AIW noise gate (mean
+    spike must be >= mean(non-spike) + 4·std(non-spike), else NO spikes)."""
+    trace = _highpass_fft(signal, fs, highpass_hz)
+    trace = trace - np.median(trace)
+    if polarity == "neg":
+        trace = -trace                                # downward action currents → positive
+    elif polarity == "abs":
+        trace = np.abs(trace)                         # either direction
+    # 'pos' → use the trace as-is
+    if thresh is None:
+        thresh = np.max(trace) / 3.0                  # the technique's built-in default
+    ind = _local_maxima(trace)
+    ind = ind[trace[ind] > 0]                          # positive deflections only
+    amps = trace[ind]
+    keep = amps > thresh
+    peak_times, peaks = ind[keep], amps[keep]
+    if peaks.size:                                     # AIW: reject if not clearly above noise
+        mask = np.ones(trace.size, dtype=bool)
+        mask[peak_times] = False
+        nonspike = trace[mask]
+        if np.mean(peaks) < np.mean(nonspike) + NOISE_SIGMA_FACTOR * np.std(nonspike, ddof=1):
+            peak_times = np.array([], dtype=int)
+            peaks = np.array([], dtype=float)
+    return SpikeTrain(times=peak_times / fs, fs=fs, amplitudes=peaks,
+                      polarity=polarity, threshold=float(thresh), sigma=None)
+
+
 def detect_spikes(signal, fs, *, polarity: str = "neg", method: str = "mad",
                   k: float = 6.0, abs_threshold: float = None,
                   refractory_s: float = 0.002) -> SpikeTrain:
@@ -57,8 +114,15 @@ def detect_spikes(signal, fs, *, polarity: str = "neg", method: str = "mad",
                       adapts to each file's noise, but a spike must ALSO clear the
                       absolute floor — rejects small proximal-cell events while
                       keeping noise-adaptive detection.
+      'matlab'     -> Sara's spikeDetectorOnline.m (500 Hz high-pass, 4σ noise gate). Respects
+                      polarity (neg/pos/abs); threshold = abs_threshold if given, else max/3.
+                      Ignores k.
     """
     signal = np.asarray(signal, dtype=float)
+    if method == "matlab":
+        return detect_spikes_matlab(
+            signal, fs, polarity=polarity, refractory_s=refractory_s,
+            thresh=(float(abs_threshold) if abs_threshold is not None else None))
     med = np.median(signal)
     sigma = np.median(np.abs(signal - med)) * 1.4826
 
