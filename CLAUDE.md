@@ -116,6 +116,14 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   for files, `<date>_ALL/` for a whole day), not unlinked. `delete_files` / `delete_date` helpers.
   (`del-outputs` is created dynamically by `explorer_detail`, so the app sets
   `suppress_callback_exceptions=True`.)
+- **"🔧 Fix abf (Neitz)"** button (Explorer detail header, next to Save metadata; callback `fix_abf`):
+  one click applies the lab standard to a cell — sets every `.abf` recording's `stimulus.type` to
+  `sq_wave` (preserving existing params, defaulting `frame_rate=60`, `source="neitz-fix"`), verifies
+  the `Im_prime/Vm_sec/TTL` channels (warns, non-destructively, if a file isn't that config), and
+  clears the in-memory `_CACHE` for the cell's files so they're re-read fresh. Non-destructive — it
+  never modifies the `.abf` binary. Handy for the blank-stimulus session cells and as a recovery
+  button. (Channel ROLES are already auto-standard: `chan` defaults to `Im_prime`, `ttl` to the
+  first `*ttl*` name.)
 - **Returning to the Analysis View re-syncs it** (`resync_on_close` on `exp-close`): rebuilds the
   `#file` options/value (existing files only, so anything deleted in the Explorer drops out),
   refreshes `sel-cell`, and bumps `gallery-trigger` — so Explorer deletions take effect WITHOUT a

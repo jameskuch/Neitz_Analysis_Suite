@@ -1200,6 +1200,10 @@ app.layout = html.Div(
                     html.Div(id="exp-cell-label",
                              style={"fontWeight": "bold", "fontSize": "16px", "flex": "1",
                                     "minWidth": 0}),
+                    html.Button("🔧 Fix abf (Neitz)", id="fix-abf", n_clicks=0,
+                                title="Apply the Neitz Lab config: stimulus = sq wave, "
+                                      "channels Im_prime/Vm_sec/TTL; re-read the files fresh",
+                                style={"fontSize": "12px"}),
                     html.Button("💾 Save metadata", id="save-meta", n_clicks=0,
                                 style={"fontSize": "12px"}),
                 ], style={"display": "flex", "alignItems": "center", "gap": "4px",
@@ -2106,6 +2110,54 @@ def save_meta(_n, date, cell, stype, sparams, ctype, notes):
     bits = [f"stimulus '{stype}' {params} → {n} recordings"] if stype else []
     bits.append(f"type={ctype or '—'}, notes saved")
     return "✓ " + "; ".join(bits)
+
+
+# ---- Data Explorer: "Fix abf (Neitz)" — apply the standard lab config to a cell, non-destructive:
+#      stimulus = sq wave (preserving any existing params, default frame_rate=60), verify the
+#      Im_prime/Vm_sec/TTL channels, and clear the in-memory cache so the files are re-read fresh.
+NEITZ_CHANNELS = ["Im_prime", "Vm_sec", "TTL"]
+
+
+@app.callback(Output("exp-save-msg", "children", allow_duplicate=True),
+              Output("stim-type", "value", allow_duplicate=True),
+              Output("store-rev", "data", allow_duplicate=True),
+              Output("exp-detail", "children", allow_duplicate=True),
+              Input("fix-abf", "n_clicks"),
+              State("exp-date", "data"), State("exp-cell", "data"), State("store-rev", "data"),
+              prevent_initial_call=True)
+def fix_abf(_n, date, cell, rev):
+    if not (date and cell):
+        return "select a cell in the Explorer first", no_update, no_update, no_update
+    ds = DataStore()
+    cm = ds.cell(date, cell)
+    n, warns = 0, []
+    for r in cm.data.get("recordings", []):
+        f = str(r.get("file", ""))
+        if not f.endswith(".abf"):
+            continue
+        n += 1
+        p = dict((r.get("stimulus") or {}).get("params") or {})   # preserve existing params
+        p.setdefault("frame_rate", 60)                            # lab-standard display rate
+        cm.set_stimulus(r["id"], "sq_wave", p, source="neitz-fix")
+        _CACHE.pop(str(cm.dir / f), None)                         # force a fresh re-read
+    # verify the channel config on the first recording (non-destructive — just warn on mismatch)
+    try:
+        first = next((str(cm.dir / r["file"]) for r in cm.data.get("recordings", [])
+                      if str(r.get("file", "")).endswith(".abf")), None)
+        if first:
+            chans = list(load_recording(first).channel_names)
+            missing = [c for c in NEITZ_CHANNELS if c not in chans]
+            if missing:
+                warns.append(f"⚠ channels {chans} missing {missing} — not the Neitz config!")
+    except Exception as e:
+        warns.append(f"⚠ channel check failed: {e}")
+    cm.save()
+    ds.update_index()
+    msg = (f"✓ Neitz config applied to {n} recording(s): stimulus = sq wave, "
+           f"channels Im_prime/Vm_sec/TTL, files re-read fresh")
+    if warns:
+        msg += "   " + "; ".join(warns)
+    return msg, "sq_wave", (rev or 0) + 1, explorer_detail(date, cell)
 
 
 def _attach_output_files(ds, date, cell, analysis, saved):
