@@ -121,9 +121,15 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   refreshes `sel-cell`, and bumps `gallery-trigger` — so Explorer deletions take effect WITHOUT a
   browser refresh and a subsequent Run no longer silently no-ops on a now-deleted file. `pick_cell`
   and `resync_on_close` share the `_cell_files(vals)` helper.
-- **Run Analysis feedback**: `#store-msg` is wrapped in `dcc.Loading` (spinner during the run), and
-  a clientside callback shows an instant "⏳ Running analysis…" the moment the button is clicked
-  (the server callback — analysis + 4K kaleido exports — can take ~30–60 s).
+- **Run Analysis is a BACKGROUND callback** (`background=True`, `DiskcacheManager` — needs
+  `diskcache`/`multiprocess`/`psutil`, in `[gui]` extras): the analysis + 4K kaleido exports take
+  **~2–4 min** (the worker re-imports the module on spawn and kaleido is slow per call), so it runs
+  off the UI thread — the UI stays responsive and the outputs **auto-refresh when done** (no browser
+  refresh). `running=[…]` disables the run button + shows "⏳ Running… (~1-2 min)" during the run; a
+  clientside callback shows an instant message; `#store-msg` is wrapped in `dcc.Loading`. The
+  background worker spawns from `viewer.py` import, so module-level code must stay import-safe.
+- **Output thumbnails**: 64px in the Explorer detail pane (`explorer_detail`); the Analysis-View
+  "Cell outputs" gallery (`output_gallery`) is a separate 150px grid.
 - **Some Sara CSVs aren't time-series** (e.g. `siso-DLP.csv` has a phase label in col 0).
   `CsvSpikeRecording` raises on those; the viewer's `loadable()` filters them and prefers
   spike-train CSVs. Don't "fix" by forcing them open.

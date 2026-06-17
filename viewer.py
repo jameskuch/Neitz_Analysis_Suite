@@ -667,13 +667,14 @@ def explorer_detail(date, cell):
     for p in pngs:
         rel = p.relative_to(outdir)
         friendly = label_by_analysis.get(rel.parts[0])     # the user's run name for this output
-        caption = [html.Span(str(rel), style={"fontSize": "11px", "flex": "1", "overflow": "hidden",
-                                              "textOverflow": "ellipsis", "whiteSpace": "nowrap"})]
+        caption = [html.Span(str(rel), title=str(rel),
+                             style={"fontSize": "9px", "flex": "1", "overflow": "hidden",
+                                    "textOverflow": "ellipsis", "whiteSpace": "nowrap"})]
         if friendly:                                       # show the friendly name above the path
             caption = [html.Span(friendly, title=friendly,
-                                 style={"fontSize": "11px", "fontWeight": "bold", "display": "block",
+                                 style={"fontSize": "9px", "fontWeight": "bold", "display": "block",
                                         "overflow": "hidden", "textOverflow": "ellipsis",
-                                        "whiteSpace": "nowrap", "maxWidth": "160px"}),
+                                        "whiteSpace": "nowrap", "maxWidth": "115px"}),
                        caption[0]]
         out_thumbs.append(html.Div([
             dcc.Checklist(id={"type": "out-check", "src": str(p)},      # select for multi-delete
@@ -683,15 +684,15 @@ def explorer_detail(date, cell):
             html.Img(src=_img_datauri(str(p)), className="gprev",
                      id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
                      **{"data-ps": "img|" + str(p)},
-                     style={"height": "110px", "border": "1px solid #ccc", "cursor": "pointer",
+                     style={"height": "64px", "border": "1px solid #ccc", "cursor": "pointer",
                             "background": "white", "display": "block"}),
             html.Div([
                 html.Div(caption, style={"flex": "1", "minWidth": "0"}),
                 html.Button("🗑", id={"type": "del-output", "src": str(p)}, n_clicks=0,
                             title="delete this figure",
-                            style={"fontSize": "15px", "padding": "0 4px", "color": "#ff7a7a",
+                            style={"fontSize": "13px", "padding": "0 3px", "color": "#ff7a7a",
                                    "border": "none", "background": "none", "cursor": "pointer"}),
-            ], style={"display": "flex", "alignItems": "center", "maxWidth": "180px"}),
+            ], style={"display": "flex", "alignItems": "center", "maxWidth": "130px"}),
         ], style={"margin": "3px", "position": "relative"}))
 
     return [
@@ -782,8 +783,15 @@ _DEL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
 # ============================================================
 # App
 # ============================================================
-app = Dash(__name__, suppress_callback_exceptions=True)   # detail-pane buttons (e.g. del-outputs)
-                                                          # are created dynamically by explorer_detail
+# background-callback manager: Run Analysis (analysis + 4K kaleido exports, ~1-2 min) runs in a
+# worker process so it doesn't block the UI, and its outputs auto-update the front end when done.
+import tempfile as _tempfile
+import diskcache as _diskcache
+from dash import DiskcacheManager as _DiskcacheManager
+_bg_manager = _DiskcacheManager(_diskcache.Cache(os.path.join(_tempfile.gettempdir(), "neitz_dash_bg")))
+
+app = Dash(__name__, suppress_callback_exceptions=True,   # detail-pane buttons (e.g. del-outputs)
+           background_callback_manager=_bg_manager)       # are created dynamically by explorer_detail
 app.title = "Neitz ABF Viewer"
 _files = discover_abf()
 
@@ -1959,7 +1967,10 @@ def _attach_output_files(ds, date, cell, analysis, saved):
               State("region-start", "value"), State("region-end", "value"),
               State("region-mode", "value"), State("stagger-pct", "value"),
               State("disp-show", "value"), State("disp-binned", "value"), State("train-bin", "value"),
-              prevent_initial_call=True)
+              background=True,                              # run off the UI thread (analysis + 4K
+              running=[(Output("run-cell", "disabled"), True, False),   # exports take ~1-2 min);
+                       (Output("run-cell", "children"), "⏳ Running… (~1-2 min)", "▶ Run analysis")],
+              prevent_initial_call=True)                   # outputs auto-refresh the UI when done
 def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
              chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin):
     import re

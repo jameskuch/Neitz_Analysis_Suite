@@ -26,8 +26,9 @@ That's the program. A draggable splitter divides the **left sidebar** (controls)
   window size): the full window, the spike-train power graph, an analog panel (color signal +
   spikes / B&W without spikes / color frame-syncs), and the frame-syncs separated per file. A
   lighter **PNG preview** of each is saved too, so they appear (click-to-enlarge) in the Explorer's
-  Outputs grid alongside the analysis figures. A spinner + an "⏳ Running analysis…" message show
-  while it works (the 4K exports add ~30–60 s).
+  Outputs grid alongside the analysis figures. Run Analysis runs **in the background** (it takes
+  ~2–4 min with the 4K exports) so the UI stays responsive, the run button shows "⏳ Running…", and
+  the outputs **auto-refresh when done** — no browser refresh needed.
 - **Channels & spike detection** — signal / TTL channel, **polarity** (neg/pos/abs), and
   the **spike-detect algorithm**: `k·MAD`, `absolute`, `k·MAD ≥ floor`, or
   **MATLAB (Sara)** (a faithful port of `spikeDetectorOnline.m`: 500 Hz high-pass, max/3
