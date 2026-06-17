@@ -151,12 +151,17 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   extras): the flicker branch calls `export_window_figures(...)` which rebuilds the GUI graphs via
   the shared `build_figures(...)` (the `render` callback is now a thin wrapper over it) and writes,
   at 3840×2160 (4K full-screen, regardless of the actual window), into `outputs/<name>/`:
-  `window_4k.{pdf,svg}` (all panels: signal+frame-sync, power, ISI), `power_4k.pdf`,
-  `analog_framesync_4k.pdf` (color signal+spikes / B&W no-spikes / color frame-syncs), and
-  `framesync_separated_4k.pdf` (each file's frame-sync in its own un-staggered panel). Each also
-  gets a lighter **`.png`** (1920×1080) so it surfaces in the Explorer/gallery (which glob
-  `outputs/**/*.png`); PDF/SVG stay 4K. Files are attached to the output record via
-  `_attach_output_files`. Wrapped in try/except so a kaleido failure never breaks the run.
+  `window_4k.{pdf,svg}` (signal + frame-sync TIME-ALIGNED at 80% width, a 250 ms stimulus zoom in
+  the right 20%, power | ISI below), `power_4k.pdf`, `analog_framesync_4k.pdf` (color signal+spikes
+  / B&W no-spikes / color frame-syncs, x-shared), `framesync_separated_4k.pdf` (each file's
+  frame-sync in its own un-staggered panel), and **`assumptions_4k.pdf`** — a table page of the
+  exact detection settings used (polarity/method/k/threshold/refractory/region/channels) + per-file
+  spike counts + thresholds (so it's verifiable Run Analysis honored the live settings; height
+  fits the row count). Each figure also gets a lighter **`.png`** (1920×1080) so it surfaces in the
+  Explorer/gallery (which glob `outputs/**/*.png`); PDF/SVG stay 4K. Files are attached to the
+  output record via `_attach_output_files`. Wrapped in try/except so a kaleido failure never breaks
+  the run. (`plots.flicker_cycle_grid` sizes its grid to the epoch count: ≤5 → 1×n no empty slot,
+  10 → 2×5.)
 - **Run dispatch by stimulus type** (NOT guessed from file contents — driven by the manifest's
   explicit `stimulus.type`): `gaussian_noise` → `run_cell_noise` (reverse-correlation STA from
   the spike + stimulus CSVs, `outputs/sta/`); else → `run_cell_flicker`. Data format (abf-analog

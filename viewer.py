@@ -1555,12 +1555,13 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
     cp = copy.deepcopy                                  # traces can't live in two figures at once
     saved = {}
 
-    def _write(fig, name, fmts):
+    def _write(fig, name, fmts, h=None):
+        H_ = h or H                                        # optional shorter height (e.g. tables)
         fig.update_layout(template="plotly_white", paper_bgcolor="white", plot_bgcolor="white")
         for ext in fmts:
             p = outdir / f"{name}.{ext}"
-            w, h = (1920, 1080) if ext == "png" else (W, H)   # PNG = lighter preview for the gallery
-            pio.write_image(fig, str(p), format=ext, width=w, height=h)
+            w, hh = (1920, int(H_ * 1920 / W)) if ext == "png" else (W, H_)   # PNG = lighter preview
+            pio.write_image(fig, str(p), format=ext, width=w, height=hh)
             saved[f"{name}_{ext}"] = p
 
     sig = [t for t in tf.data if getattr(t, "yaxis", "y") != "y2"]      # signal + spike markers
@@ -1574,16 +1575,34 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
     rs = float(rstart) if rstart not in (None, "") else 0.0
     re_ = float(rend) if rend not in (None, "") else (dur or 0.0)
 
-    # (1) full current window: signal+frame-sync (top), power | ISI (bottom) ----------------------
-    combo = make_subplots(rows=3, cols=2,
-                          specs=[[{"colspan": 2}, None], [{"colspan": 2}, None], [{}, {}]],
+    # (1) full window: the top two rows (signal + frame-sync) are shrunk to 80% (left-justified) and
+    #     TIME-ALIGNED; the right 20% is a 250 ms zoom of the stimulus (same rows, raw full-res).
+    #     Bottom row: spike-train power | ISI. -------------------------------------------------------
+    z0 = rs                                            # 250 ms stimulus zoom, from the region start
+    z1 = z0 + 0.25
+    combo = make_subplots(rows=3, cols=2, column_widths=[0.8, 0.2],
                           row_heights=[0.42, 0.26, 0.32], vertical_spacing=0.09,
-                          horizontal_spacing=0.08,
-                          subplot_titles=("", "", "spike-train power", "ISI histogram"))
+                          horizontal_spacing=0.045,
+                          subplot_titles=("", "stimulus · 250 ms", "", "", "spike-train power", "ISI"))
     for t in sig:
         combo.add_trace(cp(t), row=1, col=1)
     for t in ttl:
         combo.add_trace(cp(t), row=2, col=1)
+    # right-column 250 ms zoom: raw (un-decimated) signal + frame-sync over [z0, z1]
+    for idx, path in enumerate(files):
+        recz = get_recording(path); fsz = recz.fs; colz = PALETTE[idx % len(PALETTE)]
+        yz = get_channel(path, chan)
+        a, b = max(0, int(z0 * fsz)), min(len(yz), int(z1 * fsz))
+        tz = np.arange(a, b) / fsz
+        combo.add_trace(go.Scattergl(x=tz, y=yz[a:b], mode="lines", line=dict(width=0.8, color=colz),
+                                     opacity=0.7, showlegend=False), row=1, col=2)
+        if ttl_name and ttl_name != chan:
+            try:
+                tt = get_channel(path, ttl_name)
+                combo.add_trace(go.Scattergl(x=tz, y=tt[a:b], mode="lines", line=dict(width=0.8, color=colz),
+                                             opacity=0.7, showlegend=False), row=2, col=2)
+            except Exception:
+                pass
     for t in ff.data:
         combo.add_trace(cp(t), row=3, col=1)
     for t in isf.data:
@@ -1591,11 +1610,18 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
     combo.update_yaxes(title_text=(tf.layout.yaxis.title.text or chan), row=1, col=1)
     combo.update_yaxes(title_text=(tf.layout.yaxis2.title.text or (ttl_name or "frame sync")), row=2, col=1)
     combo.update_xaxes(title_text="time (s)", row=2, col=1)
+    combo.update_xaxes(title_text="time (s)", row=2, col=2)
     combo.update_xaxes(title_text="frequency (Hz)", range=[0, FMAX], row=3, col=1)
     combo.update_yaxes(title_text="power (dB)", row=3, col=1)
-    combo.update_xaxes(title_text="inter-spike interval (ms)", row=3, col=2)
+    combo.update_xaxes(title_text="ISI (ms)", row=3, col=2)
     combo.update_yaxes(title_text="count", row=3, col=2)
-    if dur and re_ > rs:                                # shade excluded blocks on the time rows
+    # alignment: frame-sync time-axis matches the signal time-axis (x3↔x); zoom rows share x (x4↔x2)
+    if dur:
+        combo.update_xaxes(range=[0, dur], row=1, col=1)
+    combo.update_xaxes(matches="x", row=2, col=1)      # #1a: signal & frame-sync aligned in time
+    combo.update_xaxes(range=[z0, z1], row=1, col=2)
+    combo.update_xaxes(range=[z0, z1], matches="x2", row=2, col=2)
+    if dur and re_ > rs:                                # shade excluded blocks on the full time rows
         for r in (1, 2):
             if rs > 0:
                 combo.add_vrect(x0=0, x1=rs, fillcolor="gray", opacity=0.22, line_width=0, row=r, col=1)
@@ -1647,6 +1673,77 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
                           title=dict(text=f"{stem} — frame syncs (separated)", x=0.5,
                                      xanchor="center", font=dict(size=22)))
         _write(sep, "framesync_separated_4k", ("pdf", "png"))
+
+    # (5) ASSUMPTIONS page — exactly which detection settings were used + per-file spike counts,
+    #     so it's verifiable that Run Analysis honored the live GUI settings. ----------------------
+    from datetime import datetime as _dt
+    _meth = {"mad": "k·MAD", "abs": "absolute", "mad_floor": "k·MAD ≥ floor",
+             "matlab": "MATLAB (Sara)"}.get(method, method)
+    amap = absth_map or {}
+    det0 = dict(polarity=polarity, method=method, k=(float(k) if k not in (None, "") else 6.0),
+                abs_threshold=(float(absth) if absth not in (None, "") else None),
+                refractory_s=((float(refr) / 1000.0) if refr else 0.002))
+    per = []                                            # (file, n_total, n_region, threshold, flicker_hz)
+    for path in files:
+        try:
+            rec = get_recording(path); fs = rec.fs
+            y = get_channel(path, chan)
+            ea = amap.get(path)
+            if ea is None:
+                ea = det0["abs_threshold"]
+            st = detect_spikes(y, fs, **dict(det0, abs_threshold=(float(ea) if ea is not None else None)))
+            inreg = st.times[(st.times >= rs) & (st.times <= re_)]
+            fl = get_flicker(path, ttl_name)
+            per.append((os.path.basename(path), len(st), int(len(inreg)),
+                        (f"{st.threshold:.2f}" if st.threshold is not None else "—"),
+                        (f"{fl.freq:.2f}" if fl else "—")))
+        except Exception as e:
+            per.append((os.path.basename(path), "err", str(e)[:20], "—", "—"))
+    uses_abs = method in ("abs", "mad_floor", "matlab")
+    settings = [
+        ("cell / run", stem),
+        ("signal channel", str(chan)),
+        ("frame-sync (TTL) channel", str(ttl_name)),
+        ("polarity", {"neg": "neg (downward)", "pos": "pos (upward)", "abs": "abs (either)"}.get(polarity, str(polarity))),
+        ("spike-detect method", _meth),
+        ("k (·MAD)", (f"{det0['k']:g}" if method in ("mad", "mad_floor") else "— (not used)")),
+        ("absolute threshold", ("per-trace (see table)" if amap else
+                                (f"{det0['abs_threshold']:g}" if (uses_abs and det0['abs_threshold'] is not None)
+                                 else ("max/3 auto" if method == "matlab" else "— (not used)")))),
+        ("refractory (ms)", (f"{(refr if refr else 2)}" if method != "matlab" else "— (not used)")),
+        ("analysis region (s)", f"{rs:.2f} – {re_:.2f}" + ("  (crop ON)" if "crop" in (region_mode or []) else "")),
+        ("stagger frame-sync %", str(stagger_pct or 0)),
+        ("files analyzed", str(len(files))),
+        ("total spikes (all files)", str(sum(p[1] for p in per if isinstance(p[1], int)))),
+        ("total in-region spikes", str(sum(p[2] for p in per if isinstance(p[2], int)))),
+        ("generated", _dt.now().isoformat(timespec="seconds")),
+    ]
+    _ns, _np = len(settings), len(per)                 # size each table's domain to its row count
+    info = make_subplots(rows=2, cols=1, vertical_spacing=0.06,
+                         row_heights=[_ns / (_ns + _np), _np / (_ns + _np)],
+                         specs=[[{"type": "table"}], [{"type": "table"}]],
+                         subplot_titles=("detection settings used", "per-file spike counts"))
+    info.add_trace(go.Table(
+        columnwidth=[34, 66],
+        header=dict(values=["<b>parameter</b>", "<b>value</b>"], fill_color="#2f3142",
+                    font=dict(color="white", size=20), align="left", height=40),
+        cells=dict(values=[[s[0] for s in settings], [s[1] for s in settings]],
+                   fill_color=[["#f3f4fb", "#ffffff"] * 8], font=dict(size=19), align="left", height=34)),
+        row=1, col=1)
+    info.add_trace(go.Table(
+        columnwidth=[40, 16, 16, 16, 14],
+        header=dict(values=["<b>file</b>", "<b>spikes (total)</b>", "<b>spikes (region)</b>",
+                            "<b>threshold</b>", "<b>flicker Hz</b>"], fill_color="#2f3142",
+                    font=dict(color="white", size=20), align="left", height=40),
+        cells=dict(values=[[p[0] for p in per], [p[1] for p in per], [p[2] for p in per],
+                           [p[3] for p in per], [p[4] for p in per]],
+                   fill_color=[["#f3f4fb", "#ffffff"] * 16], font=dict(size=19), align="left", height=34)),
+        row=2, col=1)
+    info.update_layout(margin=dict(l=40, r=40, t=90, b=40),
+                       title=dict(text=f"{stem} — analysis assumptions", x=0.5, xanchor="center",
+                                  font=dict(size=24)))
+    fit_h = min(H, 360 + 50 * (len(settings) + len(per)))     # fit height to the row count
+    _write(info, "assumptions_4k", ("pdf", "png"), h=fit_h)
     return saved
 
 

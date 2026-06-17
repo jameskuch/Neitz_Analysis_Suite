@@ -32,8 +32,11 @@ def flicker_onoff_figure(group, label=""):
 
 
 def flicker_cycle_grid(per_file, ncol=5):
-    """Per-recording cycle-PSTH grid. `per_file` = list of FlickerResult."""
+    """Per-recording cycle-PSTH grid. `per_file` = list of FlickerResult.
+    The grid fits the count: ≤5 epochs → a single row of exactly n (4 → 1×4, no empty 5th);
+    >5 → `ncol`-wide rows (10 → 2×5)."""
     n = len(per_file)
+    ncol = min(n, ncol) or 1                  # don't pad out to a 5th column when there are fewer
     nrow = int(np.ceil(n / ncol))
     fig, axes = plt.subplots(nrow, ncol, figsize=(3.2 * ncol, 2.6 * nrow), squeeze=False)
     for ax, res in zip(axes.flat, per_file):

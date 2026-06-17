@@ -23,8 +23,11 @@ That's the program. A draggable splitter divides the **left sidebar** (controls)
   them. A **run name** keeps variants side by side (blank = auto: `sta` / `flicker`) and is
   preserved as the output's friendly label; outputs → `<cell>/outputs/<name>/`. The flicker run
   also writes **4K PDF/SVG exports** of the current graphs (rendered at 3840×2160 regardless of
-  window size): the full window, the spike-train power graph, an analog panel (color signal +
-  spikes / B&W without spikes / color frame-syncs), and the frame-syncs separated per file. A
+  window size): the full window (signal + frame-sync time-aligned at 80% width with a 250 ms
+  stimulus zoom on the right, power | ISI below), the spike-train power graph, an analog panel
+  (color signal + spikes / B&W without spikes / color frame-syncs), the frame-syncs separated per
+  file, and an **assumptions** page (a table of the exact detection settings used + per-file spike
+  counts/thresholds). A
   lighter **PNG preview** of each is saved too, so they appear (click-to-enlarge) in the Explorer's
   Outputs grid alongside the analysis figures. Run Analysis runs **in the background** (it takes
   ~2–4 min with the 4K exports) so the UI stays responsive, the run button shows "⏳ Running…", and
@@ -68,7 +71,8 @@ All data + outputs live **outside the repo** at `~/Documents/ephysdataio/`
     manifest.json                # recordings (stimulus type+params, labels) + outputs
     raw/   2026_06_02_0040.abf …
     outputs/flicker/  flicker_onoff.{png,pdf,svg}  metrics.csv  result.json
-                      window_4k.{pdf,svg,png}  power_4k.{pdf,png}  analog_framesync_4k.{pdf,png}  framesync_separated_4k.{pdf,png}
+                      window_4k.{pdf,svg,png}  power_4k.{pdf,png}  analog_framesync_4k.{pdf,png}
+                      framesync_separated_4k.{pdf,png}  assumptions_4k.{pdf,png}
 ```
 
 The `manifest.json` is the source of truth: stimulus metadata, friendly labels, and
