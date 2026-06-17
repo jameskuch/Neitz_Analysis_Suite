@@ -659,9 +659,21 @@ def explorer_detail(date, cell):
     outdir = cm.dir / "outputs"
     pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) \
         if outdir.exists() else []
+    # folder (analysis key) -> friendly run name, from the manifest output records
+    label_by_analysis = {o["analysis"]: o.get("label")
+                         for o in cm.data.get("outputs", []) if o.get("label")}
     out_thumbs = []
     for p in pngs:
         rel = p.relative_to(outdir)
+        friendly = label_by_analysis.get(rel.parts[0])     # the user's run name for this output
+        caption = [html.Span(str(rel), style={"fontSize": "11px", "flex": "1", "overflow": "hidden",
+                                              "textOverflow": "ellipsis", "whiteSpace": "nowrap"})]
+        if friendly:                                       # show the friendly name above the path
+            caption = [html.Span(friendly, title=friendly,
+                                 style={"fontSize": "11px", "fontWeight": "bold", "display": "block",
+                                        "overflow": "hidden", "textOverflow": "ellipsis",
+                                        "whiteSpace": "nowrap", "maxWidth": "160px"}),
+                       caption[0]]
         out_thumbs.append(html.Div([
             html.Img(src=_img_datauri(str(p)), className="gprev",
                      id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
@@ -669,8 +681,7 @@ def explorer_detail(date, cell):
                      style={"height": "110px", "border": "1px solid #ccc", "cursor": "pointer",
                             "background": "white", "display": "block"}),
             html.Div([
-                html.Span(str(rel), style={"fontSize": "11px", "flex": "1", "overflow": "hidden",
-                                           "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+                html.Div(caption, style={"flex": "1", "minWidth": "0"}),
                 html.Button("🗑", id={"type": "del-output", "src": str(p)}, n_clicks=0,
                             title="delete this figure",
                             style={"fontSize": "12px", "padding": "0 4px", "color": "#b00",
