@@ -202,7 +202,14 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
   abs-threshold grid (see conventions). The region/display controls are **overlays floated onto
   the graphs** via `ov()` (start/end + `crop`, hide-spikes/spike-train, stagger%, ISI bin).
 - The time graph re-renders detail on zoom (relayout); **scrollZoom** enables fine zooming, and
-  the frame-sync y-axis re-autoranges on stagger via a per-axis `uirevision`.
+  the frame-sync y-axis re-autoranges on stagger via a per-axis `uirevision`. Both y-axes are
+  **`fixedrange=True`** so the drag-box zoom is **X-ONLY** — Plotly can't axis-lock a thin (narrow
+  left-right) box into a y-only zoom, so a precise narrow x-zoom works in one drag (the old behavior
+  collapsed a too-narrow box into broad horizontal min/max-envelope lines). `fixedrange` blocks USER
+  y-zoom only, NOT the code's `autorange` (stagger still fits). Trade-off: no drag-box Y-zoom (Y just
+  autoranges). NOTE: a `dragmode='select'`→relayout approach for this does NOT work — the global
+  `uirevision="keep"` (needed to preserve a real user zoom while the data re-decimates) reverts a
+  programmatic `Plotly.relayout` range, so the fix must ride the native user-zoom path.
 - **Data Explorer** (`#explorer-modal`, full-screen, all-dark): a **resizable** sortable/
   searchable **rail** of dates (`#exp-rail`; column widths are CSS vars `--rc1/2/3` driven by
   drag handles in `assets/rail-resize.js`, persisted; a dead spacer + fixed trash) with a

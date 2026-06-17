@@ -1494,11 +1494,15 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
                                    annotation=dict(font_size=10), row="all", col=1)
 
     ttl_ylab = (f"{ttl_name} (staggered)" if (stagger and multi) else (ttl_name or "TTL"))
-    time_fig.update_yaxes(title_text=row1_ylab, row=1, col=1)
+    # fixedrange on both y-axes makes the drag-box zoom X-ONLY: Plotly can't axis-lock a thin box
+    # into a y-only zoom, so a narrow left-right drag zooms the time axis precisely (no minimum
+    # width / no broad-horizontal-lines artifact). Y still autoranges to the data; wheel-scroll
+    # zooms the x-axis for fine control. fixedrange blocks USER y-zoom only, not the code's autorange.
+    time_fig.update_yaxes(title_text=row1_ylab, row=1, col=1, fixedrange=True)
     # the frame-sync row's y gets its OWN uirevision tied to the staggered extent, so it
     # re-autoranges (all traces fit) when the stagger % or the number of traces changes —
     # the global uirevision="keep" would otherwise pin the old y-range and clip the spread.
-    time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1, autorange=True,
+    time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1, autorange=True, fixedrange=True,
                           uirevision=f"ttl-{stagger_pct}-{len(files)}")
     time_fig.update_xaxes(title_text="time (s)", row=2, col=1, range=[x0, x1])
     time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision="keep",
