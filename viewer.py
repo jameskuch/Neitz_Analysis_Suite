@@ -670,30 +670,21 @@ def explorer_detail(date, cell):
         _fact_row("Channels", " · ".join(chans) if chans else "—"),
     ], style={"fontSize": "14px", "borderCollapse": "collapse", "marginBottom": "10px"})
 
-    # processed output figures — click to enlarge, 🗑 to delete that figure
+    # processed output figures — DISK is the source of truth (glob the PNGs); group them by the
+    # analysis (run name from the Analysis View), each group under its title + a horizontal rule.
     outdir = cm.dir / "outputs"
     pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) \
         if outdir.exists() else []
-    # folder (analysis key) -> friendly run name, from the manifest output records
-    label_by_analysis = {o["analysis"]: o.get("label")
+    label_by_analysis = {o["analysis"]: o.get("label")     # analysis key -> friendly run name
                          for o in cm.data.get("outputs", []) if o.get("label")}
-    out_thumbs = []
-    for p in pngs:
-        rel = p.relative_to(outdir)
-        friendly = label_by_analysis.get(rel.parts[0])     # the user's run name for this output
-        caption = [html.Span(str(rel), title=str(rel),
-                             style={"fontSize": "9px", "flex": "1", "overflow": "hidden",
-                                    "textOverflow": "ellipsis", "whiteSpace": "nowrap"})]
-        if friendly:                                       # show the friendly name above the path
-            caption = [html.Span(friendly, title=friendly,
-                                 style={"fontSize": "9px", "fontWeight": "bold", "display": "block",
-                                        "overflow": "hidden", "textOverflow": "ellipsis",
-                                        "whiteSpace": "nowrap", "maxWidth": "115px"}),
-                       caption[0]]
-        out_thumbs.append(html.Div([
+
+    def _out_thumb(p):                                     # one figure tile (checkbox + image + 🗑)
+        cap = html.Span(p.name, title=str(p.relative_to(outdir)),
+                        style={"fontSize": "9px", "flex": "1", "overflow": "hidden",
+                               "textOverflow": "ellipsis", "whiteSpace": "nowrap"})
+        return html.Div([
             dcc.Checklist(id={"type": "out-check", "src": str(p)},      # select for multi-delete
-                          options=[{"label": "", "value": str(p)}], value=[],
-                          className="out-check",
+                          options=[{"label": "", "value": str(p)}], value=[], className="out-check",
                           style={"position": "absolute", "top": "3px", "left": "3px", "zIndex": 3}),
             html.Img(src=_img_datauri(str(p)), className="gprev",
                      id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
@@ -701,13 +692,28 @@ def explorer_detail(date, cell):
                      style={"height": "64px", "border": "1px solid #ccc", "cursor": "pointer",
                             "background": "white", "display": "block"}),
             html.Div([
-                html.Div(caption, style={"flex": "1", "minWidth": "0"}),
+                html.Div(cap, style={"flex": "1", "minWidth": "0"}),
                 html.Button("🗑", id={"type": "del-output", "src": str(p)}, n_clicks=0,
                             title="delete this figure",
                             style={"fontSize": "13px", "padding": "0 3px", "color": "#ff7a7a",
                                    "border": "none", "background": "none", "cursor": "pointer"}),
             ], style={"display": "flex", "alignItems": "center", "maxWidth": "130px"}),
-        ], style={"margin": "3px", "position": "relative"}))
+        ], style={"margin": "3px", "position": "relative"})
+
+    groups = {}                                            # analysis folder -> [png, …] (newest first)
+    for p in pngs:
+        groups.setdefault(p.relative_to(outdir).parts[0], []).append(p)
+    out_groups = []
+    for i, (analysis, ps) in enumerate(groups.items()):
+        title = label_by_analysis.get(analysis) or analysis
+        out_groups.append(html.Div([
+            (html.Hr(style={"border": "none", "borderTop": "1px solid #3a3a46", "margin": "8px 0 4px"})
+             if i > 0 else None),
+            html.Div(f"{title}  ·  {len(ps)} file(s)", title=title,
+                     style={"fontSize": "11px", "fontWeight": "bold", "color": "#9fb0ff",
+                            "margin": "2px 0"}),
+            html.Div([_out_thumb(p) for p in ps], style={"display": "flex", "flexWrap": "wrap"}),
+        ]))
 
     return [
         html.Div("Recording facts — read from the files",
@@ -715,16 +721,16 @@ def explorer_detail(date, cell):
                         "marginTop": "4px"}),
         facts,
         html.Div([
-            html.Span("Outputs (click to enlarge · ☑ + button or 🗑 to delete)",
+            html.Span("Outputs — grouped by analysis (drag to select · ☑ + button or 🗑 to delete)",
                       style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
             html.Button("🗑 Delete selected", id="del-outputs", n_clicks=0,
                         style={"marginLeft": "10px", "fontSize": "11px", "padding": "1px 8px",
                                "color": "#ff7a7a", "background": "#2f3142",
                                "border": "1px solid #555", "borderRadius": "4px", "cursor": "pointer"})
-            if out_thumbs else None,
+            if out_groups else None,
         ], style={"display": "flex", "alignItems": "center", "gap": "4px"}),
-        html.Div(out_thumbs or [html.Span("none yet", style={"color": "#999", "fontSize": "13px"})],
-                 style={"display": "flex", "flexWrap": "wrap", "marginBottom": "8px"}),
+        html.Div(out_groups or [html.Span("none yet", style={"color": "#999", "fontSize": "13px"})],
+                 id="exp-outputs-grid", style={"marginBottom": "8px"}),
         html.Details([
             html.Summary("raw manifest (JSON)",
                          style={"fontSize": "12px", "color": "#888", "cursor": "pointer"}),

@@ -48,6 +48,32 @@ tests/                         pytest regression net
 stimulus and spikes) at different dimensionality; flicker is the periodic special case
 (cycle/transition PSTH). Cone isolation (S/L/M/LM-iso) is metadata, not different math.
 
+## Data-store integrity — NON-NEGOTIABLE RULES (James: "let's not let that happen again")
+
+File↔manifest tracking must never silently break. When you touch ANY output-writing, recording,
+deletion, or store code, preserve these invariants — and run `pytest -k integrity`:
+
+1. **Two sources of truth, kept consistent.** The `manifest.json` is the truth for METADATA
+   (recordings, stimulus, the `outputs[]` records). The DISK is the truth for FILES. The GUI shows
+   output figures by **globbing `outputs/**/*.png`** (NOT by trusting the manifest's file list) and
+   groups them by the `<analysis>` folder — so a stale/incomplete manifest can never *hide* real
+   files on disk. Keep it that way: never make the display depend solely on the manifest file-list.
+2. **One record per analysis, with ALL its files.** A run records every file it produced in ONE
+   `record_output(analysis, files=…)` call; extra files (e.g. the 4K exports) are attached to the
+   SAME record via `_attach_output_files`. `record_output` **REPLACES** an existing record of the
+   same `analysis` name (never appends) so the manifest can't accrue duplicate/zombie records.
+3. **Files always live under their parent.** Every output goes in `<date>/<cell>/outputs/<analysis>/`
+   — never elsewhere, never detached from the cell. That folder path IS the association to the
+   parent cell + the `analysis` key.
+4. **Deletes update BOTH.** Deleting moves files to `.trash/` AND updates the manifest; never leave
+   orphans (file on disk, in no record) or dangling refs (record points at a missing file) on
+   purpose. (Dangling refs are tolerated by the display because of rule 1, but prune them when you
+   touch the record — see the dedup/reconcile in the store-cleanup path.)
+5. **There is a regression test:** `tests/test_store_integrity.py` runs an analysis and asserts the
+   invariants (record exists, no duplicates, every recorded file is on disk, no orphan PNGs in the
+   folder). If you change the output pipeline and it fails, you broke tracking — fix it, don't
+   delete the test.
+
 ## Managed data store (source of truth)
 
 - Location: `~/Documents/ephysdataio/` (override `$EPHYSDATAIO_ROOT`). Layout:
