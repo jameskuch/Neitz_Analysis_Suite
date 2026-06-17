@@ -52,6 +52,16 @@ html, body { margin: 0; }
     #react-entry-point > div { height: calc(100vh / 0.6) !important; }
 }
 
+/* Nav view-switch targets ("to Data Explorer" / "to Analysis View"): the inline radial-gradient
+   fills the box; on hover the gradient GROWS (background-size), nothing else moves. */
+.nav-oval {
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 72% 80%;      /* smaller oval at rest */
+    transition: background-size .2s ease;
+}
+.nav-oval:hover { background-size: 100% 118%; }   /* grows on hover, but gently */
+
 /* Sidebar | graphs splitter (drag handle) — see assets/splitter.js */
 #splitter:hover, #splitter:active { background: #9aa0c8 !important; }
 
@@ -62,7 +72,18 @@ html, body { margin: 0; }
 #polarity, #method, #refr { font-size: 12px; }    /* polarity / algorithm radios + refractory */
 #absth-editor { font-size: 10px; }
 #absth-editor input { font-size: 10.67px; }        /* per-trace abs boxes (8px × 1.333) */
-.dash-slider-tooltip, .dash-slider-tooltip * { font-size: 12px !important; }  /* k·MAD value — matches the above */
+.dash-slider-tooltip, .dash-slider-tooltip * { font-size: 12px !important; }  /* k·MAD hover tooltip text */
+/* Dash 4.2's slider renders a VISIBLE number-input showing the value (k·MAD value box) at
+   16px/34px by default — match it to the refractory box (#refr) next to it: 12px font, same
+   height, no steppers. */
+#k .dash-range-slider-input {
+    font-size: 12px !important;
+    height: 14.67px !important;
+    min-height: 0 !important;
+    padding: 0 4px !important;
+    box-sizing: border-box;
+}
+#k .dash-input-stepper { display: none !important; }
 #k .dash-slider-mark { font-size: 10px; }              /* k·MAD scale numbers (2·6·10·15) */
 
 /* ...and shorter (item: heights to match the smaller font) */

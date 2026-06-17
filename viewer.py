@@ -780,20 +780,30 @@ def nav_toggle(active, dark=False):
     The current view is emphasized; the other is a faded, clickable 'go to' target with an
     arrow pointing toward it. The click ids (open-explorer / exp-close) are unchanged, so the
     toggle_explorer callback keeps working. `dark=True` tints for the dark Explorer header."""
-    emph = {"fontWeight": "bold", "fontSize": "19px",
+    emph = {"fontWeight": "bold", "fontSize": "15px",
             "color": "#e3e9ff" if dark else "#1f2a44"}
-    faded = {"fontSize": "19px", "cursor": "pointer",
-             "color": "#8b93a8" if dark else "#9aa7c0"}
-    row = {"display": "flex", "alignItems": "baseline", "gap": "10px"}
+    # the clickable "other view" target sits in an oval radial gradient that fades into its
+    # surroundings: dark page -> dark oval + light text; dark Explorer -> white oval + dark text.
+    # `backgroundImage` (not the `background` shorthand) so the .nav-oval class can size/grow the
+    # gradient's background-size (small at rest, grows on hover).
+    faded = {"fontSize": "15px", "cursor": "pointer", "fontWeight": "bold",
+             "padding": "8px 40px", "borderRadius": "60px", "lineHeight": "1",
+             "color": "#1f2a44" if dark else "#eef2ff",
+             "backgroundImage": ("radial-gradient(ellipse at center, #ffffff 0%, #ffffff 40%, rgba(27,27,36,0) 72%)"
+                                if dark else
+                                "radial-gradient(ellipse at center, #1f2a44 0%, #2b3a5e 38%, rgba(255,255,255,0) 72%)")}
+    arrow = lambda left=False: html.Span("➤", style=({"display": "inline-block",
+                                "transform": "scaleX(-1)"} if left else {}))
+    row = {"display": "flex", "alignItems": "center", "gap": "10px"}
     if active == "analysis":
         return html.Div([
             html.Span("Analysis View", style=emph),
-            html.Span("→ Data Explorer", id="open-explorer", n_clicks=0, className="glow-target",
-                      title="open the Data Explorer", style=faded),
+            html.Span([arrow(), " Data Explorer"], id="open-explorer", n_clicks=0,
+                      className="nav-oval", title="open the Data Explorer", style=faded),
         ], style=row)
     return html.Div([
-        html.Span("Analysis View ←", id="exp-close", n_clicks=0, className="glow-target",
-                  title="back to the analysis view", style=faded),
+        html.Span([arrow(left=True), " Analysis View"], id="exp-close", n_clicks=0,
+                  className="nav-oval", title="back to the analysis view", style=faded),
         html.Span("Data Explorer", style=emph),
     ], style=row)
 
@@ -810,7 +820,6 @@ app.layout = html.Div(
         # upper-left view switcher (consistent layout in both windows)
         html.Div([
             nav_toggle("analysis"),
-            html.Div("Neitz ABF Viewer", style={"fontSize": "10px", "color": "#888"}),
         ], style={"marginBottom": "8px"}),
 
         # ---- compartment: data store (cell select + files + stimulus) ----
