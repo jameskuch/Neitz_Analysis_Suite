@@ -63,16 +63,18 @@ html, body { margin: 0; }
     z-index: 0;
     display: inline-block;         /* a real box so vertical padding builds the taller row */
     box-sizing: content-box;       /* height = text + the full padding (not clamped) */
+    overflow: hidden;              /* clip gradient to the rounded-rect shape (safe: no blur) */
     font-size: 16px;
     font-weight: bold;
     line-height: 1;
     white-space: nowrap;
-    padding: 19px 26px;            /* taller row (~1.5×) + room so the gradient isn't cut off */
+    padding: 19px 26px;
     border-radius: 13px;
 }
-/* The gradient is an ANISOTROPIC rounded radial behind the text: WIDE horizontal fade (lights the
-   whole label) but a SHORT vertical fade (top & bottom fade quickly). inset:0 keeps it INSIDE the
-   pill so it never bleeds above the pill and gets clipped by the top boundary. */
+/* The gradient fills the rounded-rect pill: a large radial ellipse (bigger than the element) so
+   the gradient covers the entire interior. overflow:hidden on .nav-pill clips it to the rounded
+   corners — giving a "filled rectangle with soft center-bright glow" rather than a floating oval.
+   background-size controls the active (100%) vs inactive (75%) vs hover (90%) sizes. */
 .nav-pill::before {
     content: "";
     position: absolute;
@@ -81,18 +83,18 @@ html, body { margin: 0; }
     border-radius: 12px;
     background-repeat: no-repeat;
     background-position: center;
-    background-size: 100% 100%;     /* active view: full-strength gradient (fades slowly) */
-    transition: background-size .25s ease;
+    background-size: 100% 100%;
+    transition: background-size .3s ease;
 }
-.nav-av { color: #3a2c00; }                                                  /* dark text */
-.nav-av::before { background-image: radial-gradient(ellipse 58% 33% at center,
-    rgba(255,224,120,1) 0%, rgba(255,224,120,0.95) 54%, rgba(255,224,120,0) 84%); }
-.nav-de { color: #eef2ff; }                                                  /* light text */
-.nav-de::before { background-image: radial-gradient(ellipse 60% 35% at center,
-    #3a60ab 0%, #2f4f9a 54%, rgba(47,79,154,0) 84%); }
-/* the NON-active (clickable) view: a smaller gradient that fades to the background FASTER */
-.nav-clickable::before { background-size: 80% 76%; }
-.nav-clickable:hover::before { background-size: 95% 90%; }     /* bloom a little on hover */
+.nav-av { color: #3a2c00; }
+.nav-av::before { background-image: radial-gradient(ellipse 160% 140% at center,
+    rgba(255,224,120,1) 0%, rgba(255,224,120,0.92) 30%, rgba(255,224,120,0.5) 62%, rgba(255,224,120,0) 92%); }
+.nav-de { color: #eef2ff; }
+.nav-de::before { background-image: radial-gradient(ellipse 165% 145% at center,
+    rgba(70,110,200,1) 0%, rgba(58,96,171,0.9) 30%, rgba(47,79,154,0.5) 62%, rgba(47,79,154,0) 92%); }
+/* the NON-active (clickable) view: smaller gradient — pill edges are dark, glow sits inside */
+.nav-clickable::before { background-size: 75% 72%; }
+.nav-clickable:hover::before { background-size: 90% 87%; }     /* bloom on hover */
 .nav-clickable { cursor: pointer; }
 /* the active view keeps its inner text glow AND gets a simple underline */
 .nav-sel { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; }
