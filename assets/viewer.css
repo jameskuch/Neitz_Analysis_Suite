@@ -61,23 +61,23 @@ html, body { margin: 0; }
 .nav-pill {
     position: relative;
     z-index: 0;
-    font-size: 22px;
+    font-size: 16px;
     font-weight: bold;
     line-height: 1;
     white-space: nowrap;
-    padding: 20px 46px;            /* ~1.5× the previous shape */
-    border-radius: 16px;
+    padding: 11px 22px;            /* small enough to sit side-by-side in the sidebar */
+    border-radius: 13px;
 }
 .nav-pill::before {
     content: "";
     position: absolute;
     z-index: -1;
-    inset: 24% 16%;                /* small rounded-rect gradient at rest, centred behind the text */
-    border-radius: 13px;
-    filter: blur(11px);            /* feathered edges → fade into the bg, never clipped */
+    inset: 22% 14%;                /* small rounded-rect gradient at rest, centred behind the text */
+    border-radius: 11px;
+    filter: blur(8px);             /* feathered edges → fade into the bg, never clipped */
     transition: inset .25s ease;
 }
-.nav-pill:hover::before { inset: 12% 7%; }       /* bloom a little on hover */
+.nav-pill:hover::before { inset: 10% 6%; }        /* bloom a little on hover */
 
 .nav-av { color: #3a2c00; }                                                  /* dark text */
 .nav-av::before { background: linear-gradient(135deg, rgba(255,236,150,1), rgba(255,212,100,1)); }
