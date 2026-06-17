@@ -201,23 +201,34 @@ def run_noise(spike_csv, stim_csv, *, paradigm=None, trim_s=0.5, stim_le_s=10.0,
 # ---------------------------------------------------------------- store-driven cell run
 def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
                      formats=("png", "pdf", "svg"), save=True,
-                     name="flicker", include=None) -> Result:
+                     name="flicker", include=None, detect=None, abs_map=None,
+                     run_label=None) -> Result:
     """
     Run the flicker analysis on a stored cell: load its .abf recordings, compute
     per-file + pooled ON/OFF, and (if save) write figures (PNG/PDF/SVG) + metrics.csv
     + result.json into <cell>/outputs/<name>/, recording them in the manifest.
 
-    name    : output sub-folder + analysis key (default "flicker"). Use a distinct
-              name to keep a variant run alongside earlier ones (instead of overwriting).
-    include : optional collection of recording ids OR file paths/basenames to analyze;
-              default = every .abf recording in the cell. Lets you EXCLUDE recordings.
+    name      : output sub-folder + analysis key (default "flicker"). Use a distinct
+                name to keep a variant run alongside earlier ones (instead of overwriting).
+    include   : optional collection of recording ids OR file paths/basenames to analyze;
+                default = every .abf recording in the cell. Lets you EXCLUDE recordings.
+    detect    : optional spike-detection settings (polarity/method/k/abs_threshold/
+                refractory_s) — overrides the paradigm defaults so the run USES (and
+                records) the caller's choices instead of the hard-coded defaults.
+    abs_map   : optional {file path or basename: abs_threshold} for per-trace absolute
+                thresholds; each file detected with its own value (falls back to
+                detect['abs_threshold']).
+    run_label : the user's friendly run name, preserved in the manifest output record
+                even though `name` (the folder key) is sanitized.
     """
     import os as _os
     from .io.figures import save_figure
     from . import plots
 
     cm = store.cell(date, cell)
-    paradigm = paradigm or FlickerParadigm()
+    if paradigm is None:
+        paradigm = FlickerParadigm(**{k: v for k, v in (detect or {}).items() if v is not None})
+    base_det = dict(paradigm._det)          # canonical settings, before any per-trace override
 
     recs = []
     for r in cm.data.get("recordings", []):
@@ -234,14 +245,27 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
         if not recs:
             raise SystemExit(f"none of the selected recordings are .abf files in {date}/{cell}")
 
-    summary, per_file = [], []
+    def _abs_for(fp):                       # this file's per-trace threshold, else the base value
+        if abs_map:
+            v = abs_map.get(fp, abs_map.get(_os.path.basename(fp)))
+            if v is not None:
+                return float(v)
+        return base_det.get("abs_threshold")
+
+    summary, per_file, trials = [], [], []
     for rid, label, rec, _fp in recs:
+        paradigm.abs_threshold = _abs_for(_fp)         # detect THIS file with its own threshold
         res = paradigm.analyze_recording(rec, name=label)
         per_file.append(res)
         summary.append(dict(file=label, flicker_hz=res.freq, n_in_region=res.n_in_region,
                             vector_strength=res.vector_strength, rayleigh_p=res.rayleigh_p))
+        st, fl = paradigm.detect(rec)                  # same per-file detection → pool below
+        if fl is not None:
+            trials.append(dict(spikes=st.times, on=fl.on_edges, off=fl.off_edges,
+                               dur=rec.duration, freq=fl.freq))
+    paradigm.abs_threshold = base_det.get("abs_threshold")    # restore for _det recording
 
-    grp = paradigm.analyze_group([rec for _, _, rec, _ in recs], n_shuffle=n_shuffle)
+    grp = paradigm.group_from_trials(trials, n_shuffle=n_shuffle)
     on, off = grp["on"], grp["off"]
     verdict = ("ON-OFF" if on["p"] < 0.01 and off["p"] < 0.01 else
                "ON" if on["p"] < 0.01 else "OFF" if off["p"] < 0.01 else "no sig.")
@@ -250,7 +274,8 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
                   verdict=verdict)
     result = Result(name, summary=summary, tables={"pooled_onoff": [pooled]},
                     meta=dict(date=date, cell=cell, label=cm.data.get("label"),
-                              n_shuffle=n_shuffle, detect=paradigm._det,
+                              run_name=run_label or name,
+                              n_shuffle=n_shuffle, detect=base_det,
                               inputs=[rid for rid, _, _, _ in recs]))
 
     if save:
@@ -266,8 +291,12 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
         rel = lambda p: _os.path.relpath(p, cm.dir)          # manifest paths relative to the cell
         files = {f"figure_{k}": rel(v) for k, v in figpaths.items()}
         files.update(metrics_csv=rel(out / "metrics.csv"), result_json=rel(out / "result.json"))
-        cm.record_output(name, files=files,
-                         params={"n_shuffle": n_shuffle, **paradigm._det},
+        params = {"n_shuffle": n_shuffle, **base_det}
+        if abs_map:
+            params["abs_per_trace"] = {_os.path.basename(str(k)): float(v)
+                                       for k, v in abs_map.items() if v is not None}
+        cm.record_output(name, files=files, label=run_label,
+                         params=params,
                          inputs=[rid for rid, _, _, _ in recs],
                          summary=dict(verdict=verdict, flicker_hz=grp["freq"],
                                       on_p=on["p"], off_p=off["p"]))
@@ -277,7 +306,7 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
     return result
 
 
-def run_cell_noise(store, date, cell, *, name="sta", save=True,
+def run_cell_noise(store, date, cell, *, name="sta", save=True, run_label=None,
                    formats=("png", "pdf", "svg"), **noise_kw) -> Result:
     """
     Gaussian-noise reverse correlation on a stored cell: locate the cell's spike CSV
@@ -321,7 +350,7 @@ def run_cell_noise(store, date, cell, *, name="sta", save=True,
         rel = lambda p: _os.path.relpath(p, cm.dir)
         files = {f"figure_{k}": rel(v) for k, v in figpaths.items()}
         files["result_json"] = rel(out / "result.json")
-        cm.record_output(name, files=files,
+        cm.record_output(name, files=files, label=run_label,
                          params={"spike_csv": _os.path.basename(spike_csv),
                                  "stim_csv": _os.path.basename(stim_csv)},
                          inputs=[_os.path.basename(spike_csv), _os.path.basename(stim_csv)],

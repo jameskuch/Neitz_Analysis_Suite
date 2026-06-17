@@ -61,19 +61,20 @@ html, body { margin: 0; }
 }
 #polarity, #method, #refr { font-size: 12px; }    /* polarity / algorithm radios + refractory */
 #absth-editor { font-size: 10px; }
-#absth-editor input { font-size: 10px; }           /* per-trace abs boxes — small */
+#absth-editor input { font-size: 10.67px; }        /* per-trace abs boxes (8px × 1.333) */
 .dash-slider-tooltip, .dash-slider-tooltip * { font-size: 12px !important; }  /* k·MAD value — matches the above */
 #k .dash-slider-mark { font-size: 10px; }              /* k·MAD scale numbers (2·6·10·15) */
 
 /* ...and shorter (item: heights to match the smaller font) */
 #absth { display: none !important; }   /* hidden carrier of the synced shared value */
 #run-name { height: 16px; padding: 0 6px; box-sizing: border-box; }
-#refr { height: 11px; padding: 0 4px; box-sizing: border-box; }
-#absth-editor input {                              /* abs-threshold boxes — short + narrow */
-    height: 9px;
+#refr { height: 14.67px; padding: 0 4px; box-sizing: border-box; }   /* match the abs box input */
+#absth-editor input {                              /* abs-threshold boxes (× 1.333) */
+    height: 14.67px;
+    line-height: 14.67px;
     padding: 0 4px;
     box-sizing: border-box;
-    width: 50px !important;
+    width: 66.67px !important;
 }
 #cell-select, #chan, #ttl { min-height: 0; }
 #cell-select .dash-dropdown-trigger,
@@ -135,3 +136,11 @@ html, body { margin: 0; }
 }
 .glow-target { border-radius: 6px; transition: background .2s; padding: 0 6px; }
 .glow-target:hover { animation: neitz-glow 1.1s ease-in-out infinite; }
+
+/* abs-threshold boxes: the dash number-input container is tall because of the +/- steppers;
+   hide them and shrink the container so the box is actually short. */
+#absth-editor .dash-input-stepper { display: none !important; }
+#absth-editor .dash-input-container { height: 17.33px !important; min-height: 0 !important; }
+/* refractory box: same height as the abs-threshold boxes (hide its steppers, shrink container) */
+#refr ~ .dash-input-stepper { display: none !important; }
+.dash-input-container:has(> #refr) { height: 17.33px !important; min-height: 0 !important; }

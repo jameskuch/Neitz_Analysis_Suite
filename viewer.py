@@ -1571,14 +1571,15 @@ def build_absth_editor(sync, files, seed, single, method):
                       debounce=True, disabled=locked,
                       style={"width": "72px",
                              "background": "#eee" if locked else "white"}),
-            # per-box "auto" — sets this trace's threshold (max/3 for MATLAB, k·MAD otherwise).
-            # When synced, only the first is active and it fills every box.
+            # per-box "auto" — BELOW the box; sets this trace's threshold (max/3 for MATLAB,
+            # k·MAD otherwise). When synced, only the first is active and it fills every box.
             html.Button("auto", id={"type": "absth-auto", "path": p}, n_clicks=0, disabled=locked,
                         style={"fontSize": "9px", "padding": "0 4px", "marginTop": "2px",
                                "width": "50px", "lineHeight": "13px",
                                "cursor": "default" if locked else "pointer",
                                "opacity": 0.4 if locked else 1}),
-        ], style={"margin": "0 8px 5px 0"}))
+        ], style={"margin": "0 8px 6px 0", "display": "flex", "flexDirection": "column",
+                  "alignItems": "flex-start"}))
     head = ("one threshold (sync on): edit the first box — all match"
             if synced else "per-trace abs thresholds")
     return ([html.Div(head, style={"fontSize": "10px", "color": "#555",
@@ -1757,13 +1758,21 @@ def save_meta(_n, date, cell, stype, sparams, ctype, notes):
               Output("gallery-trigger", "data", allow_duplicate=True),
               Input("run-cell", "n_clicks"), State("sel-cell", "data"),
               State("file", "value"), State("run-name", "value"),
+              State("polarity", "value"), State("method", "value"), State("k", "value"),
+              State("absth", "value"), State("refr", "value"), State("absth-map", "data"),
               prevent_initial_call=True)
-def run_cell(_n, sel, checked, run_name):
+def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth_map):
     import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "pick a cell first", no_update
-    user_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", (run_name or "").strip())
+    raw_name = (run_name or "").strip()                  # the user's friendly run name (preserved)
+    user_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name)
+    detect = dict(polarity=polarity, method=method,      # the live GUI spike-detection settings
+                  k=float(k) if k is not None else None,
+                  abs_threshold=float(absth) if absth is not None else None,
+                  refractory_s=(float(refr) / 1000.0) if refr else 0.002)
+    abs_map = absth_map or None                          # per-trace abs thresholds {path: value}
     checked = [c for c in (checked or []) if c]
     ds, msgs = DataStore(), []
     for s in sels:
@@ -1774,7 +1783,7 @@ def run_cell(_n, sel, checked, run_name):
         try:
             if stype == "gaussian_noise":                # spikes×stimulus reverse correlation → STA
                 nm = user_name or "sta"
-                r = run_cell_noise(ds, s["date"], s["cell"], name=nm)
+                r = run_cell_noise(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None)
                 sm = r.summary[0]
                 msgs.append(f"{tag} [{nm}]: STA {sm['n_epochs']} epochs, "
                             f"peak {sm['peak_ms']:.1f} ms {sm['peak_sign']}")
@@ -1783,7 +1792,8 @@ def run_cell(_n, sel, checked, run_name):
                 cmdir = str(cm.dir)
                 sub = [f for f in checked if f.startswith(cmdir) and f.endswith(".abf")]
                 r = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=500,
-                                     name=nm, include=(sub or None))
+                                     name=nm, include=(sub or None),
+                                     detect=detect, abs_map=abs_map, run_label=raw_name or None)
                 p = r.tables["pooled_onoff"][0]
                 msgs.append(f"{tag} [{nm}]: {len(r.summary)} file(s), "
                             f"{p['flicker_hz']:.1f} Hz, '{p['verdict']}'")

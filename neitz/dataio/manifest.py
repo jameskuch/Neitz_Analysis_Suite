@@ -87,10 +87,12 @@ class CellManifest:
         return d
 
     def record_output(self, analysis, *, files, params=None, summary=None,
-                      inputs=None, created=None) -> dict:
+                      inputs=None, created=None, label=None) -> dict:
         out = {"analysis": analysis,
                "created": created or datetime.now().isoformat(timespec="seconds"),
                "params": params or {}, "inputs": inputs or [],
                "files": files, "summary": summary or {}}
+        if label and label != analysis:          # the user's friendly run name (folder key is sanitized)
+            out["label"] = label
         self.data["outputs"].append(out)
         return out

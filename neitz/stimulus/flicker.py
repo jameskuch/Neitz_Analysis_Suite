@@ -81,7 +81,13 @@ class FlickerParadigm:
     def analyze_group(self, recs, *, pre_s=0.1, post_s=None, bin_s=0.01,
                       n_shuffle=1000, rng=None) -> dict:
         """Pool all trials of a cell; transition-triggered ON/OFF + significance."""
-        trials = self.trials_from(recs)
+        return self.group_from_trials(self.trials_from(recs), pre_s=pre_s, post_s=post_s,
+                                      bin_s=bin_s, n_shuffle=n_shuffle, rng=rng)
+
+    def group_from_trials(self, trials, *, pre_s=0.1, post_s=None, bin_s=0.01,
+                          n_shuffle=1000, rng=None) -> dict:
+        """Pooled ON/OFF from pre-built trial dicts — lets a caller detect each file with
+        its OWN threshold (per-trace abs) and then pool the SAME spike trains here."""
         if not trials:
             return dict(n_trials=0, freq=float("nan"), on=None, off=None)
         freq = float(np.median([t["freq"] for t in trials]))

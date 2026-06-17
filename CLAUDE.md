@@ -114,6 +114,17 @@ stimulus and spikes) at different dimensionality; flicker is the periodic specia
 - **Run variants**: `run_cell_flicker(..., name=, include=)` writes to `outputs/<name>/` so a
   run that excludes a recording coexists with the original instead of overwriting it. The GUI
   "run name" box + checked-files drive this.
+- **Run Analysis USES the live GUI detection settings** (fixed 2026-06): `run_cell` passes
+  `detect=` (polarity/method/k/abs_threshold/refractory_s), `abs_map=` (per-trace abs
+  `{path: value}`), and `run_label=` (the un-sanitized friendly name) into
+  `run_cell_flicker`/`run_cell_noise`. Before this, the run silently used `FlickerParadigm`
+  DEFAULTS (`polarity='neg'`, k=6) and recorded those regardless of the GUI — so e.g. a `pos`
+  selection was stored as `neg`. The settings now land in the output's `params` (+ `abs_per_trace`
+  when per-trace) and the friendly name in the output record's `label` (the folder/`analysis`
+  key stays sanitized, e.g. "4 epochs" → `4_epochs`). Per-file detection feeds
+  `FlickerParadigm.group_from_trials` so per-trace thresholds also drive the pooled ON/OFF.
+  NOTE: signal/TTL **channel** is still NOT threaded (paradigm default `Im_prime`/`TTL`) — a
+  known follow-up.
 - **Run dispatch by stimulus type** (NOT guessed from file contents — driven by the manifest's
   explicit `stimulus.type`): `gaussian_noise` → `run_cell_noise` (reverse-correlation STA from
   the spike + stimulus CSVs, `outputs/sta/`); else → `run_cell_flicker`. Data format (abf-analog
