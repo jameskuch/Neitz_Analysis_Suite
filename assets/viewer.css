@@ -54,15 +54,38 @@ html, body { margin: 0; }
 
 /* Nav view-switch targets ("to Data Explorer" / "to Analysis View"): the inline radial-gradient
    fills the box; on hover the gradient GROWS (background-size), nothing else moves. */
-.nav-oval {
-    background-repeat: no-repeat;
-    background-position: center;
-    background-size: 76% 82%;      /* gradient sits inside the larger rounded-rect pill, fading out */
-    transition: background-size .25s ease;
+/* Nav switcher pills. The pill is a big rounded rectangle; the GRADIENT is a blurred rounded-rect
+   pseudo-element behind the text — small at rest (still enough contrast to read the text), blooming
+   a little on hover. The blur feathers the edges so it fades into the page background with no
+   clipped/hard edge. The SELECTED view also gets an inner text glow. */
+.nav-pill {
+    position: relative;
+    z-index: 0;
+    font-size: 22px;
+    font-weight: bold;
+    line-height: 1;
+    white-space: nowrap;
+    padding: 20px 46px;            /* ~1.5× the previous shape */
+    border-radius: 16px;
 }
-/* on hover the gradient grows; because it fades to transparent well before the pill edge it never
-   hits a hard cutoff, it just blooms larger and still blends into the surrounding colour. */
-.nav-oval:hover { background-size: 124% 140%; }   /* grows on hover, but gently */
+.nav-pill::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    inset: 24% 16%;                /* small rounded-rect gradient at rest, centred behind the text */
+    border-radius: 13px;
+    filter: blur(11px);            /* feathered edges → fade into the bg, never clipped */
+    transition: inset .25s ease;
+}
+.nav-pill:hover::before { inset: 12% 7%; }       /* bloom a little on hover */
+
+.nav-av { color: #3a2c00; }                                                  /* dark text */
+.nav-av::before { background: linear-gradient(135deg, rgba(255,236,150,1), rgba(255,212,100,1)); }
+.nav-de { color: #eef2ff; }                                                  /* light text */
+.nav-de::before { background: linear-gradient(135deg, #28406f, #355aa3); }
+.nav-clickable { cursor: pointer; }
+.nav-av.nav-sel { text-shadow: 0 0 13px rgba(245,196,0,0.95), 0 0 5px rgba(245,196,0,0.8); }
+.nav-de.nav-sel { text-shadow: 0 0 13px rgba(95,150,255,0.97), 0 0 5px rgba(135,178,255,0.85); }   /* grows on hover, but gently */
 
 /* The drag-to-zoom box dims everything outside the selection with a 40%-black overlay; since the
    x-only zoom selection is a thin full-height band, that darkened most of the graph. Soften it to a

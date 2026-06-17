@@ -825,38 +825,21 @@ _files = discover_abf()
 
 def nav_toggle(active, dark=False):
     """Upper view switcher: 'Analysis View' (left) … 'Data Explorer' (right), always both. Each sits
-    in a rounded-rect radial-gradient pill (larger than the text, fades into the surroundings, grows
-    on hover via .nav-oval). The SELECTED view gets an inner text glow (yellow for Analysis, blue for
-    Data Explorer) and isn't clickable; the OTHER view is the clickable target (ids open-explorer /
-    exp-close, unchanged so the toggle callback keeps working)."""
-    base = {"fontSize": "22px", "fontWeight": "bold", "padding": "13px 30px", "borderRadius": "14px",
-            "lineHeight": "1", "whiteSpace": "nowrap", "display": "inline-block"}
-    av_grad = ("radial-gradient(ellipse at center, rgba(255,234,150,0.95) 0%, "
-               "rgba(255,222,115,0.82) 46%, rgba(255,234,150,0) 72%)")        # warm — Analysis View
-    de_grad = ("radial-gradient(ellipse at center, #243a6e 0%, #305199 44%, "
-               "rgba(36,58,110,0) 72%)")                                      # cool — Data Explorer
-    yellow_glow = "0 0 13px rgba(245,196,0,0.95), 0 0 5px rgba(245,196,0,0.75)"
-    blue_glow = "0 0 13px rgba(95,150,255,0.95), 0 0 5px rgba(130,175,255,0.85)"
-
-    av_base = {**base, "color": "#3a2c00", "backgroundImage": av_grad}        # Analysis View (left)
-    if active == "analysis":                                                  # selected here
-        av = html.Span("Analysis View", className="nav-oval",
-                       style={**av_base, "textShadow": yellow_glow})
-    else:                                                                     # clickable target
-        av = html.Span("Analysis View", id="exp-close", n_clicks=0, className="nav-oval",
-                       style={**av_base, "cursor": "pointer"}, title="go to the Analysis View")
-
-    de_base = {**base, "color": "#eef2ff", "backgroundImage": de_grad}        # Data Explorer (right)
-    if active == "explorer":                                                  # selected here
-        de = html.Span("Data Explorer", className="nav-oval",
-                       style={**de_base, "textShadow": blue_glow})
-    else:                                                                     # clickable target
-        de = html.Span("Data Explorer", id="open-explorer", n_clicks=0, className="nav-oval",
-                       style={**de_base, "cursor": "pointer"}, title="open the Data Explorer")
-
+    in a big rounded-rect pill whose gradient (a blurred rounded-rectangle behind the text — see the
+    .nav-pill CSS) is small at rest and blooms a little on hover, feathering into the background with
+    no clipped edges. The SELECTED view gets an inner text glow (yellow / blue) and isn't clickable;
+    the OTHER is the clickable target (ids open-explorer / exp-close, unchanged)."""
+    def pill(label, which, selected, click_id):
+        cls = f"nav-pill nav-{which}" + (" nav-sel" if selected else " nav-clickable")
+        if selected:
+            return html.Span(label, className=cls)
+        return html.Span(label, id=click_id, n_clicks=0, className=cls,
+                         title=("open the Data Explorer" if which == "de" else "go to the Analysis View"))
+    av = pill("Analysis View", "av", active == "analysis", "exp-close")
+    de = pill("Data Explorer", "de", active == "explorer", "open-explorer")
     return html.Div([av, de], style={"display": "flex", "justifyContent": "space-between",
                                      "alignItems": "center", "width": "100%",
-                                     "gap": "10px", "flexWrap": "wrap"})
+                                     "gap": "12px", "flexWrap": "wrap"})
 
 app.layout = html.Div(
     style={"fontFamily": "sans-serif", "display": "flex", "gap": "10px",
