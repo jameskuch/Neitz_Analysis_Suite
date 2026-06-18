@@ -63,7 +63,6 @@ html, body { margin: 0; }
     z-index: 0;
     display: inline-block;         /* a real box so vertical padding builds the taller row */
     box-sizing: content-box;       /* height = text + the full padding (not clamped) */
-    overflow: hidden;              /* clip gradient to the rounded-rect shape (safe: no blur) */
     font-size: 16px;
     font-weight: bold;
     line-height: 1;
@@ -71,10 +70,10 @@ html, body { margin: 0; }
     padding: 19px 26px;
     border-radius: 13px;
 }
-/* The gradient fills the rounded-rect pill: a large radial ellipse (bigger than the element) so
-   the gradient covers the entire interior. overflow:hidden on .nav-pill clips it to the rounded
-   corners — giving a "filled rectangle with soft center-bright glow" rather than a floating oval.
-   background-size controls the active (100%) vs inactive (75%) vs hover (90%) sizes. */
+/* The gradient fills the rounded-rect pill shape: large radial ellipse (bigger than the element)
+   covers the full interior; the ::before's own border-radius:12px clips it to rounded corners.
+   No overflow:hidden on parent — that hides z-index:-1 ::before in Chrome's stacking context.
+   background-size controls active (100%) vs inactive (75%) vs hover (90%) sizes. */
 .nav-pill::before {
     content: "";
     position: absolute;

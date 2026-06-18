@@ -841,8 +841,8 @@ def nav_toggle(active, dark=False):
                          title=("open the Data Explorer" if which == "de" else "go to the Analysis View"))
     av = pill("Analysis View", "av", active == "analysis", "exp-close")
     de = pill("Data Explorer", "de", active == "explorer", "open-explorer")
-    return html.Div([av, de], style={"display": "flex", "justifyContent": "space-between",
-                                     "alignItems": "center", "width": "100%",
+    return html.Div([av, de], style={"display": "flex", "justifyContent": "flex-start",
+                                     "alignItems": "center",
                                      "gap": "12px", "flexWrap": "wrap",
                                      "marginTop": "16px"})   # lower the row (room above for the gradient)
 
