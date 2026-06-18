@@ -63,6 +63,8 @@ html, body { margin: 0; }
     z-index: 0;
     display: inline-block;         /* a real box so vertical padding builds the taller row */
     box-sizing: content-box;       /* height = text + the full padding (not clamped) */
+    min-width: 140px;              /* equal width for both pills; wide enough for arrow + text */
+    text-align: center;            /* center text within the fixed-width pill */
     font-size: 16px;
     font-weight: bold;
     line-height: 1;
@@ -101,9 +103,8 @@ html, body { margin: 0; }
     rgba(70,110,200,1)  50%,
     rgba(58,96,171,0.6) 70%,
     rgba(58,96,171,0)   100%); }
-/* the NON-active (clickable) view: smaller/shorter gradient so the band is thinner */
-.nav-clickable::before { background-size: 100% 70%; }
-.nav-clickable:hover::before { background-size: 100% 86%; }    /* band thickens on hover */
+/* clickable (non-active) pill: same gradient, same band — underline alone marks the active tab */
+.nav-clickable { cursor: pointer; }
 .nav-clickable { cursor: pointer; }
 /* the active view keeps its inner text glow AND gets a simple underline */
 .nav-sel { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; }
