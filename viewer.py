@@ -653,6 +653,21 @@ def _cell_stim_summary(cm):
     return " · ".join(f"{t} ×{n}" for t, n in types.most_common()) + tail
 
 
+def _cell_epoch_summary(cm):
+    """Epoch grouping from stim_signature (neitz.io.epoch_groups): consecutive identical
+    stimuli are N epochs of one. e.g. '1 stimulus · 3 epochs' or '3 stimuli · 3 + 5 + 1
+    epochs'. Returns None unless some stimulus was actually repeated (so the row only
+    appears when it adds information beyond the Recordings/Stimulus rows)."""
+    from neitz.io import epoch_groups
+    groups = epoch_groups(cm.data.get("recordings", []))
+    if not any(g["stim_signature"] is not None and g["n_epochs"] > 1 for g in groups):
+        return None
+    counts = [g["n_epochs"] for g in groups]
+    if len(groups) == 1:
+        return f"1 stimulus · {counts[0]} epochs"
+    return f"{len(groups)} stimuli · {' + '.join(map(str, counts))} epochs"
+
+
 def explorer_file_options(date, cell):
     """Center checklist for a cell: each raw recording as a checkbox + waveform thumb."""
     cm = DataStore().cell(date, cell)
@@ -730,13 +745,18 @@ def explorer_detail(date, cell):
         dur_txt = f"{durs[0]:.0f} s"
     else:
         dur_txt = "—"
-    facts = html.Table([
+    fact_rows = [
         _fact_row("Recordings", f"{len(files)} · {rec_names}"),
         _fact_row("Sample rate", rate_txt),
         _fact_row("Duration", dur_txt),
         _fact_row("Channels", " · ".join(chans) if chans else "—"),
         _fact_row("Stimulus", _cell_stim_summary(cm)),   # stim_type ×n (cone · seeds) — seed manifest
-    ], style={"fontSize": "14px", "borderCollapse": "collapse", "marginBottom": "10px"})
+    ]
+    _ep = _cell_epoch_summary(cm)                         # stim_signature grouping: repeats = epochs
+    if _ep:
+        fact_rows.append(_fact_row("Epochs", _ep))
+    facts = html.Table(fact_rows,
+        style={"fontSize": "14px", "borderCollapse": "collapse", "marginBottom": "10px"})
 
     # processed output figures — DISK is the source of truth (glob the PNGs); group them by the
     # analysis (run name from the Analysis View), each group under its title + a horizontal rule.
