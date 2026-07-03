@@ -183,7 +183,9 @@ def power_w(rate, bin_rate=BIN_RATE):
     x = np.fft.rfft(r)
     p = 2.0 * np.abs(x) ** 2 / (n ** 2)
     f = np.fft.rfftfreq(n, d=1.0 / bin_rate)
-    keep = f <= FMAX
+    # drop the f=0 (DC) bin: the mean was subtracted so X[0]≈0 → a spurious ~−80 dB spike
+    # that drags the y-axis. Keep only 0 < f ≤ FMAX.
+    keep = (f > 0) & (f <= FMAX)
     return f[keep], p[keep]
 
 
