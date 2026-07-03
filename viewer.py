@@ -973,6 +973,22 @@ app.layout = html.Div(
             html.Div(id="absth-editor", style={"display": "none", "marginTop": "4px"}),
             html.Div(id="absth-msg", style={"fontSize": "10px", "color": "#666",
                                             "marginTop": "3px", "wordBreak": "break-all"}),
+            # ---- trial-alignment nudge: shift each file's frame-sync + spikes together so trial
+            #      starts line up. "⇄ auto" computes each file's offset from its TTL first-onset. ----
+            html.Hr(style={"border": "none", "borderTop": "1px solid #ddd", "margin": "8px 0 6px"}),
+            html.Div([
+                html.Span("trial align — frame-sync nudge (ms)",
+                          style={"fontSize": "11px", "fontWeight": "bold", "color": "#333"}),
+                html.Button("⇄ auto", id="align-auto", n_clicks=0,
+                            title="align every file's first flicker onset to the first file's",
+                            style={"fontSize": "10px", "padding": "0 6px", "marginLeft": "8px",
+                                   "cursor": "pointer"}),
+                html.Button("reset", id="align-reset", n_clicks=0,
+                            style={"fontSize": "10px", "padding": "0 6px", "marginLeft": "4px",
+                                   "cursor": "pointer"}),
+            ], style={"display": "flex", "alignItems": "center", "marginTop": "2px",
+                      "flexWrap": "wrap"}),
+            html.Div(id="align-editor", style={"marginTop": "4px"}),
         ]),
 
         # (the region & display controls now live as overlays ON the graphs, right)
@@ -1064,6 +1080,8 @@ app.layout = html.Div(
     dcc.Store(id="gallery-trigger"),
     dcc.Store(id="absth-map"),                            # {file path: per-trace abs threshold}
     dcc.Store(id="absth-seed"),                           # {file path: seed value for the editor}
+    dcc.Store(id="align-map"),                            # {file path: trial-align offset (SECONDS)}
+    dcc.Store(id="align-seed"),                           # {file path: offset (ms) shown in the editor}
     dcc.Store(id="recent-cells", storage_type="local"),   # most-recently-opened date|cell list
     dcc.Store(id="last-session", storage_type="local"),   # last cell + checked files (auto-loaded on startup)
     dcc.Store(id="rail-sort", data={"col": "date", "dir": "desc"}),   # explorer rail sort
@@ -1342,18 +1360,19 @@ def toggle_disp_show(binned):
               Input("disp-show", "value"), Input("disp-binned", "value"),
               Input("stagger-pct", "value"),
               Input("region-mode", "value"), Input("train-bin", "value"),
-              Input("absth-map", "data"), Input("fft-bin", "value"),
+              Input("absth-map", "data"), Input("fft-bin", "value"), Input("align-map", "data"),
               Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
-           disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin, relayout):
+           disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
+           align_map, relayout):
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                         fft_bin=fft_bin, relayout=relayout, trig=ctx.triggered_id)
+                         fft_bin=fft_bin, align_map=align_map, relayout=relayout, trig=ctx.triggered_id)
 
 
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                  fft_bin=5.0, relayout=None, trig=None):
+                  fft_bin=5.0, align_map=None, relayout=None, trig=None):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -1425,7 +1444,17 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
         fl = get_flicker(path, ttl_name)
         stim_freqs.append(fl.freq if fl else None)
 
-        i0, i1 = max(0, int(x0 * fs)), min(len(y), int(x1 * fs))
+        # per-file trial-alignment nudge (s): shifts this file's analog, TTL AND spikes together,
+        # so trial starts line up across files. i0/i1 sample the ORIGINAL data for the window that,
+        # once shifted by +off, lands in the visible [x0,x1]. Spikes/traces are then plotted at +off.
+        off = 0.0
+        if align_map:
+            try:
+                off = float(align_map.get(path, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                off = 0.0
+
+        i0, i1 = max(0, int((x0 - off) * fs)), min(len(y), int((x1 - off) * fs))
         if i1 <= i0:
             i0, i1 = 0, len(y)
 
@@ -1434,17 +1463,19 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
             eff_abs = float(absth) if absth is not None else None
         det_i = dict(det, abs_threshold=(float(eff_abs) if eff_abs is not None else None))
         st = detect_spikes(y, fs, **det_i)
-        in_reg = st.times[(st.times >= rs) & (st.times <= re_)]
+        at = st.times + off                          # spike times in aligned (display) coordinates
+        in_reg = at[(at >= rs) & (at <= re_)]
         if len(in_reg) > 1:
-            isi_all.append(np.diff(in_reg) * 1000.0)     # ms, for the ISI histogram
+            isi_all.append(np.diff(in_reg) * 1000.0)     # ms, for the ISI histogram (offset cancels)
         y_disp = y
-        disp_spikes = in_reg if crop else st.times        # hide excluded spikes when cropped
+        disp_spikes = in_reg if crop else at              # hide excluded spikes when cropped
 
         # ---- ROW 1: either the analog signal, or the spike train (0/1 or binned) ----
         if spike_train:
             if tbin > 0:                                  # binned counts
                 bw = tbin / 1000.0
-                edges = np.arange(0.0, t1_full + bw, bw)
+                lo = min(0.0, off)                         # cover the offset-shifted span
+                edges = np.arange(lo, t1_full + max(0.0, off) + bw, bw)
                 counts, _ = np.histogram(disp_spikes, bins=edges)
                 centers = 0.5 * (edges[:-1] + edges[1:])
                 m = (centers >= x0) & (centers <= x1)
@@ -1463,12 +1494,12 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
                 row1_ylab = "spike (0/1)"
         else:
             dt, dy = minmax_decimate(t[i0:i1], y_disp[i0:i1])
-            time_fig.add_trace(go.Scattergl(x=dt, y=dy, mode="lines", legendgroup=name,
+            time_fig.add_trace(go.Scattergl(x=dt + off, y=dy, mode="lines", legendgroup=name,
                                             line=dict(width=0.6, color=color),
                                             opacity=(0.6 if multi else 0.9), name=name), row=1, col=1)
             if show_spikes:
-                sp = in_reg[(in_reg >= x0) & (in_reg <= x1)]
-                sp_y = y[np.clip((sp * fs).astype(int), 0, len(y) - 1)]
+                sp = in_reg[(in_reg >= x0) & (in_reg <= x1)]         # display (aligned) coords
+                sp_y = y[np.clip(((sp - off) * fs).astype(int), 0, len(y) - 1)]   # original index for y
                 time_fig.add_trace(go.Scattergl(x=sp, y=sp_y, mode="markers",
                                                 marker=dict(color=(color if multi else "red"),
                                                             size=5, symbol="circle-open"),
@@ -1481,7 +1512,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
             try:
                 ttl = get_channel(path, ttl_name)
                 tt, ty = minmax_decimate((np.arange(len(ttl)) / fs)[i0:i1], ttl[i0:i1])
-                time_fig.add_trace(go.Scattergl(x=tt, y=ty + idx * ttl_step, mode="lines",
+                time_fig.add_trace(go.Scattergl(x=tt + off, y=ty + idx * ttl_step, mode="lines",
                                                 legendgroup=name, showlegend=False,
                                                 line=dict(width=0.6, color=color),
                                                 opacity=(0.6 if multi else 0.9),
@@ -1579,7 +1610,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
 #      actual (possibly small) browser window. ----------------------------------------------------
 def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, method, k, absth, refr,
                           rstart, rend, region_mode, stagger_pct, disp_show, disp_binned,
-                          train_bin, absth_map, fft_bin=5.0):
+                          train_bin, absth_map, fft_bin=5.0, align_map=None):
     """Save the four requested 4K figures into outdir. Returns {name: Path} of what was written."""
     import copy
     import plotly.io as pio
@@ -1589,7 +1620,8 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
         return {}
     tf, ff, isf, _ = build_figures(files, chan, ttl_name, polarity, method, k, absth, refr,
                                    rstart, rend, disp_show, disp_binned, stagger_pct,
-                                   region_mode, train_bin, absth_map, fft_bin=fft_bin)
+                                   region_mode, train_bin, absth_map, fft_bin=fft_bin,
+                                   align_map=align_map)
     cp = copy.deepcopy                                  # traces can't live in two figures at once
     saved = {}
 
@@ -1697,7 +1729,7 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
     # (4) frame syncs, each file in its OWN panel (un-staggered so every carrier is visible) -------
     tf0, _, _, _ = build_figures(files, chan, ttl_name, polarity, method, k, absth, refr,
                                  rstart, rend, disp_show, disp_binned, 0, region_mode,
-                                 train_bin, absth_map, fft_bin=fft_bin)
+                                 train_bin, absth_map, fft_bin=fft_bin, align_map=align_map)
     sep_traces = [t for t in tf0.data if getattr(t, "yaxis", "y") == "y2"]
     if sep_traces:
         n = len(sep_traces)
@@ -1946,6 +1978,81 @@ def collect_absth(_vals, sync, _files):
             except (TypeError, ValueError):
                 pass
     return amap, no_update
+
+
+# ================= trial-alignment nudge (frame-sync + spikes shifted together) =================
+# The align-editor shows one ms box per file; the first file is the reference (offset 0, disabled).
+# "⇄ auto" seeds each other file with (ref.t0 − file.t0) from the TTL first-onset; "reset" clears.
+# The box values (ms) are collected into align-map (SECONDS), which build_figures applies.
+@app.callback(Output("align-editor", "children"),
+              Input("file", "value"), Input("align-seed", "data"),
+              prevent_initial_call=False)
+def build_align_editor(files, seed):
+    files = [f for f in (files or []) if f and loadable(f)]
+    if len(files) < 2:
+        return [html.Span("select 2+ files to nudge trials into alignment",
+                          style={"fontSize": "10px", "color": "#999"})]
+    seed = seed or {}
+    cells = []
+    for i, p in enumerate(files):
+        ref = (i == 0)                                   # first file = reference (offset 0)
+        cells.append(html.Div([
+            html.Span(("① " if ref else "") + os.path.basename(p), title=os.path.basename(p),
+                      style={"fontSize": "10px", "color": "#555", "display": "block",
+                             "maxWidth": "100px", "overflow": "hidden",
+                             "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+            dcc.Input(id={"type": "align-trace", "path": p}, type="number",
+                      value=(0 if ref else seed.get(p, 0)), debounce=True, disabled=ref, step=1,
+                      style={"width": "72px", "background": "#eee" if ref else "white"}),
+        ], style={"margin": "0 8px 6px 0", "display": "flex", "flexDirection": "column",
+                  "alignItems": "flex-start"}))
+    return [html.Div("reference = ① (offset 0); others shift to match.  + = later, − = earlier.",
+                     style={"fontSize": "10px", "color": "#555", "marginBottom": "3px",
+                            "width": "100%"}),
+            html.Div(cells, style={"display": "flex", "flexWrap": "wrap"})]
+
+
+@app.callback(Output("align-seed", "data"),
+              Input("align-auto", "n_clicks"), Input("align-reset", "n_clicks"),
+              State("file", "value"), State("ttl", "value"), prevent_initial_call=True)
+def set_align_seed(_a, _r, files, ttl_name):
+    if ctx.triggered_id == "align-reset":
+        return {}
+    files = [f for f in (files or []) if f and loadable(f)]
+    if len(files) < 2:
+        return {}
+    try:                                                 # reference = first file's flicker onset
+        ref = get_flicker(files[0], ttl_name)
+        ref_t0 = ref.t0 if ref else None
+    except Exception:
+        ref_t0 = None
+    if ref_t0 is None:
+        return {}
+    seed = {}
+    for p in files[1:]:                                  # each other file: shift its t0 onto ref's
+        try:
+            fl = get_flicker(p, ttl_name)
+            if fl:
+                seed[p] = round((ref_t0 - fl.t0) * 1000.0, 1)     # ms
+        except Exception:
+            pass
+    return seed
+
+
+@app.callback(Output("align-map", "data"),
+              Input({"type": "align-trace", "path": ALL}, "value"),
+              prevent_initial_call=True)
+def collect_align(_vals):
+    items = ctx.inputs_list[0] or []                     # each: {"id": {...,"path":p}, "value": ms}
+    amap = {}
+    for item in items:
+        v = item.get("value")
+        if v:                                            # skip 0/None (no shift)
+            try:
+                amap[item["id"]["path"]] = float(v) / 1000.0      # ms → s (build_figures uses s)
+            except (TypeError, ValueError):
+                pass
+    return amap
 
 
 # ---- data store: pick a cell -> load its recordings + prefill stimulus -------
@@ -2203,14 +2310,14 @@ def _attach_output_files(ds, date, cell, analysis, saved):
               State("region-start", "value"), State("region-end", "value"),
               State("region-mode", "value"), State("stagger-pct", "value"),
               State("disp-show", "value"), State("disp-binned", "value"), State("train-bin", "value"),
-              State("fft-bin", "value"),
+              State("fft-bin", "value"), State("align-map", "data"),
               background=True,                              # run off the UI thread (analysis + 4K
               running=[(Output("run-cell", "disabled"), True, False),   # exports take ~1-2 min);
                        (Output("run-cell", "children"), "⏳ Running… (~1-2 min)", "▶ Run analysis")],
               prevent_initial_call=True)                   # outputs auto-refresh the UI when done
 def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
              chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
-             fft_bin):
+             fft_bin, align_map):
     import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
@@ -2254,7 +2361,7 @@ def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth
                         files=exp_files, chan=chan, ttl_name=ttl, polarity=polarity, method=method,
                         k=k, absth=absth, refr=refr, rstart=rstart, rend=rend, region_mode=region_mode,
                         stagger_pct=stagger_pct, disp_show=disp_show, disp_binned=disp_binned,
-                        train_bin=train_bin, absth_map=abs_map, fft_bin=fft_bin)
+                        train_bin=train_bin, absth_map=abs_map, fft_bin=fft_bin, align_map=align_map)
                     if saved:
                         _attach_output_files(ds, s["date"], s["cell"], nm, saved)
                         msgs[-1] += f" +{len(saved)} 4K file(s)"
