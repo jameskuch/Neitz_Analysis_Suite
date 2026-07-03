@@ -604,6 +604,55 @@ def explorer_day_cards(date):
     return cards or [html.Div("no cells on this date", style={"color": "#ccc"})]
 
 
+def _stim_brief(stim):
+    """One-line stimulus summary for a recording's stimulus dict: type [· cone · seed · grid].
+    Surfaces the seed-based manifest fields (stim_type/cone_isolation/seed) the Stimulus group
+    added; returns None when there's no stimulus."""
+    if not stim:
+        return None
+    t = stim.get("type")
+    t = {"sq_wave": "sq wave", "flicker": "sq wave"}.get(t, t)
+    p = stim.get("params") or {}
+    bits = [t] if t else []
+    if p.get("cone_isolation"):
+        bits.append(str(p["cone_isolation"]))
+    if p.get("seed") is not None:
+        bits.append(f"seed {p['seed']}")
+    if p.get("checks_x") and p.get("checks_y"):
+        bits.append(f"{p['checks_x']}×{p['checks_y']}")
+    return " · ".join(bits) if bits else None
+
+
+def _cell_stim_summary(cm):
+    """Aggregate a cell's per-recording stimuli into one line for the detail pane, e.g.
+    'gaussian_noise ×20 (S · seeds 2–21) · sq wave ×4'."""
+    from collections import Counter
+    recs = cm.data.get("recordings", [])
+    types = Counter()
+    cones, seeds = set(), []
+    for r in recs:
+        s = r.get("stimulus") or {}
+        t = s.get("type")
+        if not t:
+            continue
+        types[{"sq_wave": "sq wave", "flicker": "sq wave"}.get(t, t)] += 1
+        p = s.get("params") or {}
+        if p.get("cone_isolation"):
+            cones.add(str(p["cone_isolation"]))
+        if isinstance(p.get("seed"), (int, float)):
+            seeds.append(int(p["seed"]))
+    if not types:
+        return "—"
+    extra = []
+    if cones:
+        extra.append("/".join(sorted(cones)))
+    if seeds:
+        extra.append(f"seeds {min(seeds)}–{max(seeds)}" if min(seeds) != max(seeds)
+                     else f"seed {seeds[0]}")
+    tail = f" ({', '.join(extra)})" if extra else ""
+    return " · ".join(f"{t} ×{n}" for t, n in types.most_common()) + tail
+
+
 def explorer_file_options(date, cell):
     """Center checklist for a cell: each raw recording as a checkbox + waveform thumb."""
     cm = DataStore().cell(date, cell)
@@ -613,15 +662,14 @@ def explorer_file_options(date, cell):
             continue
         p = str(cm.dir / r["file"])
         spark = sparkline_datauri(p)
-        stim = (r.get("stimulus") or {}).get("type")
-        stim = {"sq_wave": "sq wave", "flicker": "sq wave"}.get(stim, stim)   # friendly display
+        brief = _stim_brief(r.get("stimulus"))
         thumb = html.Div([
             html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px"),
                      **{"data-ps": "wave|" + p}) if spark
             else html.Div("—", style={"height": "62px", "color": "#999"}),
             html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all",
                                                  "color": "#e3e9ff", "fontWeight": "bold"}),
-            html.Div(f"stim: {stim}" if stim else "stim: —",
+            html.Div(f"stim: {brief}" if brief else "stim: —",
                      style={"fontSize": "10px", "color": "#9aa7c0"}),
         ], style={"display": "inline-block", "verticalAlign": "top",
                   "background": "#2a2a36", "borderRadius": "4px", "padding": "2px 4px"})
@@ -687,6 +735,7 @@ def explorer_detail(date, cell):
         _fact_row("Sample rate", rate_txt),
         _fact_row("Duration", dur_txt),
         _fact_row("Channels", " · ".join(chans) if chans else "—"),
+        _fact_row("Stimulus", _cell_stim_summary(cm)),   # stim_type ×n (cone · seeds) — seed manifest
     ], style={"fontSize": "14px", "borderCollapse": "collapse", "marginBottom": "10px"})
 
     # processed output figures — DISK is the source of truth (glob the PNGs); group them by the
