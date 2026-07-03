@@ -226,3 +226,19 @@ html, body { margin: 0; }
 /* refractory box: same height as the abs-threshold boxes (hide its steppers, shrink container) */
 #refr ~ .dash-input-stepper { display: none !important; }
 .dash-input-container:has(> #refr) { height: 17.33px !important; min-height: 0 !important; }
+
+/* trial-align (frame-sync nudge) boxes: match the abs-threshold boxes (compact panel format) */
+#align-editor { font-size: 10px; }
+#align-editor input {
+    font-size: 10.67px;
+    height: 14.67px;
+    line-height: 14.67px;
+    padding: 0 4px;
+    box-sizing: border-box;
+    width: 66.67px !important;
+}
+#align-editor input:disabled { background: #eee; }         /* the reference (①) box */
+#align-editor .dash-input-stepper { display: none !important; }
+#align-editor .dash-input-container { height: 17.33px !important; min-height: 0 !important; }
+/* the trace-highlight ring when an align box is focused (see assets/alignfocus.js) */
+#align-editor input:focus { outline: 2px solid #3367d6; outline-offset: 0; }

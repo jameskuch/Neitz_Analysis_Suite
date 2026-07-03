@@ -146,6 +146,42 @@ def get_flicker(path, ttl_name):
     return fc[ttl_name]
 
 
+def fine_align_offset(ref_ttl, ttl, fs, coarse_s, *, start_s=0.0, seg_s=4.0, search_s=0.25):
+    """Refine a trial-alignment offset to SAMPLE precision by FFT cross-correlating the two TTL
+    frame-sync waveforms (the flicker onset detector is only ~10 ms-block accurate). Returns the
+    offset in seconds such that `ttl` shifted by +offset best matches `ref_ttl`; searches within
+    ±search_s of the coarse estimate (so it can't jump to the wrong flicker cycle). Falls back to
+    `coarse_s` on any problem."""
+    try:
+        n = min(len(ref_ttl), len(ttl))
+        i0 = max(0, int(start_s * fs))
+        i1 = min(n, i0 + int(seg_s * fs))
+        if i1 - i0 < int(0.5 * fs):
+            return coarse_s
+        a = np.asarray(ref_ttl[i0:i1], float)
+        b = np.asarray(ttl[i0:i1], float)
+        a = (a > (a.max() + a.min()) / 2).astype(float); a -= a.mean()   # binary envelope, DC-removed
+        b = (b > (b.max() + b.min()) / 2).astype(float); b -= b.mean()
+        if a.std() < 1e-9 or b.std() < 1e-9:
+            return coarse_s
+        m = len(a)
+        L = 1
+        while L < 2 * m:
+            L *= 2
+        corr = np.fft.irfft(np.fft.rfft(a, L) * np.conj(np.fft.rfft(b, L)), L)
+        corr = np.concatenate([corr[-(m - 1):], corr[:m]])              # lags -(m-1) .. (m-1)
+        lags = np.arange(-(m - 1), m)
+        c_lag = int(round(coarse_s * fs))
+        w = int(search_s * fs)
+        mask = (lags >= c_lag - w) & (lags <= c_lag + w)
+        if not mask.any():
+            return coarse_s
+        best = lags[mask][int(np.argmax(corr[mask]))]
+        return float(best) / fs
+    except Exception:
+        return coarse_s
+
+
 def minmax_decimate(t, y, n_target=4000):
     n = len(y)
     if n <= n_target * 2:
@@ -298,27 +334,6 @@ def _img_datauri(path):
             _IMG_CACHE.clear()
         _IMG_CACHE[key] = uri
     return uri
-
-
-def output_gallery(date, cell):
-    """Clickable thumbnails of every PNG under the cell's outputs/ (newest first)."""
-    cm = DataStore().cell(date, cell)
-    outdir = cm.dir / "outputs"
-    pngs = sorted(outdir.rglob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True) \
-        if outdir.exists() else []
-    if not pngs:
-        return [html.Span("no output images yet — run an analysis on this cell",
-                          style={"color": "#888", "fontSize": "12px"})]
-    thumbs = []
-    for p in pngs:
-        rel = p.relative_to(outdir)
-        thumbs.append(html.Div([
-            html.Img(src=_img_datauri(p), id={"type": "out-thumb", "src": str(p)}, n_clicks=0,
-                     style={"height": "150px", "border": "1px solid #ccc", "cursor": "pointer",
-                            "display": "block", "background": "white"}),
-            html.Div(str(rel), style={"fontSize": "10px", "maxWidth": "240px", "wordBreak": "break-all"}),
-        ], style={"margin": "4px"}))
-    return thumbs
 
 
 _MODAL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
@@ -1010,12 +1025,8 @@ app.layout = html.Div(
         # (the region & display controls now live as overlays ON the graphs, right)
 
         # ---- compartment: cell outputs (click to enlarge) ----
-        card("Cell outputs (click to enlarge)", [
-            html.Div(id="outputs-gallery",
-                     style={"display": "flex", "flexWrap": "wrap", "gap": "6px",
-                            "maxHeight": "300px", "overflowY": "auto",
-                            "border": "1px solid #eee", "padding": "4px", "background": "#fafafa"}),
-        ]),
+        # (Cell-outputs gallery removed from Analysis View — outputs are viewed in the Data Explorer
+        #  and via macOS Finder only.)
     ]),
 
     # draggable divider between the sidebar and the graphs (JS in assets/splitter.js;
@@ -1108,6 +1119,8 @@ app.layout = html.Div(
     dcc.Store(id="align-seed"),                           # {file path: offset (ms) shown in the editor}
     dcc.Store(id="hist"),                                 # undo/redo: {"stack": [snapshot,...], "idx": n}
     dcc.Input(id="undo-key", value="", style={"display": "none"}),   # clientside writes "undo:N"/"redo:N"
+    dcc.Input(id="align-focus", value="", style={"display": "none"}),  # JS: focused align box's file path
+    dcc.Store(id="align-focus-sink"),                     # clientside highlight callback sink
     dcc.Store(id="recent-cells", storage_type="local"),   # most-recently-opened date|cell list
     dcc.Store(id="last-session", storage_type="local"),   # last cell + checked files (auto-loaded on startup)
     dcc.Store(id="rail-sort", data={"col": "date", "dir": "desc"}),   # explorer rail sort
@@ -1440,14 +1453,30 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     rs = float(rstart) if rstart is not None else t0_full
     re_ = float(rend) if rend is not None else t1_full
 
+    # Zoom policy: a user zoom (trig "time") OR an alignment nudge (trig "align-map") KEEPS the
+    # current window; ANY other parameter change reverts to the default full view. This is enforced
+    # two ways that must agree: (a) here, honor the relayout range only when keeping; (b) below, the
+    # layout uirevision = a hash of every NON-align parameter, so it stays constant across zoom +
+    # align (Plotly preserves the user zoom) but changes on any other edit (Plotly resets the view).
+    keep_zoom = trig in ("time", "align-map")
     x0, x1 = t0_full, t1_full
-    if trig == "time" and relayout and "xaxis.range[0]" in relayout:
-        x0, x1 = float(relayout["xaxis.range[0]"]), float(relayout["xaxis.range[1]"])
+    if keep_zoom and relayout and "xaxis.range[0]" in relayout:
+        try:
+            x0, x1 = float(relayout["xaxis.range[0]"]), float(relayout["xaxis.range[1]"])
+        except (TypeError, ValueError):
+            pass
     x0, x1 = max(t0_full, x0), min(t1_full, x1)
     if crop:                                       # restrict view to the analysis region
         x0, x1 = max(x0, rs), min(x1, re_)
         if x1 <= x0:
             x0, x1 = rs, re_
+
+    # uirevision token: constant across zoom + alignment, changes on any other parameter → the
+    # graph reverts to default when a non-align control changes, but holds the zoom otherwise.
+    uirev = "ui-" + str(hash((chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
+                              tuple(region_mode or []), tuple(disp_show or []),
+                              tuple(disp_binned or []), stagger_pct, train_bin, fft_bin,
+                              tuple(group or []), tuple(files or []))))
 
     time_fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
                              row_heights=[0.625, 0.375])     # frame-sync row enlarged ×1.25
@@ -1607,7 +1636,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1, autorange=True, fixedrange=True,
                           uirevision=f"ttl-{stagger_pct}-{len(files)}")
     time_fig.update_xaxes(title_text="time (s)", row=2, col=1, range=[x0, x1])
-    time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision="keep",
+    time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision=uirev,
                            showlegend=False)   # file colors are evident from the Files list
 
     # power spectrum: group average + stim marker
@@ -1637,14 +1666,17 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="#ccc", borderwidth=1),
         showlegend=True)
 
-    # ISI histogram: pooled in-region inter-spike intervals (companion to the FFT)
+    # ISI histogram: pooled in-region inter-spike intervals (companion to the FFT). The "bin (ms)"
+    # box (tbin) sets the histogram bin WIDTH in ms; 0 → auto (60 bins).
     if isi_all:
         isis = np.concatenate(isi_all)
         hi = np.percentile(isis, 99) if len(isis) else 0.0
         shown = isis[isis <= hi] if hi > 0 else isis
-        isi_fig = go.Figure(go.Histogram(x=shown, nbinsx=60, marker_color="#3367d6"))
+        hbins = dict(xbins=dict(start=0.0, size=tbin)) if tbin > 0 else dict(nbinsx=60)
+        isi_fig = go.Figure(go.Histogram(x=shown, marker_color="#3367d6", **hbins))
+        bin_txt = f", {tbin:g} ms bins" if tbin > 0 else ""
         isi_fig.update_layout(
-            title=dict(text=f"ISI histogram ({len(isis)} intervals, ≤99th pct)", x=0.5,
+            title=dict(text=f"ISI histogram ({len(isis)} intervals, ≤99th pct{bin_txt})", x=0.5,
                        xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
             xaxis_title="inter-spike interval (ms)", yaxis_title="count",
             margin=dict(l=50, r=12, t=34, b=40), bargap=0.03, showlegend=False)
@@ -2059,8 +2091,7 @@ def build_align_editor(files, seed):
                              "maxWidth": "100px", "overflow": "hidden",
                              "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
             dcc.Input(id={"type": "align-trace", "path": p}, type="number",
-                      value=(0 if ref else seed.get(p, 0)), debounce=True, disabled=ref, step=1,
-                      style={"width": "72px", "background": "#eee" if ref else "white"}),
+                      value=(0 if ref else seed.get(p, 0)), debounce=True, disabled=ref, step="any"),
         ], style={"margin": "0 8px 6px 0", "display": "flex", "flexDirection": "column",
                   "alignItems": "flex-start"}))
     return [html.Div("reference = ① (offset 0); others shift to match.  + = later, − = earlier.",
@@ -2081,16 +2112,24 @@ def set_align_seed(_a, _r, files, ttl_name):
     try:                                                 # reference = first file's flicker onset
         ref = get_flicker(files[0], ttl_name)
         ref_t0 = ref.t0 if ref else None
+        ref_ttl = get_channel(files[0], ttl_name)
+        fs = get_recording(files[0]).fs
     except Exception:
         ref_t0 = None
     if ref_t0 is None:
         return {}
     seed = {}
-    for p in files[1:]:                                  # each other file: shift its t0 onto ref's
+    for p in files[1:]:                                  # each other file: align its frame-sync to ref
         try:
             fl = get_flicker(p, ttl_name)
-            if fl:
-                seed[p] = round((ref_t0 - fl.t0) * 1000.0, 1)     # ms
+            if not fl:
+                continue
+            coarse = ref_t0 - fl.t0                       # ~10 ms-accurate onset difference (s)
+            # refine to sample precision by cross-correlating the two frame-sync waveforms, starting
+            # at the earlier onset so the flicker overlaps in both.
+            fine = fine_align_offset(ref_ttl, get_channel(p, ttl_name), fs, coarse,
+                                     start_s=max(0.0, min(ref_t0, fl.t0) - 0.1))
+            seed[p] = round(fine * 1000.0, 2)             # ms
         except Exception:
             pass
     return seed
@@ -2450,11 +2489,41 @@ def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth
     banner = html.Div([
         html.Span("✓ Analysis complete", style={"fontWeight": "bold", "fontSize": "16px"}),
         html.Div("  ·  ".join(msgs), style={"fontSize": "12px", "marginTop": "3px"}),
-        html.Div("outputs saved — see the gallery below ↓",
+        html.Div("outputs saved — view them in the Data Explorer or Finder",
                  style={"fontSize": "11px", "marginTop": "2px", "opacity": 0.8}),
     ], style={"background": "#e7f6e7", "border": "1.5px solid #4fae4f", "borderRadius": "6px",
               "padding": "9px 11px", "color": "#0a5a0a"})
     return banner, (_n or 1)
+
+
+# Focusing an align box highlights that file's trace(s) in BOTH graphs (bold + others dimmed) so you
+# see which one you're nudging. Done clientside (Plotly.restyle) — a full Python re-render on every
+# focus would re-detect spikes for all files (slow). #align-focus (a file path, or "" on blur) is
+# written by assets/alignfocus.js; the previous highlight is saved on the graph + restored on change.
+app.clientside_callback(
+    """function(focus){
+        var gd = document.querySelector('#time .js-plotly-plot');
+        if(!gd || !gd.data) return window.dash_clientside.no_update;
+        try{
+            if(gd._alignHL){                               // restore the saved per-trace opacities
+                Plotly.restyle(gd, 'opacity', gd._alignHL);
+                gd._alignHL = null;
+            }
+            var base = focus ? String(focus).split('/').pop() : '';
+            if(!base) return '';
+            // save originals (undefined opacity → Plotly default 1) so a blur restores exactly
+            gd._alignHL = gd.data.map(function(tr){ return (tr.opacity == null) ? 1 : tr.opacity; });
+            var newops = gd.data.map(function(tr){
+                return (tr.name && tr.name.indexOf(base) === 0) ? 1.0 : 0.12;   // match → bold, else dim
+            });
+            Plotly.restyle(gd, 'opacity', newops);
+        }catch(e){}
+        return '';
+    }""",
+    Output("align-focus-sink", "data"),
+    Input("align-focus", "value"),
+    prevent_initial_call=True,
+)
 
 
 # instant feedback the moment "Run analysis" is clicked (the server run_cell — analysis + 4K
@@ -2478,28 +2547,6 @@ app.clientside_callback(
 
 
 # ---- output-image gallery for the selected cell + full-screen pop-out --------
-@app.callback(Output("outputs-gallery", "children"),
-              Input("cell-select", "value"), Input("gallery-trigger", "data"),
-              prevent_initial_call=False)
-def build_gallery(cell_val, _trig):
-    vals = cell_val if isinstance(cell_val, list) else ([cell_val] if cell_val else [])
-    if not vals:
-        return [html.Span("pick a cell to see its output images",
-                          style={"color": "#888", "fontSize": "12px"})]
-    thumbs = []
-    for v in vals:
-        try:
-            date, cell = v.split("|")
-            imgs = output_gallery(date, cell)
-            if len(vals) > 1:                        # label each cell's group when several picked
-                thumbs.append(html.Div(f"{date}/{cell}", style={"width": "100%", "fontSize": "11px",
-                                                                "fontWeight": "bold", "color": "#555"}))
-            thumbs += imgs
-        except Exception as e:
-            thumbs.append(html.Span(f"(no outputs: {e})", style={"color": "#888", "fontSize": "12px"}))
-    return thumbs
-
-
 @app.callback(Output("output-modal", "style"), Output("modal-img", "src"),
               Input({"type": "out-thumb", "src": ALL}, "n_clicks"),
               Input({"type": "raw-thumb", "src": ALL}, "n_clicks"),
