@@ -668,27 +668,59 @@ def _cell_epoch_summary(cm):
     return f"{len(groups)} stimuli · {' + '.join(map(str, counts))} epochs"
 
 
+def _file_tile(p, r):
+    """One recording's tile (waveform thumb + name + stim brief) for the file browser."""
+    spark = sparkline_datauri(p)
+    brief = _stim_brief(r.get("stimulus"))
+    return html.Div([
+        html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px"),
+                 **{"data-ps": "wave|" + p}) if spark
+        else html.Div("—", style={"height": "62px", "color": "#999"}),
+        html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all",
+                                             "color": "#e3e9ff", "fontWeight": "bold"}),
+        html.Div(f"stim: {brief}" if brief else "stim: —",
+                 style={"fontSize": "10px", "color": "#9aa7c0"}),
+    ], style={"display": "inline-block", "verticalAlign": "top",
+              "background": "#2a2a36", "borderRadius": "4px", "padding": "2px 4px"})
+
+
+def _epoch_group_header(g):
+    """Full-width header for one epoch-group (a run of the same stimulus = N epochs). Rendered as a
+    DISABLED checklist option so it can't be selected; CSS makes disabled options full-width so each
+    group's tiles wrap beneath their header."""
+    st = {"sq_wave": "sq wave", "flicker": "sq wave"}.get(g.get("stim_type"), g.get("stim_type")) or "—"
+    cone = g.get("cone_isolation")
+    n = int(g.get("n_epochs", 1))
+    label = " · ".join([st] + ([str(cone)] if cone else []))
+    return html.Div([
+        html.Span(f"▸ {label}", style={"fontWeight": "bold", "color": "#cdd6f4"}),
+        html.Span(f"   {n} epoch" + ("s" if n != 1 else ""),
+                  style={"color": "#9aa7c0", "marginLeft": "6px"}),
+    ], style={"fontSize": "11.5px", "borderBottom": "1px solid #3a3a48", "paddingBottom": "3px",
+              "width": "100%", "boxSizing": "border-box"})
+
+
 def explorer_file_options(date, cell):
-    """Center checklist for a cell: each raw recording as a checkbox + waveform thumb."""
+    """Center checklist for a cell: each raw recording as a checkbox + waveform thumb. Repeated
+    stimuli (same `stim_signature`) are grouped into labelled 'N epochs' blocks via
+    `neitz.io.epoch_groups` — the group header is a disabled, full-width checklist option that visually
+    separates each run. Falls back to a flat list when there's no useful grouping (old / hand-entered
+    cells with no signatures)."""
+    from neitz.io import epoch_groups
     cm = DataStore().cell(date, cell)
+    recs = [r for r in cm.data.get("recordings", [])
+            if str(r.get("file", "")).endswith((".abf", ".csv"))]
+    groups = epoch_groups(recs)
+    # only show group headers when they add structure: some stimulus repeats, or ≥2 distinct stimuli
+    show = (any(g["stim_signature"] for g in groups)
+            and (len(groups) > 1 or any(g["n_epochs"] > 1 for g in groups)))
     opts = []
-    for r in cm.data.get("recordings", []):
-        if not str(r.get("file", "")).endswith((".abf", ".csv")):
-            continue
-        p = str(cm.dir / r["file"])
-        spark = sparkline_datauri(p)
-        brief = _stim_brief(r.get("stimulus"))
-        thumb = html.Div([
-            html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px"),
-                     **{"data-ps": "wave|" + p}) if spark
-            else html.Div("—", style={"height": "62px", "color": "#999"}),
-            html.Div(os.path.basename(p), style={"fontSize": "11px", "wordBreak": "break-all",
-                                                 "color": "#e3e9ff", "fontWeight": "bold"}),
-            html.Div(f"stim: {brief}" if brief else "stim: —",
-                     style={"fontSize": "10px", "color": "#9aa7c0"}),
-        ], style={"display": "inline-block", "verticalAlign": "top",
-                  "background": "#2a2a36", "borderRadius": "4px", "padding": "2px 4px"})
-        opts.append({"label": thumb, "value": p})
+    for gi, g in enumerate(groups):
+        if show:
+            opts.append({"label": _epoch_group_header(g), "value": f"__grp__{gi}", "disabled": True})
+        for r in g["recordings"]:
+            p = str(cm.dir / r["file"])
+            opts.append({"label": _file_tile(p, r), "value": p})
     return opts
 
 

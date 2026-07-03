@@ -178,6 +178,17 @@ html, body { margin: 0; }
 #exp-cards > div, #exp-cards > div * { color: #dfe6ff !important; }
 #exp-files label { background: #2a2a36 !important; }
 #exp-files label, #exp-files label * { color: #dfe6ff !important; }
+/* Epoch-group headers = DISABLED, full-width checklist options (explorer_file_options): force each
+   to span the row so the group's tiles wrap beneath it, and hide the unusable disabled checkbox.
+   !important beats the checklist's inline labelStyle. */
+#exp-files .dash-options-list-option:has(input:disabled),
+#exp-files label:has(input:disabled) {
+    display: block !important; width: 100% !important; flex-basis: 100% !important;
+    background: none !important; margin: 10px 0 3px !important; padding: 0 !important;
+    cursor: default;
+}
+#exp-files .dash-options-list-option:has(input:disabled) input,
+#exp-files label:has(input:disabled) input { display: none !important; }
 /* dark form controls inside the Explorer */
 #explorer-modal input, #explorer-modal textarea {
     background: #15151d !important; color: #e3e9ff !important;
