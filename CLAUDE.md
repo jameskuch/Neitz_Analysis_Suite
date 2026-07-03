@@ -136,11 +136,22 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   ~−80 dB spike). Mean subtraction stays.
 - **Trial-alignment nudge (D1)** (sidebar "trial align — frame-sync nudge (ms)"): a per-file time
   offset shifts that file's analog + TTL + spikes TOGETHER so trial starts line up. "⇄ auto" seeds
-  each file's offset from its TTL first-onset (`ref.t0 − file.t0`, ref = first file); a per-file ms
-  grid fine-tunes; "reset" clears. Stored in `align-seed` (ms, editor) → `align-map` (seconds, what
-  `build_figures` applies). Coupled by construction — the region mask, FFT, ISI all run in the
-  aligned frame. NOTE: this aligns the Analysis View + 4K exports; making the pooled ON/OFF stats in
-  `run_cell_flicker` consume the offsets is a known follow-up (do it with epoch-averaging).
+  each file's offset from its TTL first-onset, THEN refines to sample precision by FFT
+  cross-correlating the two frame-sync waveforms (`fine_align_offset` — the onset t0 is only ~10 ms
+  accurate); a per-file ms grid fine-tunes; "reset" clears. Boxes use `step="any"` (offsets are
+  decimal ms). Stored in `align-seed` (ms, editor) → `align-map` (seconds, what `build_figures`
+  applies). Coupled by construction — the region mask, FFT, ISI all run in the aligned frame.
+  **Focusing an align box highlights that file's traces in both graphs** (clientside Plotly.restyle,
+  `assets/alignfocus.js` → `#align-focus`; match → opacity 1, others → 0.12, restored on blur) — a
+  full Python re-render on focus would be too slow. NOTE: this aligns the Analysis View + 4K exports;
+  making the pooled ON/OFF stats in `run_cell_flicker` consume the offsets is a known follow-up.
+- **Zoom policy** (`build_figures`): a user zoom OR an alignment nudge (trig `time` / `align-map`)
+  KEEPS the current window; ANY other parameter change reverts to the default full view. Enforced by
+  the layout `uirevision` = a hash of every NON-align parameter (constant across zoom+align → Plotly
+  holds the zoom; changes on any other edit → Plotly resets) AND honoring the relayout range only
+  when keeping. (Replaces the old blanket `uirevision="keep"`.)
+- **ISI histogram** honors the "bin (ms)" box (`train-bin`): `xbins` size = the ms value; 0 → auto
+  (60 bins). (That box also drives the spike-train row-1 view when "show binned spikes" is on.)
 - **Group → one average** (files panel checkbox `#group-avg`, needs 3+ checked): `build_figures`
   collapses the selected files to a single mean trace — the aligned (post-nudge) analog + TTL are
   averaged incrementally onto a common grid (running sum+count, memory-safe), the FFT shows only the
@@ -150,6 +161,9 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   deselected; a plain click still toggles one row.
 - **Compact readout** (top of graphs): a ONE-LINER (count · region · view · stim-freq range). The
   old per-file spike-count dump blew up to many lines with 40+ files — don't reintroduce it there.
+- **Outputs are NOT shown in the Analysis View** (the old "Cell outputs" gallery was removed) — view
+  processed figures in the **Data Explorer** (click to enlarge) or via **Finder** only. The
+  `out-thumb` enlarge-modal still serves the Explorer; `gallery-trigger` is now a dead store.
 - **True full screen**: `⛶ Full screen` button (next to the readout) + the `F` key toggle the
   browser Fullscreen API (`assets/fullscreen.js`); relabels on `fullscreenchange`.
 - **Flicker auto-window includes the final cycle**: `detect_flicker` extends `t1` by one `period`
