@@ -308,18 +308,29 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
 
 
 def run_cell_noise(store, date, cell, *, name="sta", save=True, run_label=None,
-                   formats=("png", "pdf", "svg"), **noise_kw) -> Result:
+                   formats=("png", "pdf", "svg"), chan="Im_prime", ttl="TTL", detect=None,
+                   abs_map=None, bins_per_update=6, include=None, **noise_kw) -> Result:
     """
-    Gaussian-noise reverse correlation on a stored cell: locate the cell's spike CSV
-    + stimulus CSV, compute the temporal STA (linear filter) via run_noise, and (if
-    save) write the STA figure (PNG/PDF/SVG) + result.json into <cell>/outputs/<name>/,
-    recording them in the manifest. Validates against Sara's MATLAB STA (peak ~22 ms).
+    Gaussian-noise temporal STA on a stored cell. DISPATCH: if the cell has seed-based
+    gaussian_noise `.abf` recordings (June2026 Stage rig), regenerate each epoch's stimulus from its
+    seed and reverse-correlate the abf spikes (the `_seed` branch); otherwise fall back to the legacy
+    spike-CSV + stimulus-CSV path (2017-era cells, validated against Sara's MATLAB STA, peak ~22 ms).
+    Writes the STA figure (PNG/PDF/SVG) + result.json into <cell>/outputs/<name>/ and records them.
     """
     import os as _os
     from .io.figures import save_figure
     from . import plots
 
     cm = store.cell(date, cell)
+    seed_recs = [r for r in cm.data.get("recordings", [])
+                 if str(r.get("file", "")).endswith(".abf")
+                 and (r.get("stimulus") or {}).get("type") == "gaussian_noise"
+                 and ((r.get("stimulus") or {}).get("params") or {}).get("seed") is not None]
+    if seed_recs:
+        return _run_cell_noise_seed(store, cm, date, cell, name=name, save=save, run_label=run_label,
+                                    formats=formats, chan=chan, ttl=ttl, detect=detect,
+                                    abs_map=abs_map, bins_per_update=bins_per_update, include=include)
+
     csvs = [str(cm.dir / r["file"]) for r in cm.data.get("recordings", [])
             if str(r.get("file", "")).endswith(".csv")]
 
@@ -359,6 +370,84 @@ def run_cell_noise(store, date, cell, *, name="sta", save=True, run_label=None,
         cm.save()
         store.update_index()
         _auto_mirror()
+    return res
+
+
+def _save_seed_run(cm, store, name, run_label, formats, fig, result, info, extra_params):
+    """Common save for a seed-based run: figure (PNG/PDF/SVG) + result.json → outputs/<name>/,
+    recorded in the manifest (one record, all files) per the store-integrity rules."""
+    import os as _os
+    from .io.figures import save_figure
+    out = cm.output_dir(name)
+    figpaths = save_figure(fig, out, name, formats=formats)
+    result.save(out / "result")
+    import matplotlib.pyplot as _plt
+    _plt.close("all")
+    rel = lambda p: _os.path.relpath(p, cm.dir)
+    files = {f"figure_{k}": rel(v) for k, v in figpaths.items()}
+    files["result_json"] = rel(out / "result.json")
+    cm.record_output(name, files=files, label=run_label,
+                     params={"source": "seed-manifest", "epochs": info, **extra_params},
+                     inputs=[e["file"] for e in info], summary=result.summary[0])
+    cm.save()
+    store.update_index()
+    _auto_mirror()
+
+
+def _run_cell_noise_seed(store, cm, date, cell, *, name, save, run_label, formats, chan, ttl,
+                         detect, abs_map, bins_per_update, include) -> Result:
+    """Seed-based full-field STA: regenerate each epoch's stimulus from its seed, reverse-correlate
+    the abf spikes, average across epochs (see `sta_from_records`)."""
+    from . import plots
+    records, responses, info = load_seed_epochs(
+        cm, chan=chan, ttl=ttl, detect=detect, abs_map=abs_map,
+        bins_per_update=bins_per_update, include=include, want=("gaussian_noise",))
+    if not records:
+        raise SystemExit(f"no loadable seeded gaussian-noise recordings in {date}/{cell}")
+    out = sta_from_records(records, responses, bins_per_update=bins_per_update)
+    pk = int(np.argmax(np.abs(out["average"])))
+    summary = [dict(n_epochs=int(out["n_epochs"]), filter_len=len(out["average"]),
+                    peak_ms=float(out["time_ms"][pk]),
+                    peak_sign="OFF" if out["average"][pk] < 0 else "ON")]
+    arrays = dict(average=out["average"], time_ms=out["time_ms"], freqs=out["freqs"],
+                  tuning=out["tuning"], per_epoch=out["per_epoch"])
+    res = Result("noise", summary=summary, arrays=arrays,
+                 meta=dict(source="seed-manifest", n_epochs=len(records),
+                           bins_per_update=bins_per_update, epochs=info))
+    if save:
+        label = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
+        _save_seed_run(cm, store, name, run_label, formats,
+                       plots.noise_sta_figure(res.arrays, label=label), res, info,
+                       {"bins_per_update": bins_per_update})
+    return res
+
+
+def run_cell_checkerboard(store, date, cell, *, name="strf", save=True, run_label=None,
+                          formats=("png", "pdf", "svg"), chan="Im_prime", ttl="TTL", detect=None,
+                          abs_map=None, bins_per_update=1, filter_len=30, include=None) -> Result:
+    """Checkerboard STRF on a stored cell: regenerate each epoch's spatiotemporal stimulus from its
+    seed, reverse-correlate the abf spikes (pooled in time), and save the STRF figure + result.json.
+    (June2026 Stage rig; the abf TTL→epoch-start binding is validated on real seeded-noise data.)"""
+    from . import plots
+    cm = store.cell(date, cell)
+    records, responses, info = load_seed_epochs(
+        cm, chan=chan, ttl=ttl, detect=detect, abs_map=abs_map,
+        bins_per_update=bins_per_update, include=include, want=("checkerboard",))
+    if not records:
+        raise SystemExit(f"no loadable seeded checkerboard recordings in {date}/{cell}")
+    strf = strf_from_records(records, responses, bins_per_update=bins_per_update, filter_len=filter_len)
+    summary = [dict(peak_y=int(strf.peak_yx[0]), peak_x=int(strf.peak_yx[1]),
+                    peak_time_ms=float(strf.peak_time_ms), n_epochs=len(records),
+                    filter_len=len(strf.temporal))]
+    arrays = dict(strf=strf.strf, spatial_rf=strf.spatial_rf, temporal=strf.temporal,
+                  time_ms=strf.time_ms)
+    res = Result("strf", summary=summary, arrays=arrays,
+                 meta=dict(source="seed-manifest", n_epochs=len(records),
+                           bins_per_update=bins_per_update, epochs=info))
+    if save:
+        label = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
+        _save_seed_run(cm, store, name, run_label, formats, plots.strf_figure(strf, label=label),
+                       res, info, {"bins_per_update": bins_per_update, "filter_len": filter_len})
     return res
 
 
@@ -471,3 +560,51 @@ def strf_from_records(records, responses, *, bins_per_update=1, filter_len=30, p
     response = np.concatenate(resp_parts)                       # (T,)
     paradigm = paradigm or CheckerboardParadigm(n_y=n_y, n_x=n_x, filter_len=filter_len)
     return paradigm.analyze(stim, response)
+
+
+def load_seed_epochs(cm, *, chan="Im_prime", ttl="TTL", detect=None, abs_map=None,
+                     bins_per_update=6, include=None, want=("gaussian_noise", "checkerboard")):
+    """Load a stored cell's seeded-noise epochs, ready for :func:`sta_from_records` /
+    :func:`strf_from_records`. For each ``.abf`` recording whose stimulus is a seed-based noise of a
+    wanted ``stim_type``: detect spikes on `chan`, find the stimulus onset ``t0`` from the TTL frame
+    clock (:func:`~neitz.analysis.flicker.frame_clock_onset`), regenerate the stimulus
+    (:func:`record_from_stimulus` → ``noise_from_record``), and bin the response to the update grid
+    (:func:`epoch_response`). Returns ``(records, responses, info)``.
+
+    GATED ON REAL DATA: the TTL→``t0`` binding is validated only once a real seeded-noise recording
+    is imported (see CLAUDE.md); ``t0`` falls back to 0.0 when the frame clock isn't found.
+    """
+    from .spikes import detect_spikes
+    from .analysis.flicker import frame_clock_onset
+    records, responses, info = [], [], []
+    for r in cm.data.get("recordings", []):
+        f = str(r.get("file", ""))
+        if not f.endswith(".abf"):
+            continue
+        rec_dict = record_from_stimulus(r.get("stimulus"))
+        if rec_dict.get("stim_type") not in want or rec_dict.get("seed") is None:
+            continue
+        path = str(cm.dir / f)
+        if include and path not in include and os.path.basename(path) not in include:
+            continue
+        rec = Recording.load(path)
+        det = dict(detect or {})
+        eff_abs = (abs_map or {}).get(path, (abs_map or {}).get(os.path.basename(path)))
+        if eff_abs is not None:
+            det["abs_threshold"] = float(eff_abs)
+        st = detect_spikes(rec.channel(chan), rec.fs, **det)
+        try:
+            t0 = frame_clock_onset(rec.channel(ttl), rec.fs)
+        except Exception:
+            t0 = None
+        t0 = 0.0 if t0 is None else float(t0)
+        v = noise_from_record(rec_dict)
+        n_updates = v.shape[-1]
+        update_dt = (float(rec_dict.get("update_every_n_frames", 1))
+                     / float(rec_dict.get("refresh_rate_hz", 60)))
+        resp = epoch_response(st.times, t0, n_updates * bins_per_update, update_dt / bins_per_update)
+        records.append(rec_dict)
+        responses.append(resp)
+        info.append(dict(file=os.path.basename(path), t0=round(t0, 4),
+                         n_spikes=int(len(st.times)), stim_type=rec_dict["stim_type"]))
+    return records, responses, info

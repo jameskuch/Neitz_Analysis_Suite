@@ -44,7 +44,7 @@ from neitz.io import stim as stim_io          # seed-based stim-manifest reader 
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
 from neitz.dataio import DataStore
-from neitz.run import run_cell_flicker, run_cell_noise
+from neitz.run import run_cell_flicker, run_cell_noise, run_cell_checkerboard
 
 # default browse location is the managed data store (~/Documents/ephysdataio)
 EPHYS_ROOT = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
@@ -2502,12 +2502,20 @@ def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth
         stype = next((r["stimulus"].get("type") for r in cm.data.get("recordings", [])
                       if r.get("stimulus")), None)       # the cell's stimulus type (explicit metadata)
         try:
-            if stype == "gaussian_noise":                # spikes×stimulus reverse correlation → STA
+            if stype == "gaussian_noise":                # temporal STA (seed → reverse correlation)
                 nm = user_name or "sta"
-                r = run_cell_noise(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None)
+                r = run_cell_noise(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
+                                   chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
                 sm = r.summary[0]
                 msgs.append(f"{tag} [{nm}]: STA {sm['n_epochs']} epochs, "
                             f"peak {sm['peak_ms']:.1f} ms {sm['peak_sign']}")
+            elif stype == "checkerboard":                # spatiotemporal STRF (seed → reverse corr.)
+                nm = user_name or "strf"
+                r = run_cell_checkerboard(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
+                                          chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
+                sm = r.summary[0]
+                msgs.append(f"{tag} [{nm}]: STRF {sm['n_epochs']} epochs, "
+                            f"peak (y{sm['peak_y']},x{sm['peak_x']}) {sm['peak_time_ms']:.1f} ms")
             else:                                        # default: square-wave (flicker) ON/OFF
                 nm = user_name or "flicker"
                 cmdir = str(cm.dir)

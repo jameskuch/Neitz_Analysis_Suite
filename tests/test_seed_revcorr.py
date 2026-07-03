@@ -64,6 +64,26 @@ def test_strf_recovers_injected_check_and_lag():
     assert abs(res.peak_time_ms - 1000.0 * L / 60.0) < 1000.0 / 60.0 + 1e-6   # correct lag (±1 frame)
 
 
+def test_strf_figure_renders():
+    """The STRF plotter produces a 2-panel figure (spatial RF + temporal) from an STRFResult."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from neitz import plots
+    records = [{"stim_type": "checkerboard", "seed": s, "checks_y": 2, "checks_x": 3,
+                "n_updates": 1500, "update_every_n_frames": 1, "refresh_rate_hz": 60,
+                "mu": 0.5, "sigma": 0.3} for s in (4, 5)]
+    responses = []
+    for rec in records:
+        v = noise_from_record(rec)
+        h = np.zeros(20); h[4] = 1.0
+        responses.append(np.convolve(v[0, 2, :], h)[:v.shape[-1]])
+    res = strf_from_records(records, responses, bins_per_update=1, filter_len=20)
+    fig = plots.strf_figure(res, label="synthetic")
+    assert len(fig.axes) >= 2 and np.asarray(res.spatial_rf).shape == (2, 3)
+    plt.close(fig)
+
+
 def test_record_from_stimulus_roundtrip():
     """The stored recording.stimulus (type split out) rebuilds a noise_from_record-ready record."""
     stored = {"type": "checkerboard",
@@ -73,6 +93,45 @@ def test_record_from_stimulus_roundtrip():
     rec = record_from_stimulus(stored)
     assert rec["stim_type"] == "checkerboard" and rec["seed"] == 2
     assert noise_from_record(rec).shape == (32, 40, 5)
+
+
+def test_load_seed_epochs_assembles_from_abf(monkeypatch, tmp_path):
+    """Integration of the store loader with a MOCKED Recording (synthetic signal + frame-clock TTL):
+    only seeded noise is loaded, spikes are detected, t0 comes from the TTL frame clock, and the
+    response is binned to the update grid. (The only untested-here piece is the REAL rig's TTL
+    convention.)"""
+    from neitz import run
+    from neitz.dataio import DataStore
+
+    fs, dur, t_on = 20000, 12.0, 2.0
+    tt = np.arange(int(fs * dur)) / fs
+    ttl = np.where(tt >= t_on, (np.mod((tt - t_on) * 60.0, 1.0) < 0.5).astype(float), 0.0)  # 60 Hz clock
+    sig = np.random.RandomState(0).randn(len(tt)) * 0.5
+    for s in np.arange(3.0, 10.0, 0.02):                       # big negative spikes on the signal
+        sig[int(s * fs)] = -50.0
+
+    class FakeRec:
+        fs = 20000.0
+        def channel(self, name):
+            return sig if "im" in str(name).lower() else ttl
+    monkeypatch.setattr(run.Recording, "load", staticmethod(lambda p: FakeRec()))
+
+    cm = DataStore(root=tmp_path).cell("2026-07-03", "c01")
+    cm.dir.mkdir(parents=True, exist_ok=True)
+    cm.data["recordings"] = [
+        {"id": "r1", "file": "raw/noise.abf",
+         "stimulus": {"type": "gaussian_noise",
+                      "params": {"seed": 5, "checks_y": 1, "checks_x": 1, "n_updates": 300,
+                                 "update_every_n_frames": 1, "refresh_rate_hz": 60,
+                                 "mu": 0.5, "sigma": 0.3}}},
+        {"id": "r2", "file": "raw/flicker.abf",                # NOT seeded noise → skipped
+         "stimulus": {"type": "sq_wave", "params": {"flicker_hz": 2}}},
+    ]
+    records, responses, info = run.load_seed_epochs(
+        cm, chan="Im_prime", ttl="TTL", detect={"polarity": "neg", "method": "mad", "k": 6})
+    assert len(records) == 1 and records[0]["seed"] == 5          # only the seeded-noise recording
+    assert responses[0].shape[0] == 300 * 6                       # n_updates × default bins_per_update
+    assert abs(info[0]["t0"] - t_on) < 0.05 and info[0]["n_spikes"] > 100
 
 
 def test_epoch_response_bins_from_t0():

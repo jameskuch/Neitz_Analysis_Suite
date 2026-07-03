@@ -63,6 +63,37 @@ def detect_flicker(ttl, fs, *, env_block_s=0.010, period_tol=0.25) -> "Flicker |
     return Flicker(on_edges=on_e, off_edges=off_e, period=period, t0=t0, t1=t1)
 
 
+def frame_clock_onset(ttl, fs, *, min_run=8, tol=0.35):
+    """Stimulus-onset time (s) for a *non-periodic* stimulus (Gaussian noise) from its TTL frame
+    clock: the first TTL rising edge that begins a SUSTAINED, regular pulse train (the projector
+    frame clock running during the stimulus). Returns the edge time, or ``None`` if no such run is
+    found (e.g. a flat / absent frame clock).
+
+    Unlike :func:`detect_flicker` (which needs a low-frequency square wave), noise updates every
+    frame, so there is no envelope square wave — we just locate where the frame clock *starts*.
+    `min_run` consecutive inter-pulse gaps must sit within `tol` of the train's median period.
+
+    NOTE (June2026): if a recording runs a DIFFERENT adapting carrier before the stimulus, this
+    returns the onset of the FIRST regular run, which may be the adapting block — distinguishing the
+    two needs validation against a real seeded-noise recording (see CLAUDE.md, "gated on real data").
+    """
+    ttl = np.asarray(ttl, dtype=float)
+    mid = (np.percentile(ttl, 95) + np.percentile(ttl, 5)) / 2.0
+    on = (ttl > mid).astype(int)
+    rises = np.where(np.diff(on) == 1)[0] + 1
+    if len(rises) < min_run + 1:
+        return None
+    t = rises / float(fs)
+    gaps = np.diff(t)
+    period = float(np.median(gaps))
+    if period <= 0:
+        return None
+    for i in range(len(gaps) - min_run + 1):                # first run of steady gaps
+        if np.all(np.abs(gaps[i:i + min_run] - period) < tol * period):
+            return float(t[i])
+    return None
+
+
 def vector_strength(spike_t, t0, freq) -> tuple:
     """VS and Rayleigh p for spikes locked to `freq` (phase 0 at t0)."""
     spike_t = np.asarray(spike_t, float)

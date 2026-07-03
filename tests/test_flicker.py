@@ -33,6 +33,19 @@ def test_detect_flicker_none_when_flat():
     assert flicker.detect_flicker(flat, 20000) is None
 
 
+def test_frame_clock_onset_finds_stimulus_start():
+    """Noise t0: a blank then a 60 Hz frame clock → onset ≈ where the clock starts."""
+    fs, dur, t_on, hz = 20000, 10.0, 3.0, 60.0
+    t = np.arange(int(fs * dur)) / fs
+    clock = (np.mod((t - t_on) * hz, 1.0) < 0.5).astype(float)   # 60 Hz square
+    ttl = np.where(t >= t_on, clock, 0.0)                          # flat before t_on
+    onset = flicker.frame_clock_onset(ttl, fs)
+    assert onset is not None
+    assert abs(onset - t_on) < 0.05                               # within ~a frame
+    # flat TTL → no frame clock → None
+    assert flicker.frame_clock_onset(np.zeros(int(fs * 2)), fs) is None
+
+
 def test_vector_strength_locked_vs_uniform():
     locked = np.arange(0.0, 10.0, 0.5)          # one spike per 2 Hz cycle
     vs, p = flicker.vector_strength(locked, t0=0.0, freq=2.0)

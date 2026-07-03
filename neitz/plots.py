@@ -86,3 +86,32 @@ def noise_sta_figure(arrays, label=""):
                  + (f"  ({n_ep} epochs)" if n_ep else ""))
     fig.tight_layout()
     return fig
+
+
+def strf_figure(res, label=""):
+    """Checkerboard STRF: spatial receptive field (peak-lag map) + temporal filter at the peak check.
+    `res` is a CheckerboardParadigm STRFResult (spatial_rf, temporal, peak_yx, peak_time_ms, time_ms).
+    """
+    spatial = np.asarray(res.spatial_rf, float)
+    temporal = np.asarray(res.temporal, float)
+    t = np.asarray(res.time_ms, float)
+    py, px = res.peak_yx
+
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 3.8))
+    vmax = float(np.max(np.abs(spatial))) or 1.0
+    im = ax1.imshow(spatial, cmap="RdBu_r", vmin=-vmax, vmax=vmax, aspect="equal", origin="upper")
+    ax1.plot(px, py, "kx", ms=11, mew=2.2)                 # mark the peak check
+    ax1.set_title(f"spatial RF — peak check (y={py}, x={px})", fontsize=9)
+    ax1.set_xlabel("x check"); ax1.set_ylabel("y check")
+    fig.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
+
+    ax2.plot(t, temporal, color="tab:blue", lw=1.8)
+    ax2.axhline(0, color="k", lw=0.6)
+    ax2.axvline(res.peak_time_ms, color="tab:red", ls="--", lw=1.0)
+    ax2.set_title(f"temporal filter @ peak — {res.peak_time_ms:.1f} ms "
+                  f"[{'OFF' if temporal[int(np.argmax(np.abs(temporal)))] < 0 else 'ON'}]", fontsize=9)
+    ax2.set_xlabel("time (ms)"); ax2.set_ylabel("filter")
+
+    fig.suptitle(f"{label} — checkerboard STRF ({spatial.shape[0]}×{spatial.shape[1]} checks)")
+    fig.tight_layout()
+    return fig
