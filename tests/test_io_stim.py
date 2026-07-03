@@ -68,3 +68,27 @@ def test_sent_codes_siso():
     assert codes.shape == (32, 40, 5, 3)
     assert codes[..., 2].max() == 0                    # B = 0 for S-iso
     assert codes.min() >= 0 and codes.max() <= 255
+
+
+def test_apply_session_manifest_tags_recordings(tmp_path):
+    """Import wiring: manifest rows pair to recordings BY ORDER, set stimulus metadata with
+    source='stim-manifest', and the manifest is copied into the cell dir (self-contained store)."""
+    from neitz.dataio import DataStore
+    src = tmp_path / "src"; src.mkdir()
+    _write_manifest(src, [CHECKER, FLICKER], date="2026_07_03")
+
+    cm = DataStore(root=tmp_path / "store").cell("2026-07-03", "c01")
+    cm.dir.mkdir(parents=True, exist_ok=True)
+    cm.data["recordings"] = [{"id": "2026_07_03_0001"}, {"id": "2026_07_03_0002"}]
+
+    n = stim.apply_session_manifest(cm, src, date="2026-07-03")
+    assert n == 2
+    s0 = cm.get_stimulus("2026_07_03_0001")
+    assert s0["type"] == "checkerboard" and s0["source"] == "stim-manifest"
+    assert s0["params"]["seed"] == 2 and s0["params"]["cone_isolation"] == "S"
+    assert "stim_type" not in s0["params"]                       # split out into .type
+    assert cm.get_stimulus("2026_07_03_0002")["type"] == "sq_wave"
+    assert (cm.dir / "2026_07_03_stim_manifest.jsonl").exists()  # copied into the store
+
+    # no manifest for a different date → no-op (0), so the caller can fall back to hand-entry
+    assert stim.apply_session_manifest(cm, src, date="1999-01-01") == 0

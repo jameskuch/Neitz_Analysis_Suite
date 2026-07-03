@@ -1,7 +1,8 @@
 from .abf import Recording
 from .csv import CsvSpikeRecording
 from .stim import (load_session_manifest, find_session_manifest, stimulus_metadata,
-                   pair_by_order, noise_from_record, sent_codes_from_record)
+                   pair_by_order, noise_from_record, sent_codes_from_record,
+                   apply_session_manifest)
 
 
 def load_recording(path):
@@ -13,4 +14,5 @@ def load_recording(path):
 
 __all__ = ["Recording", "CsvSpikeRecording", "load_recording",
            "load_session_manifest", "find_session_manifest", "stimulus_metadata",
-           "pair_by_order", "noise_from_record", "sent_codes_from_record"]
+           "pair_by_order", "noise_from_record", "sent_codes_from_record",
+           "apply_session_manifest"]

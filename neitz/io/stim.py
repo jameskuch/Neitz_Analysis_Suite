@@ -76,6 +76,38 @@ def pair_by_order(manifest_rows, recording_ids) -> list[tuple]:
     return list(zip(recording_ids, manifest_rows))
 
 
+def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True) -> int:
+    """Auto-fill a cell's recordings' stimulus metadata from the day's stim manifest.
+
+    Finds ``<date>_stim_manifest.jsonl`` in `source_dir`, pairs its rows to the cell's
+    recordings BY ORDER (the session-manifest association), and calls
+    ``cm.set_stimulus(rec_id, stim_type, params, source="stim-manifest")`` for each.
+    When `copy_into_store` (default) the manifest is copied into ``cm.dir`` beside ``raw/``
+    so the stored cell is self-contained. Returns the number of recordings tagged — ``0``
+    (a no-op) when no manifest is found, so callers can fall back to hand-entered stimulus.
+
+    `cm` is duck-typed (needs ``.data["recordings"]``, ``.set_stimulus``, ``.dir``) so this
+    stays free of a `dataio` import.
+    """
+    mf = find_session_manifest(source_dir, date=date)
+    if not mf:
+        return 0
+    rows = load_session_manifest(mf)
+    rec_ids = [r["id"] for r in cm.data.get("recordings", [])]
+    n = 0
+    for rec_id, rec in pair_by_order(rows, rec_ids):
+        stim_type, params = stimulus_metadata(rec)
+        cm.set_stimulus(rec_id, stim_type, params, source="stim-manifest")
+        n += 1
+    if copy_into_store:
+        import shutil
+        try:
+            shutil.copy2(mf, Path(cm.dir) / mf.name)
+        except Exception:
+            pass
+    return n
+
+
 def noise_from_record(record, *, per_frame=False) -> np.ndarray:
     """Regenerate the exact LINEAR noise tensor `v` in [0, 1] for a manifest record.
 

@@ -40,6 +40,7 @@ from plotly.subplots import make_subplots
 from dash import Dash, dcc, html, Input, Output, State, ctx, no_update, ALL
 
 from neitz.io import load_recording
+from neitz.io import stim as stim_io          # seed-based stim-manifest reader (aliased: local var `stim`)
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
 from neitz.dataio import DataStore
@@ -2930,14 +2931,24 @@ def import_data(_n, stype, sparams, rev):
 
     ds = DataStore()
     made = []
+    tagged = 0
     for date, fs in sorted(by_date.items()):
         cm = ds.new_cell(date, label=os.path.basename(folder.rstrip("/")))
         for f in fs:
             cm.add_recording(f, label=os.path.basename(f), stimulus=stim)
+        # auto-fill each recording's stimulus from the day's seed-based stim manifest (paired by
+        # order), if one ships next to the .abf files (or in the chosen folder). This REPLACES the
+        # hand-entered stimulus above; when no manifest is found it's a no-op and hand-entry stands.
+        for src in (os.path.dirname(fs[0]), folder):
+            k = stim_io.apply_session_manifest(cm, src, date=date)
+            if k:
+                tagged += k
+                break
         cm.save()
         made.append(f"{date}/{cm.data['cell']} ({len(fs)})")
     ds.update_index()
-    msg = f"imported {len(abfs)} recordings → " + ", ".join(made)
+    msg = (f"imported {len(abfs)} recordings → " + ", ".join(made)
+           + (f"  ·  {tagged} tagged from stim manifest" if tagged else ""))
     return (store_cell_options(), (rev or 0) + 1, msg, msg)   # bump store-rev -> rail rebuilds
 
 
