@@ -1011,8 +1011,16 @@ app.layout = html.Div(
     # ================= RIGHT PANEL: graphs (80% width, full height) =============
     html.Div(style={"flex": "1 1 0", "minWidth": 0, "height": "100%",
                     "display": "flex", "flexDirection": "column"}, children=[
-        html.Div(id="readout", style={"fontWeight": "bold", "fontSize": "12px",
-                                      "padding": "2px 0", "flex": "0 0 auto"}),
+        html.Div(style={"display": "flex", "alignItems": "center", "gap": "10px",
+                        "flex": "0 0 auto"}, children=[
+            html.Div(id="readout", style={"fontWeight": "bold", "fontSize": "12px",
+                                          "padding": "2px 0", "flex": "1 1 auto"}),
+            # true full-screen toggle (browser Fullscreen API; wired in assets/fullscreen.js)
+            html.Button("⛶ Full screen", id="fs-toggle", n_clicks=0,
+                        title="enter / exit full screen (or press F)",
+                        style={"fontSize": "11px", "padding": "2px 8px", "cursor": "pointer",
+                               "flex": "0 0 auto", "whiteSpace": "nowrap"}),
+        ]),
         # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height.
         # Region & display controls float in the corners, hugging the graph.
         html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
@@ -1423,7 +1431,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     time_fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
                              row_heights=[0.625, 0.375])     # frame-sync row enlarged ×1.25
     fft_fig = go.Figure()
-    per_file_rates, stim_freqs, readbits, isi_all = [], [], [], []
+    per_file_rates, stim_freqs, isi_all = [], [], []
 
     # vertical stagger step for frame syncs: fraction × (first file's TTL peak-to-peak)
     ttl_step = 0.0
@@ -1527,11 +1535,6 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
             fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines", legendgroup=name,
                                          line=dict(width=(1 if multi else 2), color=color),
                                          opacity=(0.45 if multi else 1.0), name=name))
-        thr_txt = (f", thr {det_i['abs_threshold']:.1f}"
-                   if (method in ("abs", "mad_floor") and det_i["abs_threshold"] is not None)
-                   else "")
-        readbits.append(f"{name}: {len(in_reg)} spk in region" + thr_txt
-                        + (f", stim {fl.freq:.2f}Hz" if fl else ", no flicker"))
 
     if not crop:                                   # shade excluded blocks (skip when cropped out)
         for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
@@ -1597,11 +1600,13 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     else:
         isi_fig = blank_fig("no spikes in region for ISI")
 
+    # Compact one-line readout (the old per-file dump blew up to many lines with 40+ files).
     view = ("spike-train" if spike_train else "analog")
-    mode = (f"GROUP of {len(files)} (avg→power; {view} view"
-            + ("; spikes shown" if (show_spikes and not spike_train) else "")
-            + "; frame syncs overlaid)" if multi else f"single-file inspect ({view})")
-    readout = f"[{mode}]  region {rs:.2f}-{re_:.2f}s  |  " + "  |  ".join(readbits)
+    freqs = sorted({round(s, 2) for s in stim_freqs if s})
+    freq_txt = (f" · stim {freqs[0]:.2f} Hz" if len(freqs) == 1
+                else f" · stim {min(freqs):.2f}–{max(freqs):.2f} Hz" if freqs else "")
+    label = (f"{len(files)} files · avg" if multi else "1 file")
+    readout = f"{label} · region {rs:.2f}–{re_:.2f}s · {view} view{freq_txt}"
     return time_fig, fft_fig, isi_fig, readout
 
 
