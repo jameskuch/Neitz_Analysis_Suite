@@ -1039,9 +1039,15 @@ app.layout = html.Div(
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
                  children=[
-            html.Div(dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True},
-                               figure=blank_fig("")),
-                     style={"flex": "1 1 0", "minWidth": 0}),
+            html.Div([dcc.Graph(id="fft", style={"height": "100%"}, config={"responsive": True},
+                                figure=blank_fig("")),
+                      # FFT bin width (ms): sets the spike-train sampling before the transform.
+                      # Coarser bins low-pass the impulse train (fewer harmonics); default 5 ms.
+                      html.Div([html.Span("fft bin (ms)", style=_OVL),
+                                dcc.Input(id="fft-bin", type="number", value=5, min=1, step=1,
+                                          debounce=True, style=dict(_OVI, width="42px"), **PERSIST)],
+                               style=ov(top="34px", left="62px"))],
+                     style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}),
             # ISI histogram with the spike-train bin control floated inside, below the toolbar
             html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True},
                                 figure=blank_fig("")),
@@ -1336,17 +1342,18 @@ def toggle_disp_show(binned):
               Input("disp-show", "value"), Input("disp-binned", "value"),
               Input("stagger-pct", "value"),
               Input("region-mode", "value"), Input("train-bin", "value"),
-              Input("absth-map", "data"), Input("time", "relayoutData"), prevent_initial_call=True)
+              Input("absth-map", "data"), Input("fft-bin", "value"),
+              Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
-           disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, relayout):
+           disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin, relayout):
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                         relayout=relayout, trig=ctx.triggered_id)
+                         fft_bin=fft_bin, relayout=relayout, trig=ctx.triggered_id)
 
 
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                  relayout=None, trig=None):
+                  fft_bin=5.0, relayout=None, trig=None):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -1372,6 +1379,10 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     show_spikes = "show_spikes" in (disp_show or [])     # "show detected spikes" (default on)
     crop = "crop" in (region_mode or [])   # checkbox: show only the analysis region
     tbin = float(train_bin) if train_bin else 0.0
+    # FFT bin width (ms) → spike-train sampling rate (Hz) for binned_rate + power_w. Both MUST use
+    # the same rate or the frequency axis is wrong. Guard blank/≤0 → the 5 ms (200 Hz) default.
+    fft_ms = float(fft_bin) if fft_bin else 5.0
+    fft_rate = 1000.0 / max(1.0, fft_ms)
 
     rec0 = get_recording(files[0])
     fs0 = rec0.fs
@@ -1478,10 +1489,10 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
             except Exception:
                 pass
 
-        rate = binned_rate(in_reg - rs, 0.0, re_ - rs)
+        rate = binned_rate(in_reg - rs, 0.0, re_ - rs, bin_rate=fft_rate)
         if rate is not None:
             per_file_rates.append(rate)
-            f, pw = power_w(rate)
+            f, pw = power_w(rate, bin_rate=fft_rate)
             fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines", legendgroup=name,
                                          line=dict(width=(1 if multi else 2), color=color),
                                          opacity=(0.45 if multi else 1.0), name=name))
@@ -1517,7 +1528,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     # power spectrum: group average + stim marker
     if multi and len(per_file_rates) >= 2:
         n = min(len(r) for r in per_file_rates)
-        f, pw = power_w(np.mean([r[:n] for r in per_file_rates], axis=0))
+        f, pw = power_w(np.mean([r[:n] for r in per_file_rates], axis=0), bin_rate=fft_rate)
         fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines",
                                      line=dict(width=3, color="black"), name="GROUP AVG"))
     sfreqs = [s for s in stim_freqs if s]
@@ -1533,8 +1544,8 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     maxlen = max((len(s) for s in legend_names), default=8)
     r_margin = int(min(240, max(80, maxlen * 6.5 + 26)))
     fft_fig.update_layout(
-        title=dict(text="spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region)", x=0.5,
-                   xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
+        title=dict(text=f"spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region · {fft_ms:g} ms bins)",
+                   x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
         xaxis_title="frequency (Hz)", yaxis_title="power (dB, R=1Ω)",
         xaxis_range=[0, FMAX], margin=dict(l=55, r=r_margin, t=34, b=40),
         legend=dict(x=1.02, y=1.0, xanchor="left", yanchor="top", font=dict(size=9),
@@ -1568,7 +1579,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
 #      actual (possibly small) browser window. ----------------------------------------------------
 def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, method, k, absth, refr,
                           rstart, rend, region_mode, stagger_pct, disp_show, disp_binned,
-                          train_bin, absth_map):
+                          train_bin, absth_map, fft_bin=5.0):
     """Save the four requested 4K figures into outdir. Returns {name: Path} of what was written."""
     import copy
     import plotly.io as pio
@@ -1578,7 +1589,7 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
         return {}
     tf, ff, isf, _ = build_figures(files, chan, ttl_name, polarity, method, k, absth, refr,
                                    rstart, rend, disp_show, disp_binned, stagger_pct,
-                                   region_mode, train_bin, absth_map)
+                                   region_mode, train_bin, absth_map, fft_bin=fft_bin)
     cp = copy.deepcopy                                  # traces can't live in two figures at once
     saved = {}
 
@@ -1686,7 +1697,7 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
     # (4) frame syncs, each file in its OWN panel (un-staggered so every carrier is visible) -------
     tf0, _, _, _ = build_figures(files, chan, ttl_name, polarity, method, k, absth, refr,
                                  rstart, rend, disp_show, disp_binned, 0, region_mode,
-                                 train_bin, absth_map)
+                                 train_bin, absth_map, fft_bin=fft_bin)
     sep_traces = [t for t in tf0.data if getattr(t, "yaxis", "y") == "y2"]
     if sep_traces:
         n = len(sep_traces)
@@ -2192,12 +2203,14 @@ def _attach_output_files(ds, date, cell, analysis, saved):
               State("region-start", "value"), State("region-end", "value"),
               State("region-mode", "value"), State("stagger-pct", "value"),
               State("disp-show", "value"), State("disp-binned", "value"), State("train-bin", "value"),
+              State("fft-bin", "value"),
               background=True,                              # run off the UI thread (analysis + 4K
               running=[(Output("run-cell", "disabled"), True, False),   # exports take ~1-2 min);
                        (Output("run-cell", "children"), "⏳ Running… (~1-2 min)", "▶ Run analysis")],
               prevent_initial_call=True)                   # outputs auto-refresh the UI when done
 def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
-             chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin):
+             chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
+             fft_bin):
     import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
@@ -2241,7 +2254,7 @@ def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth
                         files=exp_files, chan=chan, ttl_name=ttl, polarity=polarity, method=method,
                         k=k, absth=absth, refr=refr, rstart=rstart, rend=rend, region_mode=region_mode,
                         stagger_pct=stagger_pct, disp_show=disp_show, disp_binned=disp_binned,
-                        train_bin=train_bin, absth_map=abs_map)
+                        train_bin=train_bin, absth_map=abs_map, fft_bin=fft_bin)
                     if saved:
                         _attach_output_files(ds, s["date"], s["cell"], nm, saved)
                         msgs[-1] += f" +{len(saved)} 4K file(s)"
