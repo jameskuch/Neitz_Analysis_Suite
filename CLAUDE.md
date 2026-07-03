@@ -118,6 +118,43 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
 
 ## Conventions & decisions (don't relearn these)
 
+- **Undo / redo — `UNDO_TRACK` IS THE CONTRACT (NON-NEGOTIABLE):** ctrl-Z / shift-ctrl-Z (also
+  ctrl-Y) walk a 50-entry history of "program changes" (`viewer.py`, bottom: `undo_record` /
+  `undo_apply`, `assets/undoredo.js` → hidden `#undo-key`). The list `UNDO_TRACK` (id, prop pairs)
+  is the SINGLE source of truth for what's captured — **whenever you add a control that changes the
+  analysis/display, add its `(id, prop)` to `UNDO_TRACK`; whenever you remove one, delete its row.**
+  Both callbacks are built from that list, so keeping it current keeps undo correct. Design notes:
+  an equality guard (`_snap_key`) makes a restore a no-op in `undo_record` (no loop); per-file/-trace
+  editors are captured via their SEED stores (`align-seed`, `absth-seed`) so a restore rebuilds the
+  boxes → re-derives the maps → renders; `undoredo.js` leaves native text-undo alone while a text
+  field is focused. This rule was James's explicit ask ("always remember to update the undo/redo
+  queue"). A debounced input only records on blur/Enter (that's how dcc.Input commits).
+- **Settable FFT bin** (power panel overlay `#fft-bin`, default 5 ms = 200 Hz): threaded through
+  `binned_rate` + `power_w` (both MUST share the rate) via `build_figures(fft_bin=)`. Coarser bins
+  low-pass the impulse train → fewer harmonics; the title shows the bin and the spectrum caps at its
+  Nyquist. The **f=0 (DC) bin is dropped** in `power_w` (mean is subtracted → X[0]≈0 was a spurious
+  ~−80 dB spike). Mean subtraction stays.
+- **Trial-alignment nudge (D1)** (sidebar "trial align — frame-sync nudge (ms)"): a per-file time
+  offset shifts that file's analog + TTL + spikes TOGETHER so trial starts line up. "⇄ auto" seeds
+  each file's offset from its TTL first-onset (`ref.t0 − file.t0`, ref = first file); a per-file ms
+  grid fine-tunes; "reset" clears. Stored in `align-seed` (ms, editor) → `align-map` (seconds, what
+  `build_figures` applies). Coupled by construction — the region mask, FFT, ISI all run in the
+  aligned frame. NOTE: this aligns the Analysis View + 4K exports; making the pooled ON/OFF stats in
+  `run_cell_flicker` consume the offsets is a known follow-up (do it with epoch-averaging).
+- **Group → one average** (files panel checkbox `#group-avg`, needs 3+ checked): `build_figures`
+  collapses the selected files to a single mean trace — the aligned (post-nudge) analog + TTL are
+  averaged incrementally onto a common grid (running sum+count, memory-safe), the FFT shows only the
+  group-avg line, ISI stays pooled. Uncheck to ungroup. `do_group` gates it.
+- **Files panel** (Analysis View): `all` / `none` buttons + a live `(k/n)` count next to the label;
+  **drag a box over the rows to TOGGLE** them (`assets/fileselect.js`, on `#file-box`) — selected↔
+  deselected; a plain click still toggles one row.
+- **Compact readout** (top of graphs): a ONE-LINER (count · region · view · stim-freq range). The
+  old per-file spike-count dump blew up to many lines with 40+ files — don't reintroduce it there.
+- **True full screen**: `⛶ Full screen` button (next to the readout) + the `F` key toggle the
+  browser Fullscreen API (`assets/fullscreen.js`); relabels on `fullscreenchange`.
+- **Flicker auto-window includes the final cycle**: `detect_flicker` extends `t1` by one `period`
+  (clamped to the envelope) so the last complete frame isn't clipped into the excluded block
+  (regression: `test_detect_flicker_freq_and_region` asserts `t1 − last_on_edge > 0.4`).
 - **"sq wave" stimulus type** (changed 2026-06): the stimulus metadata value is now stored as
   `sq_wave` (GUI label "sq wave"). Existing manifests were migrated `flicker` → `sq_wave`, and the
   GUI maps any legacy `flicker` value back to the "sq wave" option / display. BUT the *analysis*
