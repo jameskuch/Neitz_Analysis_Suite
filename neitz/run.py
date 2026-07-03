@@ -18,6 +18,7 @@ import numpy as np
 
 from .io.abf import Recording
 from .io import csv as ncsv
+from .io.stim import noise_from_record
 from .stimulus import FlickerParadigm, NoiseParadigm, CheckerboardParadigm
 
 
@@ -386,3 +387,87 @@ def run_strf(stimulus, response, n_y, n_x, *, paradigm=None, **kwargs) -> Result
                   temporal=res.temporal, time_ms=res.time_ms)
     return Result("strf", summary=summary, arrays=arrays,
                   meta=dict(n_y=n_y, n_x=n_x, normalize=paradigm.normalize))
+
+
+# ============ seed-based reverse correlation (June2026 Stage rig) ==============================
+# The stimulus is regenerated from its seed (io.stim.noise_from_record) rather than shipped as a CSV.
+# Per the Neitz model: each recording IS one epoch whose spikes are already synced to its own
+# stimulus, so we reverse-correlate per epoch and AVERAGE across epochs (full-field) / pool in time
+# (checkerboard). The stimulus is piecewise-constant between updates; we upsample it by
+# `bins_per_update` so the recovered filter has finer temporal sampling than the raw update rate.
+#: stimulus.type → which analysis runs for it. sq_wave/flicker → periodic PSTH; full-field noise →
+#: temporal STA; checkerboard → spatiotemporal STRF. Cone isolation is metadata, not a branch here.
+_ANALYSIS_FOR_STIM = {
+    "sq_wave": "flicker", "flicker": "flicker",
+    "gaussian_noise": "sta", "checkerboard": "strf",
+}
+
+
+def analysis_for_stim_type(stim_type) -> str:
+    """Map a recording's ``stimulus.type`` to its analysis kind: ``'flicker' | 'sta' | 'strf'``.
+    Unknown / missing types fall back to ``'flicker'`` (the TTL-only path that needs no stim file)."""
+    return _ANALYSIS_FOR_STIM.get(stim_type, "flicker")
+
+
+def record_from_stimulus(stimulus) -> dict:
+    """Rebuild a `noise_from_record`-ready record from a stored ``recording.stimulus`` dict.
+    The import split ``stim_type`` out into ``.type``; merge it back into the params."""
+    params = dict((stimulus or {}).get("params") or {})
+    params["stim_type"] = (stimulus or {}).get("type")
+    return params
+
+
+def _update_rate(record) -> float:
+    """Stimulus update rate (Hz) = frame rate / frames-per-update."""
+    return float(record.get("refresh_rate_hz", 60)) / float(record.get("update_every_n_frames", 1))
+
+
+def epoch_response(spike_times, t0, n_bins, bin_dt) -> np.ndarray:
+    """Bin spike times (s) into `n_bins` bins of width `bin_dt` starting at `t0` → rate (spikes/s).
+    `t0` is the epoch's stimulus-onset time (update 0); this is where the recording's TTL frame
+    clock anchors the regenerated stimulus to the response."""
+    edges = float(t0) + np.arange(int(n_bins) + 1) * float(bin_dt)
+    counts, _ = np.histogram(np.asarray(spike_times, dtype=float), bins=edges)
+    return counts.astype(float) / float(bin_dt)
+
+
+def sta_from_records(records, responses, *, bins_per_update=6, filter_s=1.0, paradigm=None) -> dict:
+    """Full-field Gaussian-noise STA from seed-based epochs (per-epoch reverse correlation, averaged).
+
+    `records`: manifest dicts (each → `noise_from_record` → a `(1,1,n_updates)` linear stimulus).
+    `responses`: per-epoch binned rate arrays aligned to the UPSAMPLED stimulus grid
+    (length ``n_updates*bins_per_update``, e.g. from :func:`epoch_response`). Returns the
+    ``NoiseParadigm.analyze`` dict (average filter, tuning, per_epoch, time_ms, n_epochs).
+    """
+    stimuli, up_rate = [], None
+    for rec in records:
+        # noise_from_record gives linear light v∈[0,1] (mean≈mu); reverse-correlate against the
+        # CONTRAST (v − mean) so the STA has no spurious DC baseline (mean²·<r> term).
+        s = np.asarray(noise_from_record(rec), dtype=float).reshape(-1)
+        stimuli.append(np.repeat(s - s.mean(), int(bins_per_update)))
+        up_rate = _update_rate(rec) if up_rate is None else up_rate
+    bin_rate = int(round(up_rate * bins_per_update))
+    paradigm = paradigm or NoiseParadigm(bin_rate=bin_rate, filter_len=int(round(bin_rate * filter_s)))
+    return paradigm.analyze(stimuli, responses)
+
+
+def strf_from_records(records, responses, *, bins_per_update=1, filter_len=30, paradigm=None):
+    """Checkerboard STRF from seed-based epochs: concatenate each epoch's (stimulus, response) in
+    time and reverse-correlate (pools all frame↔spike pairs across epochs).
+
+    `records` → `noise_from_record` → `(n_y, n_x, n_updates)`; `responses`: per-epoch binned rate
+    aligned to the upsampled stimulus. Returns an :class:`STRFResult`.
+    """
+    stim_parts, resp_parts, n_y, n_x = [], [], None, None
+    for rec, resp in zip(records, responses):
+        v = np.asarray(noise_from_record(rec), dtype=float)     # (n_y,n_x,n_updates), linear light
+        n_y, n_x = v.shape[0], v.shape[1]
+        v = v - v.mean()                                        # contrast (drop mean luminance)
+        up = np.repeat(v, int(bins_per_update), axis=-1)        # hold each update across bins
+        m = min(up.shape[-1], len(resp))
+        stim_parts.append(up[..., :m])
+        resp_parts.append(np.asarray(resp, dtype=float)[:m])
+    stim = np.concatenate(stim_parts, axis=-1)                  # (n_y,n_x,T)
+    response = np.concatenate(resp_parts)                       # (T,)
+    paradigm = paradigm or CheckerboardParadigm(n_y=n_y, n_x=n_x, filter_len=filter_len)
+    return paradigm.analyze(stim, response)
