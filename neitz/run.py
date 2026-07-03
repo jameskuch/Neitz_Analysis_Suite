@@ -571,8 +571,10 @@ def load_seed_epochs(cm, *, chan="Im_prime", ttl="TTL", detect=None, abs_map=Non
     (:func:`record_from_stimulus` → ``noise_from_record``), and bin the response to the update grid
     (:func:`epoch_response`). Returns ``(records, responses, info)``.
 
-    GATED ON REAL DATA: the TTL→``t0`` binding is validated only once a real seeded-noise recording
-    is imported (see CLAUDE.md); ``t0`` falls back to 0.0 when the frame clock isn't found.
+    June2026 noise trials run no adapting carrier (per James), so the frame clock's first sustained
+    run is the stimulus onset — what :func:`frame_clock_onset` returns. ``t0`` falls back to 0.0 when
+    no frame clock is found (a smoke-test on the first real seeded-noise cell confirms the TTL is a
+    per-frame clock as expected).
     """
     from .spikes import detect_spikes
     from .analysis.flicker import frame_clock_onset

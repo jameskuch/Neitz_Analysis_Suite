@@ -306,12 +306,12 @@ their noise is **regenerated from a seed here** — no per-frame stimulus values
     `plots.strf_figure`; `_save_seed_run` (one integrity-safe manifest record). `viewer.run_cell`
     routes `stim_type`: gaussian_noise→STA, checkerboard→STRF, else flicker, threading the live
     detection settings. Validated by an integration test with a mocked `Recording`.
-  - ⏳ **One unknown left — the REAL rig's TTL convention.** `frame_clock_onset` returns the start of
-    the first *sustained regular* TTL pulse train as the stimulus `t0`; whether that's the stimulus
-    (vs an adapting-block carrier that precedes it) is confirmed only when a real seeded-noise cell +
-    manifest is imported. Cadence is metadata (`refresh_rate_hz`, `update_every_n_frames`); `t0` falls
-    back to 0.0 if no clock is found. Noise needs NO cross-trial nudge — each epoch self-syncs; the
-    frame-sync nudge is a square-wave (cycle-averaging) tool only.
+  - 🟢 **Ready; awaits a real seeded-noise cell for a smoke test.** June2026 noise trials run **no
+    adapting carrier** (per James), so `frame_clock_onset`'s "first sustained frame-clock run = the
+    stimulus `t0`" is correct by design (not a guess). Cadence is metadata (`refresh_rate_hz`,
+    `update_every_n_frames`); `t0` falls back to 0.0 if no clock is found. The only thing a first real
+    cell confirms is that the TTL is the per-frame clock we expect. Noise needs NO cross-trial nudge —
+    each epoch self-syncs; the frame-sync nudge is a square-wave (cycle-averaging) tool only.
 
 ## GUI structure (viewer.py)
 

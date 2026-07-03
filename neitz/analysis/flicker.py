@@ -73,9 +73,8 @@ def frame_clock_onset(ttl, fs, *, min_run=8, tol=0.35):
     frame, so there is no envelope square wave — we just locate where the frame clock *starts*.
     `min_run` consecutive inter-pulse gaps must sit within `tol` of the train's median period.
 
-    NOTE (June2026): if a recording runs a DIFFERENT adapting carrier before the stimulus, this
-    returns the onset of the FIRST regular run, which may be the adapting block — distinguishing the
-    two needs validation against a real seeded-noise recording (see CLAUDE.md, "gated on real data").
+    NOTE (June2026): these noise trials run NO adapting carrier before the stimulus (per James), so
+    the first sustained frame-clock run IS the stimulus onset — exactly what this returns.
     """
     ttl = np.asarray(ttl, dtype=float)
     mid = (np.percentile(ttl, 95) + np.percentile(ttl, 5)) / 2.0
