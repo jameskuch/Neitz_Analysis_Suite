@@ -108,6 +108,43 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True) -
     return n
 
 
+def epoch_groups(recordings) -> list[dict]:
+    """Group a cell's recordings (in acquisition order) into runs of the SAME stimulus.
+
+    Consecutive recordings that share ``stimulus.params.stim_signature`` form one group —
+    N epochs of one stimulus (e.g. a 2 Hz square wave presented 3x). A recording with no
+    signature (imported before the manifest existed, or hand-entered) is its own group of
+    one and never merges. The signature is stamped on the rig (writeStimManifest.m) and
+    lands in ``stimulus.params.stim_signature`` via :func:`apply_session_manifest`.
+
+    `recordings` is the manifest's ``recordings`` list (dicts with a ``stimulus`` field,
+    in acquisition order). Returns a list of groups, each::
+
+        {"stim_signature", "n_epochs", "stim_type", "cone_isolation",
+         "recording_ids", "recordings"}
+    """
+    def _sig(rec):
+        stim = rec.get("stimulus") or {}
+        return (stim.get("params") or {}).get("stim_signature")
+
+    groups = []
+    for rec in recordings:
+        sig = _sig(rec)
+        if sig is not None and groups and groups[-1]["stim_signature"] == sig:
+            groups[-1]["recordings"].append(rec)
+        else:
+            groups.append({"stim_signature": sig, "recordings": [rec]})
+
+    for g in groups:
+        recs = g["recordings"]
+        stim = recs[0].get("stimulus") or {}
+        g["n_epochs"] = len(recs)
+        g["recording_ids"] = [r.get("id") for r in recs]
+        g["stim_type"] = stim.get("type")
+        g["cone_isolation"] = (stim.get("params") or {}).get("cone_isolation")
+    return groups
+
+
 def noise_from_record(record, *, per_frame=False) -> np.ndarray:
     """Regenerate the exact LINEAR noise tensor `v` in [0, 1] for a manifest record.
 
