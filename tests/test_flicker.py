@@ -23,6 +23,9 @@ def test_detect_flicker_freq_and_region():
     assert 14.0 < fl.t0 < 16.0
     assert 74.0 < fl.t1 < 76.0
     assert len(fl.on_edges) >= 100
+    # the region must extend a full period past the last ON transition (the final cycle is
+    # included, not clipped). Before the fix t1 sat AT the last onset, so this gap was ~0.
+    assert fl.t1 - fl.on_edges[-1] > 0.4
 
 
 def test_detect_flicker_none_when_flat():

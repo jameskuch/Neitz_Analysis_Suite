@@ -51,7 +51,12 @@ def detect_flicker(ttl, fs, *, env_block_s=0.010, period_tol=0.25) -> "Flicker |
     if good.sum() < 3:
         return None
     idx = np.where(good)[0]
-    t0, t1 = float(onsets[idx[0]]), float(onsets[idx[-1] + 1])
+    t0 = float(onsets[idx[0]])
+    # End at the CLOSE of the last full cycle, not at its opening onset. onsets[idx[-1]+1] is the
+    # last confirmed-periodic onset — it *begins* a cycle that runs one `period` longer. Stopping at
+    # that onset (the old behaviour) clipped the final complete frame into the "excluded" block.
+    # Extend by `period`, clamped to the envelope end so we never claim data past the recording.
+    t1 = min(float(onsets[idx[-1] + 1]) + period, float(t_env[-1]))
     on_e = t_env[rises]; off_e = t_env[falls]
     on_e = on_e[(on_e >= t0) & (on_e <= t1)]
     off_e = off_e[(off_e >= t0) & (off_e <= t1)]
