@@ -294,7 +294,12 @@ their noise is **regenerated from a seed here** — no per-frame stimulus values
     and copies the manifest into the cell dir. `viewer.import_data` calls it (replaces hand-entry;
     no-ops when absent).
   - ✅ **Data Explorer** surfaces `stim_type · cone · seed · grid` (file tiles `_stim_brief`, detail
-    "Stimulus" row `_cell_stim_summary`). (Rail-level *sorting* by stim_type is still a follow-up.)
+    "Stimulus" row `_cell_stim_summary`, "Epochs" row `_cell_epoch_summary`). The **file browser
+    groups recordings into "N epochs" blocks** by `neitz.io.epoch_groups` (runs of the same
+    `stim_signature`): `explorer_file_options` inserts a full-width **disabled** header option before
+    each group (`_epoch_group_header`; CSS `#exp-files :has(input:disabled)` → `display:block`), so
+    headers can't be selected and the selection/delete/open callbacks are untouched. Flat fallback
+    when there's no useful grouping. (Rail-level *sorting* by stim_type is still a follow-up.)
   - ✅ **Seed-based STA/STRF core** (`run.py`, tested against injected filters): `analysis_for_stim_type`
     (sq_wave→flicker, gaussian_noise→sta, checkerboard→strf), `record_from_stimulus`,
     `sta_from_records` / `strf_from_records` (per-epoch reverse correlation vs the **contrast** v−mean,
