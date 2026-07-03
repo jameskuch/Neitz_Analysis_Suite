@@ -300,11 +300,18 @@ their noise is **regenerated from a seed here** — no per-frame stimulus values
     `sta_from_records` / `strf_from_records` (per-epoch reverse correlation vs the **contrast** v−mean,
     averaged/pooled — the Neitz model: each recording is one epoch synced to its own spikes),
     `epoch_response` (bin spikes to the update grid from `t0`).
-  - ⏳ **Gated on real data:** the store-driven run + `viewer.run_cell` dispatch to it + the abf
-    **TTL→epoch-start (`t0`) binding** for June2026 noise — validated once a seeded-noise cell +
-    manifest is imported. Cadence is metadata (`refresh_rate_hz`, `update_every_n_frames`); `t0` is the
-    TTL's first frame pulse (same recovery as flicker `t0`). Noise needs NO cross-trial nudge — each
-    epoch self-syncs; the frame-sync nudge is a square-wave (cycle-averaging) tool only.
+  - ✅ **Store-driven run + dispatch.** `run.load_seed_epochs` (per abf: detect spikes → `t0` from
+    `analysis.flicker.frame_clock_onset` → regenerate stimulus from seed → `epoch_response`);
+    `run_cell_noise` DISPATCHES seed-abf vs legacy stim-CSV; `run_cell_checkerboard` (STRF);
+    `plots.strf_figure`; `_save_seed_run` (one integrity-safe manifest record). `viewer.run_cell`
+    routes `stim_type`: gaussian_noise→STA, checkerboard→STRF, else flicker, threading the live
+    detection settings. Validated by an integration test with a mocked `Recording`.
+  - ⏳ **One unknown left — the REAL rig's TTL convention.** `frame_clock_onset` returns the start of
+    the first *sustained regular* TTL pulse train as the stimulus `t0`; whether that's the stimulus
+    (vs an adapting-block carrier that precedes it) is confirmed only when a real seeded-noise cell +
+    manifest is imported. Cadence is metadata (`refresh_rate_hz`, `update_every_n_frames`); `t0` falls
+    back to 0.0 if no clock is found. Noise needs NO cross-trial nudge — each epoch self-syncs; the
+    frame-sync nudge is a square-wave (cycle-averaging) tool only.
 
 ## GUI structure (viewer.py)
 
