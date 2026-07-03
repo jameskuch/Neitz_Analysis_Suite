@@ -354,6 +354,7 @@ def ov(**pos):
     return s
 
 
+_MINI_BTN = {"fontSize": "10px", "padding": "0 6px", "cursor": "pointer", "lineHeight": "16px"}
 _OVL = {"fontSize": "10px", "color": "#444", "fontWeight": "bold"}    # inline label inside an overlay
 _OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "border-box",
         "textAlign": "right"}                                        # compact overlay textbox
@@ -885,7 +886,14 @@ app.layout = html.Div(
                      id="cell-select-wrap", style={"marginBottom": "6px"}),
 
             # files for the selected cell(s) — multi-column listbox (saves height)
-            html.Label("files", style=_LBL),
+            html.Div([
+                html.Label("files", style=dict(_LBL, marginBottom=0)),
+                html.Button("all", id="file-all", n_clicks=0, style=_MINI_BTN),
+                html.Button("none", id="file-none", n_clicks=0, style=_MINI_BTN),
+                html.Span(id="file-count", style={"fontSize": "10px", "color": "#888"}),
+            ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
+            # #file-box is the drag-select surface (assets/fileselect.js): drag a box over the
+            # rows to TOGGLE each (selected↔deselected). A plain click still toggles one.
             html.Div(dcc.Checklist(id="file", options=[], value=[],   # blank until a cell is picked
                                    labelStyle={"display": "block", "width": "150px",
                                                "boxSizing": "border-box", "fontSize": "11px",
@@ -896,8 +904,16 @@ app.layout = html.Div(
                                    # across columns the way CSS multicol did)
                                    style={"display": "flex", "flexFlow": "column wrap",
                                           "alignContent": "flex-start", "maxHeight": "150px"}),
+                     id="file-box",
                      style={"maxHeight": "158px", "overflowX": "auto", "overflowY": "hidden",
-                            "border": "1px solid #ccc", "padding": "4px", "background": "white"}),
+                            "border": "1px solid #ccc", "padding": "4px", "background": "white",
+                            "position": "relative"}),
+            # group ≥3 selected files into ONE averaged (post-nudge) trace; uncheck to ungroup
+            dcc.Checklist(id="group-avg",
+                          options=[{"label": " group selected → one average (after nudge, 3+ files)",
+                                    "value": "group"}],
+                          value=[], labelStyle={"fontSize": "11px"},
+                          style={"marginTop": "4px"}, **PERSIST),
             html.Div(id="meta", style={"fontSize": "10px", "color": "#333", "lineHeight": "1.45",
                                        "background": "#f6f6f6", "padding": "6px",
                                        "borderRadius": "4px", "marginTop": "6px",
@@ -1369,18 +1385,20 @@ def toggle_disp_show(binned):
               Input("stagger-pct", "value"),
               Input("region-mode", "value"), Input("train-bin", "value"),
               Input("absth-map", "data"), Input("fft-bin", "value"), Input("align-map", "data"),
+              Input("group-avg", "value"),
               Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
-           align_map, relayout):
+           align_map, group, relayout):
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                         fft_bin=fft_bin, align_map=align_map, relayout=relayout, trig=ctx.triggered_id)
+                         fft_bin=fft_bin, align_map=align_map, group=group,
+                         relayout=relayout, trig=ctx.triggered_id)
 
 
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                  fft_bin=5.0, align_map=None, relayout=None, trig=None):
+                  fft_bin=5.0, align_map=None, group=None, relayout=None, trig=None):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -1405,6 +1423,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     spike_train = "spike_train" in (disp_binned or [])   # "show binned spikes" (spike-train view)
     show_spikes = "show_spikes" in (disp_show or [])     # "show detected spikes" (default on)
     crop = "crop" in (region_mode or [])   # checkbox: show only the analysis region
+    do_group = ("group" in (group or [])) and multi and len(files) >= 3   # ≥3 files → one avg trace
     tbin = float(train_bin) if train_bin else 0.0
     # FFT bin width (ms) → spike-train sampling rate (Hz) for binned_rate + power_w. Both MUST use
     # the same rate or the frequency axis is wrong. Guard blank/≤0 → the 5 ms (200 Hz) default.
@@ -1432,6 +1451,13 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
                              row_heights=[0.625, 0.375])     # frame-sync row enlarged ×1.25
     fft_fig = go.Figure()
     per_file_rates, stim_freqs, isi_all = [], [], []
+
+    # group mode: incrementally average the ALIGNED analog + TTL onto one common display grid, so
+    # ≥3 files collapse to a single mean trace (memory-safe: keep running sum+count, not all arrays).
+    if do_group:
+        g_grid = np.arange(x0, x1, 1.0 / fs0) if x1 > x0 else np.array([x0])
+        g_sig_sum = np.zeros(len(g_grid)); g_sig_cnt = np.zeros(len(g_grid))
+        g_ttl_sum = np.zeros(len(g_grid)); g_ttl_cnt = np.zeros(len(g_grid))
 
     # vertical stagger step for frame syncs: fraction × (first file's TTL peak-to-peak)
     ttl_step = 0.0
@@ -1478,8 +1504,11 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
         y_disp = y
         disp_spikes = in_reg if crop else at              # hide excluded spikes when cropped
 
-        # ---- ROW 1: either the analog signal, or the spike train (0/1 or binned) ----
-        if spike_train:
+        # ---- ROW 1: group-average (accumulate), else per-file analog / spike-train ----
+        if do_group:
+            yi = np.interp(g_grid, t + off, y, left=np.nan, right=np.nan)
+            m = ~np.isnan(yi); g_sig_sum[m] += yi[m]; g_sig_cnt[m] += 1
+        elif spike_train:
             if tbin > 0:                                  # binned counts
                 bw = tbin / 1000.0
                 lo = min(0.0, off)                         # cover the offset-shifted span
@@ -1515,26 +1544,46 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
                                                 name=f"{name} spikes"), row=1, col=1)
             row1_ylab = f"{chan} ({rec0.units(chan)})"
 
-        # ---- ROW 2: frame sync per file (zeroed in excluded regions if 'zero'; optional stagger) ----
+        # ---- ROW 2: frame sync — group-average (accumulate) else per-file (optional stagger) ----
         if ttl_name and ttl_name != chan:
             try:
                 ttl = get_channel(path, ttl_name)
-                tt, ty = minmax_decimate((np.arange(len(ttl)) / fs)[i0:i1], ttl[i0:i1])
-                time_fig.add_trace(go.Scattergl(x=tt + off, y=ty + idx * ttl_step, mode="lines",
-                                                legendgroup=name, showlegend=False,
-                                                line=dict(width=0.6, color=color),
-                                                opacity=(0.6 if multi else 0.9),
-                                                name=f"{name} TTL"), row=2, col=1)
+                if do_group:
+                    ti = np.interp(g_grid, (np.arange(len(ttl)) / fs) + off, ttl,
+                                   left=np.nan, right=np.nan)
+                    m = ~np.isnan(ti); g_ttl_sum[m] += ti[m]; g_ttl_cnt[m] += 1
+                else:
+                    tt, ty = minmax_decimate((np.arange(len(ttl)) / fs)[i0:i1], ttl[i0:i1])
+                    time_fig.add_trace(go.Scattergl(x=tt + off, y=ty + idx * ttl_step, mode="lines",
+                                                    legendgroup=name, showlegend=False,
+                                                    line=dict(width=0.6, color=color),
+                                                    opacity=(0.6 if multi else 0.9),
+                                                    name=f"{name} TTL"), row=2, col=1)
             except Exception:
                 pass
 
         rate = binned_rate(in_reg - rs, 0.0, re_ - rs, bin_rate=fft_rate)
         if rate is not None:
             per_file_rates.append(rate)
-            f, pw = power_w(rate, bin_rate=fft_rate)
-            fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines", legendgroup=name,
-                                         line=dict(width=(1 if multi else 2), color=color),
-                                         opacity=(0.45 if multi else 1.0), name=name))
+            if not do_group:                             # group mode shows only the black avg (below)
+                f, pw = power_w(rate, bin_rate=fft_rate)
+                fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines", legendgroup=name,
+                                             line=dict(width=(1 if multi else 2), color=color),
+                                             opacity=(0.45 if multi else 1.0), name=name))
+
+    if do_group:                                   # one mean trace for the analog (+ TTL) after nudge
+        mean_sig = np.where(g_sig_cnt > 0, g_sig_sum / np.maximum(g_sig_cnt, 1), np.nan)
+        dt, dy = minmax_decimate(g_grid, mean_sig)
+        time_fig.add_trace(go.Scattergl(x=dt, y=dy, mode="lines",
+                                        line=dict(width=1.3, color="black"),
+                                        name=f"average of {len(files)}"), row=1, col=1)
+        row1_ylab = f"{chan} — average of {len(files)}"
+        if g_ttl_cnt.any():
+            mean_ttl = np.where(g_ttl_cnt > 0, g_ttl_sum / np.maximum(g_ttl_cnt, 1), np.nan)
+            tt2, ty2 = minmax_decimate(g_grid, mean_ttl)
+            time_fig.add_trace(go.Scattergl(x=tt2, y=ty2, mode="lines",
+                                            line=dict(width=1, color="#444"),
+                                            name="TTL average"), row=2, col=1)
 
     if not crop:                                   # shade excluded blocks (skip when cropped out)
         for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
@@ -1605,7 +1654,8 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     freqs = sorted({round(s, 2) for s in stim_freqs if s})
     freq_txt = (f" · stim {freqs[0]:.2f} Hz" if len(freqs) == 1
                 else f" · stim {min(freqs):.2f}–{max(freqs):.2f} Hz" if freqs else "")
-    label = (f"{len(files)} files · avg" if multi else "1 file")
+    label = (f"{len(files)} files · GROUP average" if do_group
+             else f"{len(files)} files" if multi else "1 file")
     readout = f"{label} · region {rs:.2f}–{re_:.2f}s · {view} view{freq_txt}"
     return time_fig, fft_fig, isi_fig, readout
 
@@ -2058,6 +2108,25 @@ def collect_align(_vals):
             except (TypeError, ValueError):
                 pass
     return amap
+
+
+# ---- files: select all / none + live count ----------------------------------
+@app.callback(Output("file", "value", allow_duplicate=True),
+              Input("file-all", "n_clicks"), Input("file-none", "n_clicks"),
+              State("file", "options"), prevent_initial_call=True)
+def file_select_all_none(_a, _n, options):
+    if ctx.triggered_id == "file-none":
+        return []
+    return [o["value"] for o in (options or [])]
+
+
+@app.callback(Output("file-count", "children"),
+              Input("file", "value"), Input("file", "options"),
+              prevent_initial_call=False)
+def file_count(value, options):
+    n = len(options or [])
+    k = len([v for v in (value or []) if v])
+    return f"({k}/{n})" if n else ""
 
 
 # ---- data store: pick a cell -> load its recordings + prefill stimulus -------
