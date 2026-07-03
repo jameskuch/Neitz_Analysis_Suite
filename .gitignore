@@ -13,6 +13,10 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Claude Code: launch.json (preview config) is shared; settings.local.json is
+# machine-local (permission allowlist, rewritten each session) — never commit it
+.claude/settings.local.json
+
 # Generated figures / analysis outputs (these live in ~/Documents/ephysdataio,
 # not in the repo)
 *.png
