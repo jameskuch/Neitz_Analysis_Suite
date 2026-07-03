@@ -288,10 +288,23 @@ their noise is **regenerated from a seed here** — no per-frame stimulus values
   source="stim-manifest")`, `pair_by_order`, `noise_from_record(record, per_frame=False)` (the STA
   tensor; raises for sq_wave/jitter), `sent_codes_from_record`. **Complements — does not replace —**
   the historical stimulus-CSV path (`io/csv.load_stimulus_epochs_csv`, used by 2017-era cells).
-- **Not yet wired (TODO):** import auto-fills `recording.stimulus.{type,params}` from the manifest
-  (replaces hand-entry); the Data Explorer sorts on `stim_type`/`cone_isolation`/`seed`;
-  `run_cell_noise` builds its stimulus via `noise_from_record` for June2026 cells. The reproduction
-  API is stable — wire to it, don't fork it.
+- **Analysis-side wiring (status).** The reproduction API is stable — wire to it, don't fork it.
+  - ✅ **Import auto-fill** — `io.stim.apply_session_manifest(cm, source_dir, date=)` finds the day's
+    manifest next to the `.abf`s, pairs rows→recordings by order, `set_stimulus(source="stim-manifest")`,
+    and copies the manifest into the cell dir. `viewer.import_data` calls it (replaces hand-entry;
+    no-ops when absent).
+  - ✅ **Data Explorer** surfaces `stim_type · cone · seed · grid` (file tiles `_stim_brief`, detail
+    "Stimulus" row `_cell_stim_summary`). (Rail-level *sorting* by stim_type is still a follow-up.)
+  - ✅ **Seed-based STA/STRF core** (`run.py`, tested against injected filters): `analysis_for_stim_type`
+    (sq_wave→flicker, gaussian_noise→sta, checkerboard→strf), `record_from_stimulus`,
+    `sta_from_records` / `strf_from_records` (per-epoch reverse correlation vs the **contrast** v−mean,
+    averaged/pooled — the Neitz model: each recording is one epoch synced to its own spikes),
+    `epoch_response` (bin spikes to the update grid from `t0`).
+  - ⏳ **Gated on real data:** the store-driven run + `viewer.run_cell` dispatch to it + the abf
+    **TTL→epoch-start (`t0`) binding** for June2026 noise — validated once a seeded-noise cell +
+    manifest is imported. Cadence is metadata (`refresh_rate_hz`, `update_every_n_frames`); `t0` is the
+    TTL's first frame pulse (same recovery as flicker `t0`). Noise needs NO cross-trial nudge — each
+    epoch self-syncs; the frame-sync nudge is a square-wave (cycle-averaging) tool only.
 
 ## GUI structure (viewer.py)
 
