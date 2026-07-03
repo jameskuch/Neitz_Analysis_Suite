@@ -1106,6 +1106,8 @@ app.layout = html.Div(
     dcc.Store(id="absth-seed"),                           # {file path: seed value for the editor}
     dcc.Store(id="align-map"),                            # {file path: trial-align offset (SECONDS)}
     dcc.Store(id="align-seed"),                           # {file path: offset (ms) shown in the editor}
+    dcc.Store(id="hist"),                                 # undo/redo: {"stack": [snapshot,...], "idx": n}
+    dcc.Input(id="undo-key", value="", style={"display": "none"}),   # clientside writes "undo:N"/"redo:N"
     dcc.Store(id="recent-cells", storage_type="local"),   # most-recently-opened date|cell list
     dcc.Store(id="last-session", storage_type="local"),   # last cell + checked files (auto-loaded on startup)
     dcc.Store(id="rail-sort", data={"col": "date", "dir": "desc"}),   # explorer rail sort
@@ -2904,6 +2906,74 @@ def backup_mirror(_n):
         return f"backed up store → {info['dst']}  (via {info['method']})"
     except Exception as e:
         return f"backup error: {e}"
+
+
+# ============================= UNDO / REDO (ctrl-Z / shift-ctrl-Z) =============================
+# A 50-entry history of "program changes". UNDO_TRACK is the SINGLE source of truth for what state
+# is captured — ***when you add a control that changes the analysis/display, add its (id, prop)
+# here; when you remove one, delete its row.*** Both callbacks below are built from this list, so
+# the queue stays correct automatically. Per-trace/per-file editors are captured via their SEED
+# stores (align-seed, absth-seed) so restoring one rebuilds the boxes → derives the maps → renders.
+UNDO_TRACK = [
+    ("file", "value"), ("chan", "value"), ("ttl", "value"),
+    ("polarity", "value"), ("method", "value"), ("k", "value"),
+    ("absth", "value"), ("refr", "value"),
+    ("region-start", "value"), ("region-end", "value"),
+    ("region-mode", "value"), ("disp-show", "value"), ("disp-binned", "value"),
+    ("stagger-pct", "value"), ("train-bin", "value"), ("fft-bin", "value"),
+    ("group-avg", "value"), ("run-name", "value"),
+    ("absth-sync", "value"), ("absth-seed", "data"), ("align-seed", "data"),
+]
+_UNDO_KEYS = [f"{cid}.{prop}" for cid, prop in UNDO_TRACK]
+_UNDO_MAX = 50
+
+
+def _snap_key(d):
+    """Canonical string form of a snapshot so equality ignores dict order / int-vs-float."""
+    return json.dumps(d, sort_keys=True, default=str)
+
+
+# record: any tracked change pushes a snapshot (truncating the redo tail; capped at 50). The
+# equality guard makes a restore a no-op here (restored state == stack[idx]) so there's no loop.
+@app.callback(
+    Output("hist", "data"),
+    [Input(cid, prop) for cid, prop in UNDO_TRACK],
+    State("hist", "data"),
+    prevent_initial_call=False)
+def undo_record(*args):
+    vals, hist = list(args[:-1]), (args[-1] or {"stack": [], "idx": -1})
+    snap = dict(zip(_UNDO_KEYS, vals))
+    stack, idx = hist.get("stack", []), hist.get("idx", -1)
+    if stack and 0 <= idx < len(stack) and _snap_key(stack[idx]) == _snap_key(snap):
+        return no_update                                 # unchanged (incl. restore-induced) → skip
+    stack = stack[:idx + 1] + [snap]                     # drop any redo tail, then push
+    if len(stack) > _UNDO_MAX:
+        stack = stack[-_UNDO_MAX:]
+    return {"stack": stack, "idx": len(stack) - 1}
+
+
+# apply: ctrl-Z / shift-ctrl-Z (clientside → #undo-key) steps idx and writes every tracked control.
+@app.callback(
+    [Output(cid, prop, allow_duplicate=True) for cid, prop in UNDO_TRACK]
+    + [Output("hist", "data", allow_duplicate=True)],
+    Input("undo-key", "value"),
+    State("hist", "data"),
+    prevent_initial_call=True)
+def undo_apply(key, hist):
+    blank = [no_update] * (len(UNDO_TRACK) + 1)
+    if not key or not hist or not hist.get("stack"):
+        return blank
+    stack = hist["stack"]
+    idx = hist.get("idx", len(stack) - 1)
+    action = key.split(":", 1)[0]
+    if action == "undo":
+        idx = max(0, idx - 1)
+    elif action == "redo":
+        idx = min(len(stack) - 1, idx + 1)
+    else:
+        return blank
+    snap = stack[idx]
+    return [snap.get(kk) for kk in _UNDO_KEYS] + [{"stack": stack, "idx": idx}]
 
 
 if __name__ == "__main__":
