@@ -266,6 +266,33 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   detection). The S-iso STA peak (22.2 ms OFF on 2017-01-18/c01) is pinned as a regression test
   and matches Sara's MATLAB ground truth.
 
+## Stimulus source & reproduction (seed-based; June2026 Stage rig)
+
+June2026-rig stimuli (repo `June2026StageMATLAB`) are **gamma-corrected** for the LightCrafter and
+their noise is **regenerated from a seed here** — no per-frame stimulus values are shipped.
+
+- **Session manifest.** The rig writes `YYYY_MM_DD_stim_manifest.jsonl` (JSON-Lines, one trial per
+  line, in acquisition order): `{stimulus, stim_type, cone_isolation, seed, mu, sigma, checks_x/y,
+  n_updates, update_every_n_frames, refresh_rate_hz, stim_frames, gamma, noise_method, fill_order,
+  timestamp}`. `stim_type` ∈ `gaussian_noise | checkerboard | sq_wave | jitter`. Trials pair to
+  Clampex `.abf` files **by order** (day-level, sorted by NNNN); `timestamp` is the cross-check.
+- **Reproduce, don't store.** `stimulus/reproduce.py::reproduce_noise(seed, n_y, n_x, n_updates,
+  mu, sigma)` → the exact `(n_y, n_x, n_updates)` **linear** noise, MATLAB-bit-identical: `mt19937ar`
+  `rand()` == numpy `RandomState`, MATLAB `norminv` == `scipy.special.ndtri` (**inverse-CDF, NOT
+  `randn`** — MATLAB's ziggurat is unreproducible in Python), `order='F'`, clip [0,1]. Pinned to a
+  MATLAB reference by `tests/test_reproduce.py` (~1e-12). STA **correlates against the linear `v`**
+  (the projector is gamma-corrected, so emitted light is linear in `v`); `gamma_adjust(v) =
+  v**(1/2.2056)` is the DAC code that was sent (display verification only).
+- **Reader.** `io/stim.py`: `load_session_manifest` / `find_session_manifest` (strict by date),
+  `stimulus_metadata(record) -> (stim_type, params)` for `CellManifest.set_stimulus(...,
+  source="stim-manifest")`, `pair_by_order`, `noise_from_record(record, per_frame=False)` (the STA
+  tensor; raises for sq_wave/jitter), `sent_codes_from_record`. **Complements — does not replace —**
+  the historical stimulus-CSV path (`io/csv.load_stimulus_epochs_csv`, used by 2017-era cells).
+- **Not yet wired (TODO):** import auto-fills `recording.stimulus.{type,params}` from the manifest
+  (replaces hand-entry); the Data Explorer sorts on `stim_type`/`cone_isolation`/`seed`;
+  `run_cell_noise` builds its stimulus via `noise_from_record` for June2026 cells. The reproduction
+  API is stable — wire to it, don't fork it.
+
 ## GUI structure (viewer.py)
 
 - Two-column flex shell with a **draggable splitter** (`#splitter`, `assets/splitter.js`,
@@ -319,7 +346,10 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
 
 ## Known stale / TODO
 
-- 6 session cells (2025-12 → 2026-02) have blank stimulus metadata pending entry.
-- No CI yet; checkerboard has no on-disk stimulus format / CLI.
+- 6 session cells (2025-12 → 2026-02) have blank stimulus metadata pending entry (auto-fillable
+  once the stim-manifest import wiring lands — see *Stimulus source & reproduction*).
+- Checkerboard/Gaussian noise now HAVE a seed-based on-disk format (the stim manifest +
+  `reproduce.py` / `io/stim.py`); the import / Data-Explorer / `run_cell_noise` wiring is still TODO.
+- No CI yet.
 - `RESTRUCTURE_DESIGN.md` is a historical design record (the restructure is done) — keep
   for provenance, don't treat as current.
