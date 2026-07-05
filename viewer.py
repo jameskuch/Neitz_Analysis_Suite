@@ -1228,10 +1228,11 @@ app.layout = html.Div(
                      style={"marginTop": "2px"}),
             html.Div(html.Button("▶ Run analysis", id="run-cell", n_clicks=0,
                                  style={"width": "100%", "marginTop": "5px"})),
-            html.Div([html.Label("edit pipelines in the Analysis Pipelines tab · run name keeps a "
-                                 "variant (blank = auto)", style=dict(_LBL, fontWeight="normal")),
+            html.Div([html.Label("run name = its output folder (re-run overwrites it) · blank → "
+                                 "pipeline name + timestamp, so every run is kept",
+                                 style=dict(_LBL, fontWeight="normal")),
                       dcc.Input(id="run-name", type="text", value="", debounce=True,
-                                placeholder="auto (sq wave / sta)",
+                                placeholder="blank → «pipeline» «timestamp»",
                                 style={"width": "100%", "boxSizing": "border-box"})],
                      style={"marginTop": "6px"}),
             html.Div(id="store-msg", style={"marginTop": "6px", "minHeight": "14px"}),
@@ -2953,6 +2954,23 @@ def _cell_stim_type(cm):
                  if r.get("stimulus")), None)
 
 
+def _run_name(raw_name, pipe_name, kind, stamp):
+    """(friendly label, sanitized folder key) for a run's output. A TYPED run-name is used as-is (you
+    own it — re-running the same name overwrites that variant). A BLANK run-name gets
+    `<pipeline-or-analysis-kind> <timestamp>`, so every unnamed run is KEPT as its own folder and
+    never overwrites a previous one (James's ask: "save multiple runs where it makes sense"). Shared
+    by the Analysis-View run and the pipelines-view run so both name runs the same way."""
+    import re
+    def slug(s):
+        return re.sub(r"[^A-Za-z0-9_.-]+", "_", (s or "").strip()).strip("_") or "run"
+    if raw_name:
+        return raw_name, slug(raw_name)
+    base = (pipe_name or "").strip() or {"gaussian_noise": "sta",
+                                         "checkerboard": "strf"}.get(kind, "flicker")
+    friendly = f"{base} {stamp}"
+    return friendly, slug(friendly)
+
+
 # ---- run the analysis for the selected cell(s). A pipeline may be chosen (its terminal node sets
 #      the analysis kind); otherwise the cell's saved stimulus type dispatches. Either way the LIVE
 #      Analysis-View settings are what runs (task: current state feeds the pipeline). ----
@@ -2974,23 +2992,24 @@ def _cell_stim_type(cm):
 def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, absth, refr, absth_map,
              chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
              fft_bin, align_map):
-    import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "pick a cell first", no_update
     raw_name = (run_name or "").strip()
-    user_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name)
     detect = _live_detect(polarity, method, k, absth, refr)
     abs_map = absth_map or None
     checked = [c for c in (checked or []) if c]
     sel_pipe = pipe.load_pipeline(run_pipeline) if run_pipeline else None
+    pipe_name = (sel_pipe.get("name") if sel_pipe else "") or ""
     n_shuffle = pipe.run_kwargs(sel_pipe)["n_shuffle"] if sel_pipe else 500
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")   # blank-name runs get a per-run timestamp
     ds, msgs = DataStore(), []
     for s in sels:
         cm = ds.cell(s["date"], s["cell"])
         # a chosen pipeline's terminal sets the analysis kind; else the cell's stimulus type
         kind = (pipe.pipeline_stim_family(sel_pipe) if sel_pipe else None) or _cell_stim_type(cm)
-        msgs.append(_run_one(ds, s, kind, raw_name=raw_name, user_name=user_name, detect=detect,
+        friendly, nm_key = _run_name(raw_name, pipe_name, kind, stamp)
+        msgs.append(_run_one(ds, s, kind, raw_name=friendly, user_name=nm_key, detect=detect,
                              abs_map=abs_map, checked=checked, chan=chan, ttl=ttl, n_shuffle=n_shuffle,
                              rstart=rstart, rend=rend, region_mode=region_mode, stagger_pct=stagger_pct,
                              disp_show=disp_show, disp_binned=disp_binned, train_bin=train_bin,
@@ -3018,7 +3037,6 @@ def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, abst
 def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
              chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
              fft_bin, align_map):
-    import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "⚠ pick a cell in the Analysis View first", no_update
@@ -3027,13 +3045,15 @@ def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr
     kind = pipe.pipeline_stim_family(graph)
     if kind is None:
         return "⚠ pipeline has no analysis node (flicker / STA / STRF)", no_update
-    raw_name = (run_name or "").strip() or (graph.get("name") or "")
-    user_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name)
+    raw_name = (run_name or "").strip()
+    pipe_name = graph.get("name") or ""
     detect = _live_detect(polarity, method, k, absth, refr)
     n_shuffle = pipe.run_kwargs(graph)["n_shuffle"]
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")   # blank-name runs get a per-run timestamp
+    friendly, nm_key = _run_name(raw_name, pipe_name, kind, stamp)
     ds, msgs = DataStore(), []
     for s in sels:
-        msgs.append(_run_one(ds, s, kind, raw_name=raw_name, user_name=user_name, detect=detect,
+        msgs.append(_run_one(ds, s, kind, raw_name=friendly, user_name=nm_key, detect=detect,
                              abs_map=(absth_map or None), checked=[c for c in (checked or []) if c],
                              chan=chan, ttl=ttl, n_shuffle=n_shuffle, rstart=rstart, rend=rend,
                              region_mode=region_mode, stagger_pct=stagger_pct, disp_show=disp_show,
