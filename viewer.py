@@ -1252,7 +1252,14 @@ app.layout = html.Div(
                       html.Div([html.Span("fft bin (ms)", style=_OVL),
                                 dcc.Input(id="fft-bin", type="number", value=5, min=1, step=1,
                                           debounce=True, style=dict(_OVI, width="42px"), **PERSIST)],
-                               style=ov(top="34px", left="62px"))],
+                               style=ov(top="34px", left="62px")),
+                      # view input: swap the power spectrum for the exact array fed to power_w
+                      # (spikes binned at the fft bin, mean-subtracted, over the region)
+                      html.Div([dcc.Checklist(id="fft-input", className="cb-right",
+                                              options=[{"label": " view input", "value": "on"}],
+                                              value=[], inline=True,
+                                              labelStyle={"fontSize": "10px"}, **PERSIST)],
+                               style=ov(top="56px", left="58px"))],
                      style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}),
             # ISI histogram with the spike-train bin control floated inside, below the toolbar
             html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True},
@@ -1555,20 +1562,20 @@ def toggle_disp_show(binned):
               Input("stagger-pct", "value"),
               Input("region-mode", "value"), Input("train-bin", "value"),
               Input("absth-map", "data"), Input("fft-bin", "value"), Input("align-map", "data"),
-              Input("group-avg", "value"),
+              Input("group-avg", "value"), Input("fft-input", "value"),
               Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
-           align_map, group, relayout):
+           align_map, group, fft_input, relayout):
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                         fft_bin=fft_bin, align_map=align_map, group=group,
+                         fft_bin=fft_bin, align_map=align_map, group=group, fft_input=fft_input,
                          relayout=relayout, trig=ctx.triggered_id)
 
 
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                  fft_bin=5.0, align_map=None, group=None, relayout=None, trig=None):
+                  fft_bin=5.0, align_map=None, group=None, fft_input=None, relayout=None, trig=None):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -1599,6 +1606,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     # the same rate or the frequency axis is wrong. Guard blank/≤0 → the 5 ms (200 Hz) default.
     fft_ms = float(fft_bin) if fft_bin else 5.0
     fft_rate = 1000.0 / max(1.0, fft_ms)
+    do_input = bool(fft_input)               # FFT panel shows the time-domain input, not the spectrum
 
     rec0 = get_recording(files[0])
     fs0 = rec0.fs
@@ -1752,10 +1760,17 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
         if rate is not None:
             per_file_rates.append(rate)
             if not do_group:                             # group mode shows only the black avg (below)
-                f, pw = power_w(rate, bin_rate=fft_rate)
-                fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines", legendgroup=name,
-                                             line=dict(width=(1 if multi else 2), color=color),
-                                             opacity=(0.45 if multi else 1.0), name=name))
+                if do_input:                             # the exact array power_w transforms (mean-removed)
+                    ctr = rs + (np.arange(len(rate)) + 0.5) * (re_ - rs) / len(rate)
+                    fft_fig.add_trace(go.Scatter(x=ctr, y=rate - rate.mean(), mode="lines",
+                                                 legendgroup=name, name=name,
+                                                 line=dict(width=(1 if multi else 1.4), color=color),
+                                                 opacity=(0.5 if multi else 0.95)))
+                else:
+                    f, pw = power_w(rate, bin_rate=fft_rate)
+                    fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines", legendgroup=name,
+                                                 line=dict(width=(1 if multi else 2), color=color),
+                                                 opacity=(0.45 if multi else 1.0), name=name))
 
     if do_group:                                   # one mean trace for the analog (+ TTL) after nudge
         mean_sig = np.where(g_sig_cnt > 0, g_sig_sum / np.maximum(g_sig_cnt, 1), np.nan)
@@ -1797,11 +1812,17 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     # power spectrum: group average + stim marker
     if multi and len(per_file_rates) >= 2:
         n = min(len(r) for r in per_file_rates)
-        f, pw = power_w(np.mean([r[:n] for r in per_file_rates], axis=0), bin_rate=fft_rate)
-        fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines",
-                                     line=dict(width=3, color="black"), name="GROUP AVG"))
+        gm = np.mean([r[:n] for r in per_file_rates], axis=0)
+        if do_input:
+            ctr = rs + (np.arange(n) + 0.5) * (re_ - rs) / n
+            fft_fig.add_trace(go.Scatter(x=ctr, y=gm - gm.mean(), mode="lines",
+                                         line=dict(width=2, color="black"), name="GROUP AVG"))
+        else:
+            f, pw = power_w(gm, bin_rate=fft_rate)
+            fft_fig.add_trace(go.Scatter(x=f, y=power_db(pw), mode="lines",
+                                         line=dict(width=3, color="black"), name="GROUP AVG"))
     sfreqs = [s for s in stim_freqs if s]
-    if sfreqs:
+    if sfreqs and not do_input:                    # the stim marker is a frequency — only on the spectrum
         sf = float(np.mean(sfreqs))
         fft_fig.add_vline(x=sf, line_dash="dash", line_color="orange",
                           annotation_text=f"stim {sf:.2f} Hz",
@@ -1812,11 +1833,16 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     legend_names = [os.path.basename(p) for p in files] + (["GROUP AVG"] if multi else [])
     maxlen = max((len(s) for s in legend_names), default=8)
     r_margin = int(min(240, max(80, maxlen * 6.5 + 26)))
+    if do_input:                                   # time-domain view of what's fed to the FFT
+        fft_title = f"FFT input · spikes binned at {fft_ms:g} ms, mean-subtracted (inside region)"
+        fft_xtitle, fft_ytitle, fft_xrange = "time (s)", "rate − mean (Hz)", [rs, re_]
+    else:
+        fft_title = f"spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region · {fft_ms:g} ms bins)"
+        fft_xtitle, fft_ytitle, fft_xrange = "frequency (Hz)", "power (dB, R=1Ω)", [0, FMAX]
     fft_fig.update_layout(
-        title=dict(text=f"spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region · {fft_ms:g} ms bins)",
-                   x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
-        xaxis_title="frequency (Hz)", yaxis_title="power (dB, R=1Ω)",
-        xaxis_range=[0, FMAX], margin=dict(l=55, r=r_margin, t=34, b=40),
+        title=dict(text=fft_title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
+        xaxis_title=fft_xtitle, yaxis_title=fft_ytitle,
+        xaxis_range=fft_xrange, margin=dict(l=55, r=r_margin, t=34, b=40),
         legend=dict(x=1.02, y=1.0, xanchor="left", yanchor="top", font=dict(size=9),
                     bgcolor="rgba(255,255,255,0.85)", bordercolor="#ccc", borderwidth=1),
         showlegend=True)
@@ -3141,7 +3167,7 @@ UNDO_TRACK = [
     ("region-start", "value"), ("region-end", "value"),
     ("region-mode", "value"), ("disp-show", "value"), ("disp-binned", "value"),
     ("stagger-pct", "value"), ("train-bin", "value"), ("fft-bin", "value"),
-    ("group-avg", "value"), ("run-name", "value"),
+    ("group-avg", "value"), ("fft-input", "value"), ("run-name", "value"),
     ("absth-sync", "value"), ("absth-seed", "data"), ("align-seed", "data"),
 ]
 _UNDO_KEYS = [f"{cid}.{prop}" for cid, prop in UNDO_TRACK]

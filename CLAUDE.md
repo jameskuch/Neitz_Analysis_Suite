@@ -177,6 +177,11 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   low-pass the impulse train → fewer harmonics; the title shows the bin and the spectrum caps at its
   Nyquist. The **f=0 (DC) bin is dropped** in `power_w` (mean is subtracted → X[0]≈0 was a spurious
   ~−80 dB spike). Mean subtraction stays.
+- **FFT "view input" toggle** (`#fft-input`, in the power panel under `#fft-bin`): swaps the power
+  spectrum for the *exact array `power_w` transforms* — spikes binned at the fft bin, mean-subtracted,
+  over the region (x = time, y = rate−mean). `build_figures(fft_input=)` branches the per-file +
+  group-avg traces and the panel title/axes; the stim-frequency marker shows only on the spectrum.
+  Distinct from "show binned spikes" (that uses the separate `#train-bin`). In `UNDO_TRACK`.
 - **Trial-alignment nudge (D1)** (sidebar "trial align — frame-sync nudge (ms)"): a per-file time
   offset shifts that file's analog + TTL + spikes TOGETHER so trial starts line up. "⇄ auto" seeds
   each file's offset from its TTL first-onset, THEN refines to sample precision by FFT
