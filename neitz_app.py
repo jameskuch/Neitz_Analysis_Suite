@@ -144,17 +144,32 @@ def _wait_health(timeout=45.0):
     return False
 
 
+def _norm(p):
+    return os.path.normcase(os.path.normpath(p)) if p else ""
+
+
 def ensure_backend():
-    """Reuse a healthy server if one is already serving, else (re)start one. Returns the Popen we
-    started, or None if we reused an existing server (which we then leave running on exit)."""
-    if health() is not None:
-        log.info("reusing back end already serving on %s", URL)
-        return None                            # single-instance reuse of a running back end
-    pids = _pids_on_port(PORT)                 # port held but not healthy -> free it, start fresh
-    if pids:
-        log.info("freeing stale port %s held by %s", PORT, pids)
-        _kill(pids)
-        time.sleep(0.5)
+    """Reuse a healthy server if it's serving the SAME data root we want, else (re)start one so a
+    changed EPHYSDATAIO_ROOT actually takes effect. Returns the Popen we started, or None if we
+    reused an existing server (which we then leave running on exit)."""
+    h = health()
+    if h is not None:
+        want = os.environ.get("EPHYSDATAIO_ROOT")           # what THIS launch was told to use
+        have = h.get("root")                                # what the running server is using
+        if want and have and _norm(want) != _norm(have):
+            log.info("running back end uses data root %r but %r requested — restarting it",
+                     have, want)
+            _kill(_pids_on_port(PORT))
+            time.sleep(0.5)
+        else:
+            log.info("reusing back end already serving on %s (root=%s)", URL, have)
+            return None                        # single-instance reuse of a matching back end
+    else:
+        pids = _pids_on_port(PORT)             # port held but not healthy -> free it, start fresh
+        if pids:
+            log.info("freeing stale port %s held by %s", PORT, pids)
+            _kill(pids)
+            time.sleep(0.5)
     proc = _spawn_backend()
     if _wait_health():
         log.info("back end is up")

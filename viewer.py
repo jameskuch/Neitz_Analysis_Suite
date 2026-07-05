@@ -989,7 +989,11 @@ _BOOT_CODE_MTIME = _code_mtime()
 @app.server.route("/neitz-health")
 def _neitz_health():
     from flask import jsonify
-    return jsonify(boot=_BOOT_ID, code_mtime=_BOOT_CODE_MTIME)
+    try:
+        root = str(DataStore().root)           # the data store this server is actually using
+    except Exception:
+        root = ""
+    return jsonify(boot=_BOOT_ID, code_mtime=_BOOT_CODE_MTIME, root=root)
 
 
 def nav_toggle(active, dark=False):
@@ -3193,4 +3197,10 @@ def undo_apply(key, hist):
 
 
 if __name__ == "__main__":
+    try:                                        # log the resolved data store (diagnoses EPHYSDATAIO_ROOT)
+        _ds = DataStore()
+        print(f"[neitz] data store root: {_ds.root}  exists={_ds.root.exists()}  "
+              f"cells in index: {len(_ds.index())}", flush=True)
+    except Exception as _e:
+        print(f"[neitz] data store error: {_e}", flush=True)
     app.run(debug=False, port=8050)
