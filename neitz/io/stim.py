@@ -16,15 +16,16 @@ with one record per trial, e.g.::
 
 Trials pair to Clampex ``.abf`` recordings BY ORDER (manifest row order == acquisition
 order); :func:`apply_session_manifest` refuses to pair when the row and (non-reference)
-recording counts disagree. (The ``timestamp`` field is recorded for provenance; using it
-to *verify* order — and catch an equal-count but mis-ordered pairing — is a future
-hardening, not yet implemented.) The seed is the source of truth —
-:func:`noise_from_record` regenerates the exact linear stimulus via
+recording counts disagree, AND cross-checks each row's ``timestamp`` against the paired
+``.abf``'s recorded time so an equal-count-but-shifted pairing is caught too. The seed is
+the source of truth — :func:`noise_from_record` regenerates the exact linear stimulus via
 :mod:`neitz.stimulus.reproduce`; :func:`sent_codes_from_record` recovers the 8-bit
 codes that were actually displayed.
 """
 from __future__ import annotations
 import json
+import statistics
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +34,8 @@ from ..stimulus.reproduce import reproduce_noise, gamma_adjust, expand_to_frames
 
 MANIFEST_GLOB = "*_stim_manifest.jsonl"
 NOISE_TYPES = ("gaussian_noise", "checkerboard")   # records that carry reproducible noise
+_TIME_MIN_SPACING_S = 8.0    # below this inter-trial spacing, the clock can't resolve order
+_TIME_TOL_FRACTION = 0.4     # a real slip moves a pair ~one full spacing; flag at 0.4 of it
 
 
 def load_session_manifest(path) -> list[dict]:
@@ -79,7 +82,101 @@ def pair_by_order(manifest_rows, recording_ids) -> list[tuple]:
     return list(zip(recording_ids, manifest_rows))
 
 
-def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, strict=True) -> int:
+def _parse_dt(value):
+    """Parse an ISO-ish datetime string (or pass a ``datetime`` through); ``None`` on failure."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    txt = str(value).strip().replace(" ", "T")
+    for candidate in (txt, txt[:19]):        # full, then trimmed to seconds (drops frac/tz)
+        try:
+            return datetime.fromisoformat(candidate).replace(tzinfo=None)
+        except ValueError:
+            continue
+    return None
+
+
+def _recording_datetime(cm, rec):
+    """Best-effort acquisition ``datetime`` for a recording, or ``None``. Never raises.
+
+    Prefers a datetime already stored on the recording dict (a seam for future callers /
+    tests); otherwise reads the ``.abf`` header cheaply (the raw copy under ``cm.dir``, then
+    the original ``source`` path).
+    """
+    for key in ("recorded_at", "abf_datetime"):
+        dt = _parse_dt(rec.get(key))
+        if dt is not None:
+            return dt
+    try:
+        from .abf import recorded_datetime
+    except Exception:
+        return None
+    candidates = []
+    if rec.get("file"):
+        try:
+            candidates.append(Path(cm.dir) / rec["file"])
+        except Exception:
+            pass
+    if rec.get("source"):
+        candidates.append(Path(rec["source"]))
+    for path in candidates:
+        try:
+            if path.exists():
+                dt = recorded_datetime(path)
+                if dt is not None:
+                    return dt.replace(tzinfo=None)
+        except Exception:
+            pass
+    return None
+
+
+def _timecheck(rows, recs, cm, time_tol_s):
+    """Cross-check that the manifest rows line up, IN ORDER, with the ``.abf`` recorded times.
+
+    Returns ``None`` when the timeline is consistent OR cannot be verified (missing
+    timestamps on either side, or recordings spaced too close to resolve order from the
+    clock); returns a message string when the timeline is inconsistent (the by-order
+    pairing is probably shifted).
+
+    Both clocks are the same acquisition PC, and each row is written a few seconds AFTER
+    Clampex starts that recording, so a correct pairing has a small, ~constant offset
+    ``manifest_time - abf_time``. A one-trial slip pushes the mispaired offset off by ~one
+    inter-trial interval, which stands out from the median offset. Note: a *perfectly
+    uniform* slide (e.g. a missing first recording plus a stray last one whose times happen
+    to align) keeps the offset constant and can still slip through — only deterministic
+    filename read-back closes that fully.
+    """
+    m = [_parse_dt(r.get("timestamp")) for r in rows]
+    a = [_recording_datetime(cm, rec) for rec in recs]
+    idx = [i for i in range(len(m)) if m[i] is not None and a[i] is not None]
+    if len(idx) < 2:
+        return None                                          # not enough timed pairs to verify
+    deltas = [(m[i] - a[i]).total_seconds() for i in idx]
+    offset = statistics.median(deltas)
+    worst = max(abs(d - offset) for d in deltas)
+    if time_tol_s is not None:
+        tol = float(time_tol_s)
+    else:
+        mt = sorted(m[i] for i in idx)                       # manifest timeline is the clean one
+        gaps = [(mt[j + 1] - mt[j]).total_seconds() for j in range(len(mt) - 1)]
+        gaps = [g for g in gaps if g > 0]
+        if not gaps:
+            return None
+        spacing = statistics.median(gaps)
+        if spacing < _TIME_MIN_SPACING_S:
+            return None                                      # too close to tell order from clock
+        tol = _TIME_TOL_FRACTION * spacing
+    if worst > tol:
+        return (f"stim-manifest timestamps do not line up with the .abf recorded times: the "
+                f"worst-matched trial is {worst:.0f}s off the ~{offset:.0f}s median offset "
+                f"(tolerance {tol:.0f}s). The row<->recording order is probably shifted (an "
+                f"aborted trial plus a stray .abf?). Refusing to auto-pair by order alone.")
+    return None
+
+
+def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, strict=True,
+                           check_time=True, time_tol_s=None) -> int:
     """Auto-fill a cell's recordings' stimulus metadata from the day's stim manifest.
 
     Finds ``<date>_stim_manifest.jsonl`` in `source_dir`, pairs its rows to the cell's
@@ -92,13 +189,22 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, s
     Only ``kind == "recording"`` recordings are paired; ``reference``/baseline recordings
     have no manifest row and are skipped (matching ``run.py``'s trial collection).
 
-    By-order pairing is only valid with exactly one manifest row per stimulus recording. If
-    the counts differ (a session that crossed midnight into a second manifest file, an
-    aborted trial, or an orphan row) pairing would SILENTLY mislabel trials — so with
-    ``strict`` (default) this raises ``ValueError`` instead of mispairing; ``strict=False``
-    warns and returns 0 so the caller can fall back to hand-entry. NOTE: this guards
-    cardinality only; an equal-but-mis-ordered pairing (a rare double-fault) is not yet
-    caught — a timestamp-based order check is a future hardening.
+    By-order pairing is only valid with exactly one manifest row per stimulus recording, in
+    the same order. Two guards enforce that:
+      * cardinality — if the counts differ (a session that crossed midnight into a second
+        manifest file, an aborted trial, or an orphan row) this raises ``ValueError``
+        (``strict``, default) or warns + returns 0 (``strict=False``).
+      * order (when ``check_time``) — each row's ``timestamp`` is compared to its paired
+        ``.abf``'s recorded time; since both clocks are the same machine and the row is
+        written seconds after Clampex starts the recording, a correct pairing has a small
+        ~constant offset, so an equal-count-but-shifted pairing (aborted trial + stray
+        file) stands out and is likewise refused. The check self-skips when it cannot verify
+        (missing timestamps, or recordings spaced too close to tell order from the clock),
+        so it never false-alarms on older data. ``time_tol_s`` pins an absolute residual
+        tolerance in seconds; by default it adapts to a fraction of the inter-trial spacing.
+
+    ``strict=False`` warns and returns 0 on either failure so the caller can fall back to
+    hand-entry.
 
     `cm` is duck-typed (needs ``.data["recordings"]``, ``.set_stimulus``, ``.dir``) so this
     stays free of a `dataio` import.
@@ -107,8 +213,9 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, s
     if not mf:
         return 0
     rows = load_session_manifest(mf)
-    rec_ids = [r["id"] for r in cm.data.get("recordings", [])
-               if r.get("kind", "recording") == "recording"]
+    recs = [r for r in cm.data.get("recordings", [])
+            if r.get("kind", "recording") == "recording"]
+    rec_ids = [r["id"] for r in recs]
     if len(rows) != len(rec_ids):
         msg = (f"stim-manifest / recording count mismatch: {len(rows)} rows in {mf.name} vs "
                f"{len(rec_ids)} stimulus recordings. By-order pairing would silently mislabel "
@@ -118,6 +225,14 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, s
         import warnings
         warnings.warn(msg)
         return 0
+    if check_time:
+        problem = _timecheck(rows, recs, cm, time_tol_s)
+        if problem is not None:
+            if strict:
+                raise ValueError(problem)
+            import warnings
+            warnings.warn(problem)
+            return 0
     n = 0
     for rec_id, rec in pair_by_order(rows, rec_ids):
         stim_type, params = stimulus_metadata(rec)

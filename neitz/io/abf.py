@@ -104,3 +104,17 @@ class Recording:
         return (f"<Recording {self.path!r} fs={self.fs:.0f}Hz "
                 f"dur={self.duration:.1f}s chans={self.channel_names} "
                 f"protocol={self.protocol!r}>")
+
+
+def recorded_datetime(path):
+    """The acquisition date/time from an .abf header, as a ``datetime`` (or ``None``).
+
+    Reads ONLY the header (``loadData=False``), so it is cheap to call once per recording —
+    unlike :meth:`Recording.load`, which pulls in all the sample data. Never raises: returns
+    ``None`` if the file is missing/unreadable or the field is absent. Used by the stimulus-
+    manifest timestamp cross-check in :func:`neitz.io.stim.apply_session_manifest`.
+    """
+    try:
+        return pyabf.ABF(str(path), loadData=False).abfDateTime
+    except Exception:
+        return None
