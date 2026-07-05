@@ -253,3 +253,8 @@ html, body { margin: 0; }
 #align-editor .dash-input-container { height: 17.33px !important; min-height: 0 !important; }
 /* the trace-highlight ring when an align box is focused (see assets/alignfocus.js) */
 #align-editor input:focus { outline: 2px solid #3367d6; outline-offset: 0; }
+
+/* region start/end boundary lines (#time editable shapes): Plotly gives their transparent 10px
+   hit-path an inline `cursor: move`; the lines only move horizontally, so show an ↔ resize cursor
+   instead (clearer "drag me left/right" cue). Falls back to `move` if the selector ever misses. */
+#time .shapelayer path[style*="cursor: move"] { cursor: ew-resize !important; }

@@ -198,24 +198,23 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   the layout `uirevision` = a hash of every NON-align parameter (constant across zoom+align → Plotly
   holds the zoom; changes on any other edit → Plotly resets) AND honoring the relayout range only
   when keeping. (Replaces the old blanket `uirevision="keep"`.)
-- **Graph interaction toolbar** (vertical icon strip — `graph_tools()` / `#graph-toolbar`, a "current
-  tool" palette; the first of a growing set). It's an **absolute overlay** on the plot's top-left, NOT
-  a flex sibling of the graph — wrapping the graph in a flex row lost its `minHeight:0` and made
-  Plotly's `responsive` resize churn (whole-GUI jumpiness under the CSS `zoom` scaling); an overlay
-  leaves the graph container untouched. The active tool lives in
-  the `graph-mode` store (in `UNDO_TRACK`). `set_graph_mode` (buttons → store), a clientside callback
-  highlights the active button, and `build_figures(graph_mode=)` sets each axis' `fixedrange` so a
-  drag-box zooms **X only** (`zoomx`, default = the historical behavior), **Y only** (`zoomy`), or
-  **both** (`zoombox`). Reset (`#gm-reset`) is a clientside `Plotly.relayout` back to the default
-  window — stashed as `time_fig.layout.meta.xr = [x0, x1]`. `graph_mode` is NOT in the `uirevision`
-  hash, so switching tools keeps the current zoom. **Edit region** (`‖`, `editregion` mode): draws two
-  draggable red boundary lines at the region start/end (added as `time_fig` `shapes[0]`/`[1]` — BEFORE
-  the excluded-block vrects, so their indices are fixed); the `#time` graph config carries
-  `edits: {shapePosition: True}`, and the `drag_region` callback writes `shapes[0].x0`/`shapes[1].x0`
-  from the relayout back to `region-start`/`region-end` so the analysis window follows the drag (no
-  loop — it converges; region boxes are already in `UNDO_TRACK`). In editregion mode both axes are
-  `fixedrange` (you drag boundaries, not zoom). Planned tools (highlight, measure, drag-threshold,
-  edit-spikes) plug into this same framework.
+- **Graph interaction: X-only zoom + always-draggable region boundaries.** There is NO graph-tool
+  palette (the `graph_mode` zoomx/zoomy/zoombox/editregion toolbar was removed — one behavior, not a
+  mode picker). A drag-box zooms **X only** because both `#time` y-axes are `fixedrange=True` in
+  `build_figures` (Plotly can't axis-lock a thin box into a y-only zoom, so a narrow left-right drag
+  zooms time precisely); wheel `scrollZoom` and double-click-reset are on. The **region start/end
+  boundary lines are ALWAYS draggable**: `build_figures` draws them as `time_fig` `shapes[0]` (start)
+  / `shapes[1]` (end) with `editable=True` — BEFORE the excluded-block vrects (drawn `editable=False`)
+  so the line indices stay 0 & 1. The `#time` config carries a static `edits: {shapePosition: True}`.
+  Plotly gives each line a transparent 10 px hit-path with inline `cursor: move`; a CSS rule
+  (`#time .shapelayer path[style*="cursor: move"] { cursor: ew-resize !important }`) refines that to
+  an ↔ cursor. On drag-release Plotly fires a `shapes[i].x` relayout; the `drag_region` callback
+  (Input `#time.relayoutData`, no mode gating) averages `shapes[i].x0`/`x1` back into
+  `region-start` / `region-end` so the analysis window follows (converges, no loop; region boxes are
+  in `UNDO_TRACK`). The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the
+  live drag isn't redrawn with the stale region and snapped back. Editing the region reverts the view
+  to the full window (region-start/end are in the `uirevision` hash) — a zoom-preserving drag would
+  need a separate zoom-tracking store (known follow-up).
 - **ISI histogram** honors the "bin (ms)" box (`train-bin`): `xbins` size = the ms value; 0 → auto
   (60 bins). (That box also drives the spike-train row-1 view when "show binned spikes" is on.)
 - **Group → one average** (files panel checkbox `#group-avg`, needs 3+ checked): `build_figures`
