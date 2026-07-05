@@ -52,75 +52,55 @@ html, body { margin: 0; }
     #react-entry-point > div { height: calc(100vh / 0.6) !important; }
 }
 
-/* Nav view-switch targets ("to Data Explorer" / "to Analysis View"): the inline radial-gradient
-   fills the box; on hover the gradient GROWS (background-size), nothing else moves. */
-/* Nav switcher pills. The pill is a big rounded rectangle; the GRADIENT is a blurred rounded-rect
-   pseudo-element behind the text — small at rest (still enough contrast to read the text), blooming
-   a little on hover. The blur feathers the edges so it fades into the page background with no
-   clipped/hard edge. The SELECTED view also gets an inner text glow. */
-.nav-pill {
-    position: relative;
-    z-index: 0;
-    display: inline-block;         /* a real box so vertical padding builds the taller row */
-    box-sizing: content-box;       /* height = text + the full padding (not clamped) */
-    min-width: 140px;              /* equal width for both pills; wide enough for arrow + text */
-    text-align: center;            /* center text within the fixed-width pill */
-    font-size: 16px;
-    font-weight: bold;
-    line-height: 1;
+/* App header: the "Neitz Analysis Suite" brand (icon + title) + a compact STANDARD tab strip
+   (underline-style tabs). Replaces the old glowing gradient nav pills. `--dark` variant is used in
+   the full-screen Data Explorer / Analysis Pipelines headers. */
+.suite-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 16px;                 /* row-gap when it wraps in the narrow sidebar · column-gap */
+    margin: 4px 0 6px;
+}
+.suite-brand { display: flex; align-items: center; gap: 8px; }
+.suite-logo { width: 24px; height: 24px; display: block; border-radius: 5px; flex: 0 0 auto; }
+.suite-title {
+    font-size: 15px;
+    font-weight: 700;
+    color: #1e2330;
     white-space: nowrap;
-    padding: 19px 26px;
-    border-radius: 13px;
+    letter-spacing: .2px;
 }
-/* The gradient fills the rounded-rect pill shape: large radial ellipse (bigger than the element)
-   covers the full interior; the ::before's own border-radius:12px clips it to rounded corners.
-   No overflow:hidden on parent — that hides z-index:-1 ::before in Chrome's stacking context.
-   background-size controls active (100%) vs inactive (75%) vs hover (90%) sizes. */
-.nav-pill::before {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    inset: 0;
-    border-radius: 12px;
-    background-repeat: no-repeat;
-    background-position: center;
-    background-size: 100% 100%;
-    transition: background-size .3s ease;
+.suite-tabs {
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    border-bottom: 1px solid #d6d9e1;
+    flex-wrap: wrap;
 }
-.nav-av { color: #3a2c00; }
-/* Symmetric vertical gradient: transparent at top/bottom edges, full color at the text centerline (50%).
-   The ::before's border-radius clips it to the pill's rounded corners. */
-.nav-av::before { background-image: linear-gradient(to bottom,
-    rgba(255,224,120,0) 0%,
-    rgba(255,224,120,0.55) 30%,
-    rgba(255,224,120,1)   50%,
-    rgba(255,224,120,0.55) 70%,
-    rgba(255,224,120,0)   100%); }
-.nav-de { color: #eef2ff; }
-.nav-de::before { background-image: linear-gradient(to bottom,
-    rgba(58,96,171,0)   0%,
-    rgba(58,96,171,0.6) 30%,
-    rgba(70,110,200,1)  50%,
-    rgba(58,96,171,0.6) 70%,
-    rgba(58,96,171,0)   100%); }
-.nav-pp { color: #e7fff4; }
-.nav-pp::before { background-image: linear-gradient(to bottom,
-    rgba(26,140,110,0)    0%,
-    rgba(26,140,110,0.6) 30%,
-    rgba(32,170,132,1)   50%,
-    rgba(26,140,110,0.6) 70%,
-    rgba(26,140,110,0)   100%); }
-.nav-pp.nav-sel { text-shadow: 0 0 13px rgba(60,220,170,0.97), 0 0 5px rgba(120,240,200,0.85);
-    text-decoration-color: rgba(175,255,225,0.95); }
-/* clickable (non-active) pill: same gradient, same band — underline alone marks the active tab */
-.nav-clickable { cursor: pointer; }
-.nav-clickable { cursor: pointer; }
-/* the active view keeps its inner text glow AND gets a simple underline */
-.nav-sel { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 6px; }
-.nav-av.nav-sel { text-shadow: 0 0 13px rgba(245,196,0,0.95), 0 0 5px rgba(245,196,0,0.8);
-    text-decoration-color: rgba(120,85,0,0.85); }
-.nav-de.nav-sel { text-shadow: 0 0 13px rgba(95,150,255,0.97), 0 0 5px rgba(135,178,255,0.85);
-    text-decoration-color: rgba(175,205,255,0.95); }
+.suite-tab {
+    padding: 3px 8px;
+    font-size: 11.5px;
+    font-weight: 500;
+    color: #5a6172;
+    cursor: pointer;
+    white-space: nowrap;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;           /* the active tab's underline sits on the strip's bottom border */
+}
+.suite-tab:hover { color: #1e2330; }
+.suite-tab--active {
+    color: #1e2330;
+    font-weight: 700;
+    border-bottom-color: #3367d6;
+    cursor: default;
+}
+/* dark variant — Data Explorer / Analysis Pipelines full-screen headers */
+.suite-header--dark .suite-title { color: #eef1f8; }
+.suite-tabs--dark { border-bottom-color: #333a49; }
+.suite-tabs--dark .suite-tab { color: #aab2c5; }
+.suite-tabs--dark .suite-tab:hover { color: #fff; }
+.suite-tabs--dark .suite-tab--active { color: #fff; border-bottom-color: #5a86ff; }
 
 /* The drag-to-zoom box dims everything outside the selection with a 40%-black overlay; since the
    x-only zoom selection is a thin full-height band, that darkened most of the graph. Soften it to a

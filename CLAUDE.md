@@ -452,12 +452,15 @@ A drag-and-drop pipeline builder (like `benaqTools_py`'s "pipeline" tab, which i
 is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes** (typed I/O ports
 + inline params) wired by **connections**; the canonical "Run analysis" flow IS one of them.
 
-- **Three views now.** `nav_toggle` renders THREE pills (Analysis View · Data Explorer · Analysis
-  Pipelines). All three nav bars are in the DOM at once (the explorer + pipelines overlays are
-  `display:none`, not removed), so each CLICKABLE pill needs a globally-unique id — `_NAV_IDS[active]`
-  gives per-active ids (`open-explorer`/`exp-close`/`open-pipelines`/`exp-to-pipelines`/
-  `pipe-to-analysis`/`pipe-to-explorer`). `nav_route` (one callback) owns BOTH modal styles and
-  routes all six. Escape closes the top-most overlay (output-modal → explorer → pipelines).
+- **Three views now.** `nav_toggle` renders the **`Neitz Analysis Suite` brand (icon + title) + a
+  compact standard tab strip** (`.suite-header`/`.suite-tabs`/`.suite-tab` in viewer.css; underline
+  marks the active tab; a `--dark` variant for the Explorer/Pipelines full-screen headers). The icon
+  is `assets/app_icon.svg` via `app.get_asset_url`. (This replaced the old glowing gradient nav pills.)
+  All three nav bars are in the DOM at once (the explorer + pipelines overlays are `display:none`, not
+  removed), so each CLICKABLE tab needs a globally-unique id — `_NAV_IDS[active]` gives per-active ids
+  (`open-explorer`/`exp-close`/`open-pipelines`/`exp-to-pipelines`/`pipe-to-analysis`/
+  `pipe-to-explorer`). `nav_route` (one callback) owns BOTH modal styles and routes all six. Escape
+  closes the top-most overlay (output-modal → explorer → pipelines).
 - **Model — `neitz/pipeline.py` (tested, no GUI deps).** `COMPONENT_REGISTRY` = the palette (each
   entry: label/category/color/help + typed `inputs`/`outputs` ports + a `params` schema of
   number|choice|bool|text). `Pipeline` is a plain dict `{version,name,nodes[],connections[]}`; a node

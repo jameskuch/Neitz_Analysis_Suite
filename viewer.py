@@ -1113,10 +1113,11 @@ def _neitz_health():
     return jsonify(boot=_BOOT_ID, code_mtime=_BOOT_CODE_MTIME, root=root)
 
 
-# view switcher: THREE pills (Analysis View · Data Explorer · Analysis Pipelines), always all three.
-# Every nav bar is in the DOM at once (the explorer + pipelines modals are display:none, not removed),
-# so each CLICKABLE pill needs a globally-unique id — hence per-active click ids (the active view's
-# pill is a non-clickable label). nav_route consumes all six; Escape closes via getElementById.
+# view switcher: a compact STANDARD tab strip (Analysis View · Data Explorer · Analysis Pipelines)
+# with the "Neitz Analysis Suite" brand (icon + title) to its left. Every nav bar is in the DOM at
+# once (the explorer + pipelines modals are display:none, not removed), so each CLICKABLE tab needs a
+# globally-unique id — hence per-active click ids (the active view's tab is a non-clickable label).
+# nav_route consumes all six; Escape closes via getElementById.
 _NAV_IDS = {
     "analysis":  {"de": "open-explorer",    "pp": "open-pipelines"},
     "explorer":  {"av": "exp-close",        "pp": "exp-to-pipelines"},
@@ -1125,22 +1126,27 @@ _NAV_IDS = {
 
 
 def nav_toggle(active, dark=False):
-    """Upper view switcher. Each pill is a big rounded-rect whose gradient (see the .nav-pill CSS)
-    blooms on hover; the SELECTED view gets an inner text glow and isn't clickable, the others are
-    the clickable targets (unique ids from _NAV_IDS[active])."""
+    """App header: the 'Neitz Analysis Suite' brand (icon + title) + a compact standard tab strip.
+    The SELECTED view's tab is a non-clickable label; the others are clickable (unique ids from
+    _NAV_IDS[active]). `dark` styles it for the full-screen explorer / pipelines headers."""
     ids = _NAV_IDS[active]
 
-    def pill(label, which):
+    def tab(label, which):
         click_id = ids.get(which)
         selected = click_id is None
-        cls = f"nav-pill nav-{which}" + (" nav-sel" if selected else " nav-clickable")
+        cls = "suite-tab" + (" suite-tab--active" if selected else "")
         if selected:
             return html.Span(label, className=cls)
         return html.Span(label, id=click_id, n_clicks=0, className=cls, title=f"go to {label}")
-    return html.Div([pill("Analysis View", "av"), pill("Data Explorer", "de"),
-                     pill("Analysis Pipelines", "pp")],
-                    style={"display": "flex", "justifyContent": "flex-start", "alignItems": "center",
-                           "gap": "12px", "flexWrap": "wrap", "marginTop": "16px"})
+    brand = html.Div([
+        html.Img(src=app.get_asset_url("app_icon.svg"), className="suite-logo", alt=""),
+        html.Span("Neitz Analysis Suite", className="suite-title"),
+    ], className="suite-brand")
+    tabs = html.Div([tab("Analysis View", "av"), tab("Data Explorer", "de"),
+                     tab("Analysis Pipelines", "pp")],
+                    className="suite-tabs" + (" suite-tabs--dark" if dark else ""))
+    return html.Div([brand, tabs],
+                    className="suite-header" + (" suite-header--dark" if dark else ""))
 
 app.layout = html.Div(
     style={"fontFamily": "sans-serif", "display": "flex", "gap": "10px",
