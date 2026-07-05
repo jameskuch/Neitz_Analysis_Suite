@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Never line-ending-normalize binary assets — on a Windows checkout that would corrupt them
+# (e.g. the app icon would fail to load and the shortcut shows a blank page).
+*.ico  binary
+*.icns binary
+*.png  binary
+*.pdf  binary
+*.abf  binary
+*.xlsx binary
