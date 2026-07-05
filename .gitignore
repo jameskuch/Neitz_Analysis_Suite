@@ -35,3 +35,11 @@ testingbed.ipynb
 # Generated analysis CSVs from examples run in the repo root (real outputs go to the store)
 *_metrics.csv
 barak-*.csv
+
+# macOS launcher app — the built bundle bakes in machine-specific absolute paths, so keep
+# it out of the repo; regenerate it with scripts/build_macos_app.py (build/ is ignored above).
+NeitzAnalysisSuite.app/
+
+# …but DO track the app-icon source + rendered icon (they override the blanket *.svg above).
+!assets/app_icon.svg
+!assets/app_icon.icns
