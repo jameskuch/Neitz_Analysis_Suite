@@ -2,22 +2,21 @@
 """
 neitz_app.py — cross-platform native-window launcher for the Neitz Analysis Suite.
 
-Double-clicked from the macOS .app (WKWebView) or the Windows launcher (WebView2 / Edge), this:
+Double-clicked from the macOS .app or the Windows launcher, this:
   1. reuses a healthy back end already serving on 127.0.0.1:8050, or starts `python viewer.py`
      itself (freeing the port first if something half-dead is holding it) and waits for it;
-  2. opens the viewer in a real native window — its own dock / taskbar icon and macOS Space,
-     NOT a browser tab;
-  3. enforces a single app instance (a lock socket), so a second double-click doesn't stack a
-     duplicate window on the same back end;
+  2. opens the viewer in its OWN window (its own dock / taskbar icon and Space), NOT a browser tab:
+       - preferred: a real native window via pywebview (WKWebView on macOS, WebView2 on Windows);
+       - fallback: a chromeless Edge/Chrome `--app` window — used when pywebview's GUI backend is
+         unavailable (e.g. Windows-on-ARM without the .NET Desktop Runtime that WinForms needs).
+         Our icon still shows there because it's the Dash favicon (assets/favicon.ico).
+  3. enforces a single app instance (a lock socket), so a second launch doesn't stack a window;
   4. on window close, stops the back end it started (a reused / manually-run server is left alone).
 
-The front end auto-reloads when the back end restarts (see assets/autoreload.js + the /neitz-health
-route in viewer.py), so editing viewer.py and relaunching shows current code with no manual refresh.
+The front end auto-reloads when the back end restarts (assets/autoreload.js + /neitz-health).
 
-Runs the same on macOS and Windows 11; OS-specific bits (kill-by-port, no-console spawn, taskbar
-identity, error dialog) branch on sys.platform. Everything it does is logged to ~/.neitz/app.log,
-and on Windows a fatal error also pops a message box (there's no console when launched from the
-.vbs / shortcut). To debug a failed launch, run it with a console and watch the log:
+Everything is logged to ~/.neitz/app.log; on Windows a fatal error also pops a message box (there's
+no console when launched from the .vbs / shortcut). To debug a launch, run it with a console:
 
     python neitz_app.py
 """
@@ -33,10 +32,9 @@ import time
 import urllib.request
 from pathlib import Path
 
-# IMPORTANT (Windows/network paths): use .absolute(), NOT .resolve(). On a mapped network drive
-# (e.g. this repo shared from a Mac VM host as Z:\), .resolve() rewrites the path to its UNC form
-# (\\Mac\Home\…), and a UNC path used as a subprocess working directory fails on Windows. .absolute()
-# keeps the drive-letter form the user actually launched with.
+# .absolute() NOT .resolve(): on a mapped network drive (e.g. this repo shared from a Mac VM host as
+# Z:\) .resolve() rewrites paths to their UNC form (\\Mac\Home\…), and a UNC path used as a
+# subprocess working directory fails on Windows. .absolute() keeps the drive-letter form.
 REPO = Path(__file__).absolute().parent
 VIEWER = REPO / "viewer.py"
 HOST, PORT = "127.0.0.1", 8050
@@ -162,7 +160,7 @@ def ensure_backend():
         log.info("back end is up")
     else:
         log.warning("back end did not answer within timeout; opening the window anyway "
-                    "(it will show a connection error — check %s)", VIEWER_LOG)
+                    "(check %s)", VIEWER_LOG)
     return proc
 
 
@@ -176,6 +174,68 @@ def acquire_single_instance():
         return s
     except OSError:
         return None
+
+
+def _try_native_window():
+    """Open the pywebview native window and block until it closes. Returns True if it actually ran,
+    False if pywebview or its GUI backend is unavailable (so the caller can fall back). On Windows,
+    pywebview needs the .NET Desktop Runtime (System.Windows.Forms); without it start() raises and
+    we fall back to a chromeless browser window instead of dying."""
+    try:
+        import webview
+    except Exception as e:
+        log.warning("pywebview not importable (%s)", e)
+        return False
+
+    class _Api:
+        # exposed as window.pywebview.api.* — lets assets/fullscreen.js toggle NATIVE fullscreen
+        # (the browser Fullscreen API is a no-op in WKWebView / WebView2).
+        def toggle_fullscreen(self):
+            try:
+                webview.windows[0].toggle_fullscreen()
+            except Exception:
+                pass
+            return True
+
+    try:
+        webview.create_window(TITLE, URL, width=1440, height=900, min_size=(940, 620), js_api=_Api())
+        log.info("webview.start() — native window open")
+        webview.start()                        # blocks on the main thread until the window closes
+        log.info("webview.start() returned — window closed")
+        return True
+    except Exception as e:
+        log.warning("pywebview backend failed (%s) — falling back to a browser app window", e)
+        return False
+
+
+def _browser_exes():
+    """Edge/Chrome executables that can host a chromeless --app window (no .NET/pywebview needed)."""
+    if IS_WIN:
+        pf = os.environ.get("ProgramFiles", r"C:\Program Files")
+        pfx = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+        cands = [pf + r"\Microsoft\Edge\Application\msedge.exe",
+                 pfx + r"\Microsoft\Edge\Application\msedge.exe",
+                 pf + r"\Google\Chrome\Application\chrome.exe",
+                 pfx + r"\Google\Chrome\Application\chrome.exe"]
+    else:
+        cands = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                 "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"]
+    return [c for c in cands if os.path.exists(c)]
+
+
+def _app_mode_window():
+    """A chromeless standalone window via Edge/Chrome --app (own window + Space; its favicon is our
+    icon). Returns the browser Popen, or None if no browser was found."""
+    profile = str(LOG_DIR / "app-profile")
+    for exe in _browser_exes():
+        try:
+            p = subprocess.Popen([exe, f"--app={URL}", f"--user-data-dir={profile}",
+                                  "--no-first-run", "--no-default-browser-check"])
+            log.info("opened app-mode window via %s", exe)
+            return p
+        except Exception as e:
+            log.warning("could not launch %s: %s", exe, e)
+    return None
 
 
 def _run():
@@ -193,42 +253,33 @@ def _run():
 
     proc = ensure_backend()
 
-    try:
-        import webview
-    except Exception as e:                     # pywebview missing -> tell the user, then degrade to a
-        _fatal(f"pywebview is not installed — run:  pip install -e \".[gui,app]\"\n({e})")
-        import webbrowser                      # browser tab so it's at least usable, leave the back end
-        webbrowser.open(URL)
-        return
-
-    log.info("pywebview loaded; creating window")
-
-    class _Api:
-        # exposed as window.pywebview.api.* — lets assets/fullscreen.js toggle NATIVE fullscreen
-        # (the browser Fullscreen API is a no-op in WKWebView / WebView2).
-        def toggle_fullscreen(self):
-            try:
-                webview.windows[0].toggle_fullscreen()
-            except Exception:
-                pass
-            return True
-
-    webview.create_window(TITLE, URL, width=1440, height=900, min_size=(940, 620), js_api=_Api())
-    try:
-        log.info("webview.start() — window open")
-        webview.start()                        # blocks on the main thread until the window closes
-        log.info("webview.start() returned — window closed")
-    finally:
-        if proc is not None:                   # stop only the back end WE started (leave a reused one)
+    if _try_native_window():                   # best path: real native window (own dock/taskbar icon)
+        if proc is not None:                   # window closed -> stop the back end WE started
             try:
                 proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except Exception:
-                    proc.kill()
+                proc.wait(timeout=5)
             except Exception:
-                pass
-    _ = lock                                    # keep the lock socket alive until here
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        _ = lock
+        return
+
+    # pywebview's GUI backend is unavailable (e.g. Windows-on-ARM without the .NET Desktop Runtime)
+    # -> chromeless Edge/Chrome --app window. Block on it so we hold the single-instance lock while
+    # it's open; leave the back end running (the window owns it now).
+    browser = _app_mode_window()
+    if browser is None:
+        log.warning("no Edge/Chrome found for an --app window; opening a normal browser tab")
+        import webbrowser
+        webbrowser.open(URL)
+    else:
+        try:
+            browser.wait()                     # returns when the --app window is closed
+        except Exception:
+            pass
+    _ = lock
 
 
 def main():
