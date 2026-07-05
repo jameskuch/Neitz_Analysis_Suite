@@ -321,7 +321,13 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   spike-train CSVs. Don't "fix" by forcing them open.
 - **Run variants**: `run_cell_flicker(..., name=, include=)` writes to `outputs/<name>/` so a
   run that excludes a recording coexists with the original instead of overwriting it. The GUI
-  "run name" box + checked-files drive this.
+  "run name" box + checked-files drive this. **Output-folder naming** (`_run_name`, shared by
+  `run_cell` + `pipe_run`; James's ask "save multiple runs where it makes sense"): a TYPED run-name
+  is the folder as-is (re-run OVERWRITES that named variant — `record_output` replaces by key). A
+  BLANK run-name → `«selected-pipeline-or-analysis-kind» «YYYY-MM-DD_HHMMSS»`, so EVERY unnamed run
+  is kept as its own folder and different pipelines never clobber each other in `outputs/flicker/`.
+  (Before this, a blank name always fell back to the bare `flicker`/`sta`/`strf` key and every
+  unnamed run overwrote the last.)
 - **Run Analysis USES the live GUI detection settings** (fixed 2026-06): `run_cell` passes
   `detect=` (polarity/method/k/abs_threshold/refractory_s), `abs_map=` (per-trace abs
   `{path: value}`), and `run_label=` (the un-sanitized friendly name) into
