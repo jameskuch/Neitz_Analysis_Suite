@@ -3,17 +3,21 @@
 neitz_app.py — cross-platform native-window launcher for the Neitz Analysis Suite.
 
 Double-clicked from the macOS .app or the Windows launcher, this:
-  1. reuses a healthy back end already serving on 127.0.0.1:8050, or starts `python viewer.py`
-     itself (freeing the port first if something half-dead is holding it) and waits for it;
+  1. FULLY RESTARTS the back end on every launch — frees port 8050 (killing any stale/leftover
+     server) and starts a fresh `python viewer.py`, so the icon always runs the latest code. There
+     is no separate compiled front end (Dash serves the layout from Python and fingerprints
+     `assets/` by mtime, so changed CSS/JS auto-busts the cache), so a fresh back end + a fresh
+     window load IS a full front-and-back rebuild. (Mirrors benaqTools' benaq_app.py, James's ask.)
   2. opens the viewer in its OWN window (its own dock / taskbar icon and Space), NOT a browser tab:
        - preferred: a real native window via pywebview (WKWebView on macOS, WebView2 on Windows);
+         a spinner loading-page shows INSTANTLY while the back end boots in the background, so the
+         window + Dock icon appear at once (a slow, windowless launch makes macOS drop the .app
+         identity → generic python icon), then swaps to the real UI once the server is healthy;
        - fallback: a chromeless Edge/Chrome `--app` window — used when pywebview's GUI backend is
          unavailable (e.g. Windows-on-ARM without the .NET Desktop Runtime that WinForms needs).
-         Our icon still shows there because it's the Dash favicon (assets/favicon.ico).
   3. enforces a single app instance (a lock socket), so a second launch doesn't stack a window;
-  4. on window close, stops the back end it started (a reused / manually-run server is left alone).
-
-The front end auto-reloads when the back end restarts (assets/autoreload.js + /neitz-health).
+  4. on close (red button / Cmd-Q / signal / exit) tears the back end DOWN — "quit = everything
+     down" — sweeping port 8050 so nothing lingers to be reused, keeping every next start fresh.
 
 Everything is logged to ~/.neitz/app.log; on Windows a fatal error also pops a message box (there's
 no console when launched from the .vbs / shortcut). To debug a launch, run it with a console:
@@ -21,6 +25,7 @@ no console when launched from the .vbs / shortcut). To debug a launch, run it wi
     python neitz_app.py
 """
 from __future__ import annotations
+import atexit
 import json
 import logging
 import os
@@ -49,6 +54,24 @@ APP_LOG = LOG_DIR / "app.log"
 VIEWER_LOG = LOG_DIR / "viewer.log"
 
 log = logging.getLogger("neitz_app")
+
+# Shown in the native window INSTANTLY while the back end restarts in the background — so the window
+# + Dock icon appear at once (a slow windowless launch makes macOS drop the .app identity and the
+# Dock tile falls back to the generic python icon). Swapped for the real UI (window.load_url) once
+# the back end is healthy.
+_LOADING_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+ html,body{height:100%;margin:0;background:#0f1220;color:#e8ebf3;
+   font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;}
+ .w{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;}
+ .s{width:34px;height:34px;border-radius:50%;border:3px solid #29304a;border-top-color:#5a86ff;
+   animation:r .9s linear infinite;}
+ @keyframes r{to{transform:rotate(360deg)}}
+ .t{font-size:22px;font-weight:600;letter-spacing:.4px;}
+ .u{font-size:13px;color:#8b93a7;}
+</style></head><body><div class="w"><div class="s"></div>
+ <div class="t">Neitz Analysis Suite</div>
+ <div class="u">Starting — restarting the analysis server…</div>
+</div></body></html>"""
 
 
 def _setup_logging():
@@ -85,8 +108,8 @@ def health(timeout=1.0):
 
 
 def _pids_on_port(port):
-    """PIDs LISTENing on `port` (own-user processes) — used to free a half-dead port before a
-    fresh start. Uses the OS's own tool so it needs no elevated permissions."""
+    """PIDs LISTENing on `port` (own-user processes) — used to free the port before a fresh start.
+    Uses the OS's own tool so it needs no elevated permissions."""
     pids = set()
     try:
         if IS_WIN:
@@ -144,39 +167,42 @@ def _wait_health(timeout=45.0):
     return False
 
 
-def _norm(p):
-    return os.path.normcase(os.path.normpath(p)) if p else ""
-
-
 def ensure_backend():
-    """Reuse a healthy server if it's serving the SAME data root we want, else (re)start one so a
-    changed EPHYSDATAIO_ROOT actually takes effect. Returns the Popen we started, or None if we
-    reused an existing server (which we then leave running on exit)."""
-    h = health()
-    if h is not None:
-        want = os.environ.get("EPHYSDATAIO_ROOT")           # what THIS launch was told to use
-        have = h.get("root")                                # what the running server is using
-        if want and have and _norm(want) != _norm(have):
-            log.info("running back end uses data root %r but %r requested — restarting it",
-                     have, want)
-            _kill(_pids_on_port(PORT))
-            time.sleep(0.5)
-        else:
-            log.info("reusing back end already serving on %s (root=%s)", URL, have)
-            return None                        # single-instance reuse of a matching back end
-    else:
-        pids = _pids_on_port(PORT)             # port held but not healthy -> free it, start fresh
-        if pids:
-            log.info("freeing stale port %s held by %s", PORT, pids)
-            _kill(pids)
-            time.sleep(0.5)
+    """FRESH-START policy (James's ask, mirrored from benaq_app.py): every launch fully restarts the
+    back end so the icon always runs the latest code. Free the port first (kill any healthy OR
+    half-dead server holding it), then spawn a new `viewer.py` and wait for it. Returns the Popen we
+    started (always non-None on success), so the caller can tear it down on close."""
+    pids = _pids_on_port(PORT)
+    if pids:
+        log.info("fresh start: freeing port %s held by %s", PORT, pids)
+        _kill(pids)
+        time.sleep(0.5)
     proc = _spawn_backend()
     if _wait_health():
-        log.info("back end is up")
+        log.info("back end is up (fresh)")
     else:
         log.warning("back end did not answer within timeout; opening the window anyway "
                     "(check %s)", VIEWER_LOG)
     return proc
+
+
+def _teardown(proc):
+    """Quit = everything down (benaq_app.py's rule): stop the back end we started AND sweep port
+    8050, so no half-dead server lingers to be reused — that would defeat the fresh-start policy and
+    leave an orphan process. Idempotent (terminating a dead proc / sweeping a free port are no-ops)."""
+    if proc is not None:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                proc.kill()
+        except Exception as e:
+            log.warning("teardown terminate failed: %s", e)
+    leftover = _pids_on_port(PORT)
+    if leftover:
+        log.info("teardown: sweeping port %s (%s)", PORT, leftover)
+        _kill(leftover)
 
 
 def acquire_single_instance():
@@ -191,11 +217,30 @@ def acquire_single_instance():
         return None
 
 
+def _set_win_icon(win):
+    """Give the native (WinForms) window OUR taskbar icon, not pythonw's default Python icon."""
+    ico = str(REPO / "assets" / "app_icon.ico")
+
+    def _apply():
+        try:
+            import clr
+            clr.AddReference("System.Drawing")
+            from System.Drawing import Icon as _Icon
+            win.native.Icon = _Icon(ico)
+            log.info("set native window icon from %s", ico)
+        except Exception as e:
+            log.warning("could not set window icon: %s", e)
+    try:
+        win.events.shown += _apply
+    except Exception:
+        _apply()
+
+
 def _try_native_window():
-    """Open the pywebview native window and block until it closes. Returns True if it actually ran,
-    False if pywebview or its GUI backend is unavailable (so the caller can fall back). On Windows,
-    pywebview needs the .NET Desktop Runtime (System.Windows.Forms); without it start() raises and
-    we fall back to a chromeless browser window instead of dying."""
+    """Open the pywebview native window (spinner loading-page first) and boot a FRESH back end in the
+    background, swapping to the real UI when healthy. Blocks until the window closes; tears the back
+    end down on every exit path. Returns True if it actually ran, False if pywebview / its GUI backend
+    is unavailable (so the caller can fall back to a chromeless browser window)."""
     try:
         import webview
     except Exception as e:
@@ -212,31 +257,54 @@ def _try_native_window():
                 pass
             return True
 
-    try:
-        win = webview.create_window(TITLE, URL, width=1440, height=900, min_size=(940, 620),
-                                    js_api=_Api())
-        if IS_WIN:                             # give the native (WinForms) window OUR taskbar icon,
-            ico = str(REPO / "assets" / "app_icon.ico")   # not pythonw's default Python icon
+    # state shared with the background boot thread + the close/exit hooks
+    state = {"proc": None, "closing": False}
 
-            def _set_icon():
-                try:
-                    import clr
-                    clr.AddReference("System.Drawing")
-                    from System.Drawing import Icon as _Icon
-                    win.native.Icon = _Icon(ico)
-                    log.info("set native window icon from %s", ico)
-                except Exception as e:
-                    log.warning("could not set window icon: %s", e)
+    def _cleanup(*_a):
+        state["closing"] = True
+        _teardown(state.get("proc"))
+
+    atexit.register(_cleanup)                          # interpreter exit (covers Cmd-Q teardown)
+
+    def _on_signal(_sig, _frm):                        # kill / Ctrl-C -> clean up then exit now
+        _cleanup()
+        os._exit(0)
+    for _s in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(_s, _on_signal)
+        except Exception:
+            pass
+
+    try:
+        win = webview.create_window(TITLE, html=_LOADING_HTML, width=1440, height=900,
+                                    min_size=(940, 620), js_api=_Api())
+        try:
+            win.events.closed += _cleanup             # red-button close OR Cmd-Q teardown
+        except Exception:
+            pass
+        if IS_WIN:
+            _set_win_icon(win)
+
+        def _boot():
+            # background thread (once the GUI is up): the FRESH back-end restart happens HERE, so it
+            # never delays the window/icon appearing. Swap the loading page for the real UI when up.
+            state["proc"] = ensure_backend()
+            if state["closing"]:                      # window closed while we were starting
+                _teardown(state.get("proc"))
+                return
             try:
-                win.events.shown += _set_icon
-            except Exception:
-                _set_icon()
-        log.info("webview.start() — native window open")
-        webview.start()                        # blocks on the main thread until the window closes
+                win.load_url(URL)
+            except Exception as e:
+                log.warning("load_url failed: %s", e)
+
+        log.info("webview.start() — native window open (loading page); back end booting in background")
+        webview.start(_boot)                          # blocks on the main thread until the window closes
         log.info("webview.start() returned — window closed")
+        _cleanup()                                    # belt-and-suspenders when start() returns
         return True
     except Exception as e:
         log.warning("pywebview backend failed (%s) — falling back to a browser app window", e)
+        _teardown(state.get("proc"))
         return False
 
 
@@ -283,24 +351,14 @@ def _run():
         except Exception as e:
             log.warning("could not set AppUserModelID: %s", e)
 
-    proc = ensure_backend()
-
-    if _try_native_window():                   # best path: real native window (own dock/taskbar icon)
-        if proc is not None:                   # window closed -> stop the back end WE started
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+    if _try_native_window():                   # best path: native window (loading page + fresh boot)
         _ = lock
         return
 
     # pywebview's GUI backend is unavailable (e.g. Windows-on-ARM without the .NET Desktop Runtime)
-    # -> chromeless Edge/Chrome --app window. Block on it so we hold the single-instance lock while
-    # it's open; leave the back end running (the window owns it now).
+    # -> bring a FRESH back end up synchronously (the browser window needs it now), then open a
+    # chromeless Edge/Chrome --app window and block on it. Tear the back end down when it closes.
+    proc = ensure_backend()
     browser = _app_mode_window()
     if browser is None:
         log.warning("no Edge/Chrome found for an --app window; opening a normal browser tab")
@@ -311,6 +369,7 @@ def _run():
             browser.wait()                     # returns when the --app window is closed
         except Exception:
             pass
+        _teardown(proc)                        # quit = everything down (the window owned this server)
     _ = lock
 
 

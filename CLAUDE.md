@@ -33,12 +33,22 @@ and macOS Space, NOT a Chrome tab (like Slack). `neitz_app.py` is the cross-plat
 wrappers just point at it. Deps: `pip install -e ".[gui,app]"` (`pywebview`; `pythonnet` on Windows;
 `pyobjc` is pulled on macOS; the Edge **WebView2** runtime ships with Win11).
 
-- **`neitz_app.py`** (cross-platform, `sys.platform`-branched): reuses a healthy back end on
-  127.0.0.1:8050 or starts `python viewer.py` itself (freeing the port first if a half-dead process
-  holds it), then opens a **pywebview** window — WKWebView (macOS) / WebView2 (Windows). **Single
-  instance** via a lock socket (port **8051**): a second launch exits instead of stacking a window
-  (macOS also won't relaunch a running .app). On window close it stops ONLY a back end it *started*
-  (a reused / manually-run server is left alone). "Reuse the same instance" was James's explicit ask.
+- **`neitz_app.py`** (cross-platform, `sys.platform`-branched). **FRESH-START on every launch**
+  (James's ask, mirrored from `benaq_app.py`): `ensure_backend()` ALWAYS frees port 8050 (kills any
+  server holding it, healthy or half-dead) and spawns a new `python viewer.py`, so double-clicking the
+  icon always runs the latest code — verified the port owner + `/neitz-health` boot uuid change each
+  launch. There is no compiled front end (Dash serves the layout from Python and fingerprints
+  `assets/` by mtime → changed CSS/JS auto-busts cache), so a fresh back end + a fresh window load IS
+  a full "rebuild both ends." The window is a **pywebview** one (WKWebView macOS / WebView2 Windows);
+  a spinner **loading-page shows INSTANTLY** (`_LOADING_HTML`), then `webview.start(_boot)` restarts
+  the back end in a background thread and `window.load_url(URL)` swaps to the real UI when healthy —
+  so the window + Dock icon appear at once (a slow windowless launch makes macOS drop the .app
+  identity → generic python icon). **Single instance** via a lock socket (port **8051**): a second
+  launch exits instead of stacking a window (macOS also won't relaunch a running .app). **Quit =
+  everything down** (`_teardown`): on red-button close / Cmd-Q / signal / atexit it stops the back end
+  AND sweeps port 8050, so nothing lingers to be reused — that's what keeps every next start fresh.
+  (This SUPERSEDES the earlier "reuse the same instance" behavior.) The `.app`/Windows launcher just
+  `exec`s this script, so editing `neitz_app.py` takes effect on the next launch — no rebuild needed.
 - **Front-end auto-reload** (James's ask, mirrored from `benaqTools_py`): `viewer.py` serves
   `/neitz-health` → `{boot, code_mtime}` (`boot` = a per-process uuid). `assets/autoreload.js` polls
   it every 2 s and `location.reload()`s when `boot` changes — so relaunching after a code edit
