@@ -198,6 +198,15 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   the layout `uirevision` = a hash of every NON-align parameter (constant across zoom+align → Plotly
   holds the zoom; changes on any other edit → Plotly resets) AND honoring the relayout range only
   when keeping. (Replaces the old blanket `uirevision="keep"`.)
+- **Graph interaction toolbar** (vertical icon strip left of the signal graph — `graph_tools()` /
+  `#graph-toolbar`, a "current tool" palette; the first of a growing set): the active tool lives in
+  the `graph-mode` store (in `UNDO_TRACK`). `set_graph_mode` (buttons → store), a clientside callback
+  highlights the active button, and `build_figures(graph_mode=)` sets each axis' `fixedrange` so a
+  drag-box zooms **X only** (`zoomx`, default = the historical behavior), **Y only** (`zoomy`), or
+  **both** (`zoombox`). Reset (`#gm-reset`) is a clientside `Plotly.relayout` back to the default
+  window — stashed as `time_fig.layout.meta.xr = [x0, x1]`. `graph_mode` is NOT in the `uirevision`
+  hash, so switching tools keeps the current zoom. Planned tools (edit-region drag-handles, highlight,
+  measure, drag-threshold, edit-spikes) plug into this same framework.
 - **ISI histogram** honors the "bin (ms)" box (`train-bin`): `xbins` size = the ms value; 0 → auto
   (60 bins). (That box also drives the spike-train row-1 view when "show binned spikes" is on.)
 - **Group → one average** (files panel checkbox `#group-avg`, needs 3+ checked): `build_figures`

@@ -374,6 +374,28 @@ _MINI_BTN = {"fontSize": "10px", "padding": "0 6px", "cursor": "pointer", "lineH
 _OVL = {"fontSize": "10px", "color": "#444", "fontWeight": "bold"}    # inline label inside an overlay
 _OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "border-box",
         "textAlign": "right"}                                        # compact overlay textbox
+
+# ---- graph interaction toolbar (vertical strip just left of the signal graph) ----------------
+# A "current tool" palette: the active mode sets what a drag does (zoom X / Y / box); reset
+# autoscales to the default window. The active tool is highlighted clientside from the `graph-mode`
+# store, and build_figures reads the mode to set each axis' fixedrange. Future tools (edit-region,
+# highlight, measure, drag-threshold, …) plug into this same framework.
+_GTOOL = {"width": "30px", "height": "30px", "fontSize": "15px", "lineHeight": "1", "padding": "0",
+          "cursor": "pointer", "border": "1px solid #bbb", "borderRadius": "6px",
+          "background": "#f6f6f6"}
+_TOOLBAR = {"display": "flex", "flexDirection": "column", "gap": "5px", "flex": "0 0 auto",
+            "paddingTop": "2px", "alignItems": "center"}
+
+
+def _tool_btn(bid, glyph, title):
+    return html.Button(glyph, id=bid, n_clicks=0, title=title, className="gtool", style=_GTOOL)
+
+
+def graph_tools():
+    return [_tool_btn("gm-zoomx", "↔", "Zoom horizontal — drag zooms X only"),
+            _tool_btn("gm-zoomy", "↕", "Zoom vertical — drag zooms Y only"),
+            _tool_btn("gm-zoombox", "▣", "Zoom box — drag zooms X + Y"),
+            _tool_btn("gm-reset", "↺", "Reset zoom to the default window")]
 # region start/end overlays: start flush with the plot's left (l margin), end flush with the
 # plot's right (r margin). Shared so a callback can hide them when cropping.
 _OV_H = "16px"   # shared overlay-box height: start / end+crop / show-spikes / stagger all equal
@@ -1205,7 +1227,10 @@ app.layout = html.Div(
         ]),
         # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height.
         # Region & display controls float in the corners, hugging the graph.
-        html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
+        html.Div(style={"flex": "3 1 0", "minHeight": 0, "display": "flex", "gap": "4px"}, children=[
+            # graph interaction tools (vertical strip left of the plot, so it never covers traces)
+            html.Div(id="graph-toolbar", style=_TOOLBAR, children=graph_tools()),
+            html.Div(style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}, children=[
             dcc.Graph(id="time", style={"height": "100%"},
                       config={"responsive": True, "scrollZoom": True, "doubleClick": "reset"},
                       figure=blank_fig("pick a cell, then check file(s) to display")),
@@ -1241,6 +1266,7 @@ app.layout = html.Div(
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
                                 debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
                      style=ov(bottom="26px", right="8px")),
+            ]),
         ]),
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
@@ -1280,6 +1306,8 @@ app.layout = html.Div(
     dcc.Store(id="align-map"),                            # {file path: trial-align offset (SECONDS)}
     dcc.Store(id="align-seed"),                           # {file path: offset (ms) shown in the editor}
     dcc.Store(id="hist"),                                 # undo/redo: {"stack": [snapshot,...], "idx": n}
+    dcc.Store(id="graph-mode", data="zoomx", storage_type="local"),   # active graph tool (zoom X/Y/box)
+    dcc.Store(id="gtool-sink"),                            # clientside graph-toolbar callback sink
     dcc.Input(id="undo-key", value="", style={"display": "none"}),   # clientside writes "undo:N"/"redo:N"
     dcc.Input(id="align-focus", value="", style={"display": "none"}),  # JS: focused align box's file path
     dcc.Store(id="align-focus-sink"),                     # clientside highlight callback sink
@@ -1562,20 +1590,63 @@ def toggle_disp_show(binned):
               Input("stagger-pct", "value"),
               Input("region-mode", "value"), Input("train-bin", "value"),
               Input("absth-map", "data"), Input("fft-bin", "value"), Input("align-map", "data"),
-              Input("group-avg", "value"), Input("fft-input", "value"),
+              Input("group-avg", "value"), Input("fft-input", "value"), Input("graph-mode", "data"),
               Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
-           align_map, group, fft_input, relayout):
+           align_map, group, fft_input, graph_mode, relayout):
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
                          fft_bin=fft_bin, align_map=align_map, group=group, fft_input=fft_input,
-                         relayout=relayout, trig=ctx.triggered_id)
+                         graph_mode=graph_mode, relayout=relayout, trig=ctx.triggered_id)
+
+
+# --- graph interaction toolbar wiring ---------------------------------------------------------
+# The mode buttons set the active tool; a clientside callback highlights it; reset autoscales the
+# #time graph back to its default window (layout.meta.xr) with no server round-trip.
+@app.callback(Output("graph-mode", "data"),
+              Input("gm-zoomx", "n_clicks"), Input("gm-zoomy", "n_clicks"),
+              Input("gm-zoombox", "n_clicks"), prevent_initial_call=True)
+def set_graph_mode(a, b, c):
+    return {"gm-zoomx": "zoomx", "gm-zoomy": "zoomy",
+            "gm-zoombox": "zoombox"}.get(ctx.triggered_id, no_update)
+
+
+app.clientside_callback(
+    """function(mode){
+        var ids = {'gm-zoomx':'zoomx','gm-zoomy':'zoomy','gm-zoombox':'zoombox'};
+        Object.keys(ids).forEach(function(id){
+            var b = document.getElementById(id); if(!b) return;
+            var on = ids[id] === mode;
+            b.style.background = on ? '#ffe08a' : '#f6f6f6';
+            b.style.borderColor = on ? '#d0a020' : '#bbb';
+            b.style.fontWeight = on ? '700' : '400';
+        });
+        return '';
+    }""",
+    Output("gtool-sink", "data"), Input("graph-mode", "data"))
+
+
+app.clientside_callback(
+    """function(n){
+        if(!n) return window.dash_clientside.no_update;
+        var gd = document.querySelector('#time .js-plotly-plot');
+        if(gd && window.Plotly){
+            var xr = (gd.layout && gd.layout.meta && gd.layout.meta.xr) || null;
+            var rl = {'yaxis.autorange': true, 'yaxis2.autorange': true};
+            if(xr){ rl['xaxis.range'] = xr; } else { rl['xaxis.autorange'] = true; }
+            window.Plotly.relayout(gd, rl);
+        }
+        return '';
+    }""",
+    Output("gtool-sink", "data", allow_duplicate=True),
+    Input("gm-reset", "n_clicks"), prevent_initial_call=True)
 
 
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                  fft_bin=5.0, align_map=None, group=None, fft_input=None, relayout=None, trig=None):
+                  fft_bin=5.0, align_map=None, group=None, fft_input=None, graph_mode="zoomx",
+                  relayout=None, trig=None):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -1607,6 +1678,8 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     fft_ms = float(fft_bin) if fft_bin else 5.0
     fft_rate = 1000.0 / max(1.0, fft_ms)
     do_input = bool(fft_input)               # FFT panel shows the time-domain input, not the spectrum
+    free_x = graph_mode in ("zoomx", "zoombox")   # graph tool: which axis a drag-box zooms
+    free_y = graph_mode in ("zoomy", "zoombox")
 
     rec0 = get_recording(files[0])
     fs0 = rec0.fs
@@ -1799,15 +1872,17 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     # into a y-only zoom, so a narrow left-right drag zooms the time axis precisely (no minimum
     # width / no broad-horizontal-lines artifact). Y still autoranges to the data; wheel-scroll
     # zooms the x-axis for fine control. fixedrange blocks USER y-zoom only, not the code's autorange.
-    time_fig.update_yaxes(title_text=row1_ylab, row=1, col=1, fixedrange=True)
+    time_fig.update_yaxes(title_text=row1_ylab, row=1, col=1, fixedrange=not free_y)
     # the frame-sync row's y gets its OWN uirevision tied to the staggered extent, so it
     # re-autoranges (all traces fit) when the stagger % or the number of traces changes —
     # the global uirevision="keep" would otherwise pin the old y-range and clip the spread.
-    time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1, autorange=True, fixedrange=True,
+    time_fig.update_yaxes(title_text=ttl_ylab, row=2, col=1, autorange=True, fixedrange=not free_y,
                           uirevision=f"ttl-{stagger_pct}-{len(files)}")
     time_fig.update_xaxes(title_text="time (s)", row=2, col=1, range=[x0, x1])
+    time_fig.update_xaxes(fixedrange=not free_x)   # x-zoom only in horizontal / box modes
     time_fig.update_layout(margin=dict(l=55, r=20, t=30, b=40), uirevision=uirev,
-                           showlegend=False)   # file colors are evident from the Files list
+                           showlegend=False,       # file colors are evident from the Files list
+                           meta={"xr": [x0, x1]})  # default view — the reset tool restores this
 
     # power spectrum: group average + stim marker
     if multi and len(per_file_rates) >= 2:
@@ -3167,7 +3242,7 @@ UNDO_TRACK = [
     ("region-start", "value"), ("region-end", "value"),
     ("region-mode", "value"), ("disp-show", "value"), ("disp-binned", "value"),
     ("stagger-pct", "value"), ("train-bin", "value"), ("fft-bin", "value"),
-    ("group-avg", "value"), ("fft-input", "value"), ("run-name", "value"),
+    ("group-avg", "value"), ("fft-input", "value"), ("graph-mode", "data"), ("run-name", "value"),
     ("absth-sync", "value"), ("absth-seed", "data"), ("align-seed", "data"),
 ]
 _UNDO_KEYS = [f"{cid}.{prop}" for cid, prop in UNDO_TRACK]
