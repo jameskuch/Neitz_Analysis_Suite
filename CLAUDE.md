@@ -519,6 +519,17 @@ is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes
 
 ## Known stale / TODO
 
+- **Run-Analysis manual region/align/bins do NOT reach the STATS (science-relevant).** `run_cell_flicker`
+  computes the pooled ON/OFF on the raw AUTO window; the manual region (`rstart`/`rend`), the
+  `align_map` nudge, and the bins reach only the exported figures (`export_window_figures`), NOT
+  `FlickerParadigm.group_from_trials`. So a hand-aligned/-windowed cell yields aligned FIGURES but
+  auto-window p-values. Both the sidebar Run and the pipelines-view Run inherit this via `_run_one`.
+- **Desktop app: the KILL+REBUILD-on-launch + Dock-icon fix are macOS-only.** `neitz_app.py` on
+  Windows is still a plain fresh-restart (no `_rebuild()`, no icon-identity call) — parity is TODO.
+- **Analysis Pipelines:** a pipeline's own detect/region node params don't OVERRIDE the live
+  Analysis-View state at run time (live state wins by design); execution dispatches to `run_cell_*`,
+  not a true per-node graph interpreter; the editor has click-to-add / click-to-connect (drag-to-add
+  from the palette + drag-to-connect are the next polish).
 - 6 session cells (2025-12 → 2026-02) have blank stimulus metadata pending entry (auto-fillable
   once the stim-manifest import wiring lands — see *Stimulus source & reproduction*).
 - Checkerboard/Gaussian noise now HAVE a seed-based on-disk format (the stim manifest +
