@@ -17,6 +17,7 @@ runtime ships with Windows 11. PowerShell (used to create the shortcut) is alway
 """
 from __future__ import annotations
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -38,16 +39,16 @@ def main() -> None:
         subprocess.run([sys.executable, str(REPO / "scripts" / "build_icon.py")], check=True)
     if not ico.exists():
         raise SystemExit("assets/app_icon.ico not found and could not be generated.")
-    try:                                                    # guard: a git line-ending mangle corrupts it
+    try:                                                    # PIL is optional here; PowerShell also checks
         from PIL import Image
         Image.open(ico).verify()
         print(f"  icon OK: {ico}")
+    except ImportError:
+        pass                                                # no Pillow in this env — .NET verifies below
     except Exception as e:
-        print(f"  WARNING: {ico} is not a readable icon ({e}).\n"
-              f"  If you pulled it from git on Windows, autocrlf may have corrupted it. With the\n"
-              f"  committed .gitattributes this won't recur; restore a clean copy with:\n"
-              f"    git add --renormalize . && git checkout -- assets/app_icon.ico\n"
-              f"  then re-run this script.")
+        print(f"  WARNING: {ico} may be corrupt ({e}). If you pulled it on Windows, restore a clean\n"
+              f"  copy (now that .gitattributes marks it binary):\n"
+              f"    git add --renormalize . && git checkout -- assets/app_icon.ico")
 
     # the windowless interpreter next to this one (python.exe -> pythonw.exe)
     pythonw = Path(sys.executable).with_name("pythonw.exe")
@@ -68,20 +69,32 @@ def main() -> None:
         return
 
     # 3) Desktop shortcut with our icon, via PowerShell + WScript.Shell (no extra pip deps).
-    #    IconLocation MUST carry the icon index (",0") — WScript.Shell shows a blank page icon
-    #    without it. Also print whether .NET can load the .ico, so a bad icon is obvious here.
+    #    IconLocation MUST carry the ",0" index (WScript.Shell shows a blank page without it) AND be
+    #    a LOCAL path: Windows Explorer won't render a .lnk icon from a network share / UNC (this repo
+    #    mounted from a Mac VM host as \\Mac\Home\… or Z:\…), so copy the .ico local first.
+    icon_src = ico
+    try:
+        local_dir = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "NeitzAnalysisSuite"
+        local_dir.mkdir(parents=True, exist_ok=True)
+        icon_src = local_dir / "app_icon.ico"
+        shutil.copy2(ico, icon_src)
+        print(f"  icon copied local: {icon_src}")
+    except Exception as e:
+        print(f"  (could not copy icon to a local path: {e}; using {ico})")
+        icon_src = ico
+
     desktop = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "Desktop"
     lnk = desktop / f"{APP_LABEL}.lnk"
     ps = (
         "Add-Type -AssemblyName System.Drawing; "
-        f"try {{ $i=[System.Drawing.Icon]::new('{ico}'); Write-Output \"icon loads: $($i.Width)x$($i.Height)\" }} "
+        f"try {{ $i=[System.Drawing.Icon]::new('{icon_src}'); Write-Output \"icon loads: $($i.Width)x$($i.Height)\" }} "
         "catch { Write-Output \"ICON INVALID: $($_.Exception.Message)\" }; "
         "$W = New-Object -ComObject WScript.Shell; "
         f"$s = $W.CreateShortcut('{lnk}'); "
         f"$s.TargetPath = '{pyw}'; "
         f"$s.Arguments = '\"{REPO / 'neitz_app.py'}\"'; "
         f"$s.WorkingDirectory = '{REPO}'; "
-        f"$s.IconLocation = '{ico},0'; "
+        f"$s.IconLocation = '{icon_src},0'; "
         f"$s.Description = '{APP_LABEL}'; "
         "$s.Save(); "
         "Write-Output ('IconLocation: ' + $s.IconLocation)"
