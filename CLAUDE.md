@@ -24,6 +24,10 @@ productive immediately. Keep it current when the architecture changes.
   curl -s --retry 15 --retry-delay 1 --retry-connrefused -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:8050/
   lsof -ti tcp:8050   # confirm ONE pid
   ```
+  Or the one-shot **`neitz/rebuild_backend.py`** (force-close → clear bytecode + the background
+  diskcache + `pip install -e ".[gui]"` → restart + health-check): `python -m neitz.rebuild_backend`
+  (flags: `--no-reinstall`, `--no-restart`, `--quiet`). Use it when you want a guaranteed-fresh
+  server (no stale process / port / cache).
   (With the desktop app open, a restart auto-reloads its window — see below.)
 
 ## Desktop app — native window (macOS + Windows 11)
