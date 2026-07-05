@@ -6,9 +6,11 @@ from neitz.io import stim
 
 class MockCM:
     """Minimal duck-typed CellManifest (needs .data['recordings'], .set_stimulus, .dir)."""
-    def __init__(self, tmp, rec_ids):
+    def __init__(self, tmp, rec_ids, ref_ids=()):
         self.dir = tmp / "cell"; self.dir.mkdir(parents=True, exist_ok=True)
-        self.data = {"recordings": [{"id": r} for r in rec_ids]}
+        recs = [{"id": r, "kind": "recording"} for r in rec_ids]
+        recs += [{"id": r, "kind": "reference"} for r in ref_ids]
+        self.data = {"recordings": recs}
         self.set = {}
 
     def set_stimulus(self, rec_id, stim_type, params, source="user"):
@@ -54,3 +56,19 @@ def test_no_manifest_is_noop(tmp_path):
     src = tmp_path / "src"; src.mkdir()     # no manifest file present
     cm = MockCM(tmp_path, ["r1"])
     assert stim.apply_session_manifest(cm, src, date="2026-07-04") == 0
+
+
+def test_reference_recordings_are_excluded(tmp_path):
+    src = tmp_path / "src"; src.mkdir()
+    _manifest(src, 3)                                            # 3 stimulus rows
+    cm = MockCM(tmp_path, ["r1", "r2", "r3"], ref_ids=["ref1"])  # + 1 reference recording
+    assert stim.apply_session_manifest(cm, src, date="2026-07-04") == 3   # no false mismatch
+    assert set(cm.set) == {"r1", "r2", "r3"}                    # the reference is NOT tagged
+
+
+def test_mismatch_still_fires_ignoring_references(tmp_path):
+    src = tmp_path / "src"; src.mkdir()
+    _manifest(src, 3)                                            # 3 rows
+    cm = MockCM(tmp_path, ["r1", "r2"], ref_ids=["ref1", "ref2"])  # only 2 stimulus recs
+    with pytest.raises(ValueError, match="count mismatch"):
+        stim.apply_session_manifest(cm, src, date="2026-07-04")

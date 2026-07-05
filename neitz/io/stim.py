@@ -15,7 +15,10 @@ with one record per trial, e.g.::
      "timestamp": "2026-07-03T09:14:02"}
 
 Trials pair to Clampex ``.abf`` recordings BY ORDER (manifest row order == acquisition
-order); ``timestamp`` is available as a cross-check. The seed is the source of truth —
+order); :func:`apply_session_manifest` refuses to pair when the row and (non-reference)
+recording counts disagree. (The ``timestamp`` field is recorded for provenance; using it
+to *verify* order — and catch an equal-count but mis-ordered pairing — is a future
+hardening, not yet implemented.) The seed is the source of truth —
 :func:`noise_from_record` regenerates the exact linear stimulus via
 :mod:`neitz.stimulus.reproduce`; :func:`sent_codes_from_record` recovers the 8-bit
 codes that were actually displayed.
@@ -86,11 +89,16 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, s
     so the stored cell is self-contained. Returns the number of recordings tagged — ``0``
     (a no-op) when no manifest is found, so callers can fall back to hand-entered stimulus.
 
-    By-order pairing is only valid with exactly one manifest row per recording. If the
-    counts differ (a session that crossed midnight into a second manifest file, an aborted
-    trial, or an orphan row) pairing would SILENTLY mislabel trials — so with ``strict``
-    (default) this raises ``ValueError`` instead of mispairing; ``strict=False`` warns and
-    returns 0 so the caller can fall back to hand-entry.
+    Only ``kind == "recording"`` recordings are paired; ``reference``/baseline recordings
+    have no manifest row and are skipped (matching ``run.py``'s trial collection).
+
+    By-order pairing is only valid with exactly one manifest row per stimulus recording. If
+    the counts differ (a session that crossed midnight into a second manifest file, an
+    aborted trial, or an orphan row) pairing would SILENTLY mislabel trials — so with
+    ``strict`` (default) this raises ``ValueError`` instead of mispairing; ``strict=False``
+    warns and returns 0 so the caller can fall back to hand-entry. NOTE: this guards
+    cardinality only; an equal-but-mis-ordered pairing (a rare double-fault) is not yet
+    caught — a timestamp-based order check is a future hardening.
 
     `cm` is duck-typed (needs ``.data["recordings"]``, ``.set_stimulus``, ``.dir``) so this
     stays free of a `dataio` import.
@@ -99,11 +107,12 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, s
     if not mf:
         return 0
     rows = load_session_manifest(mf)
-    rec_ids = [r["id"] for r in cm.data.get("recordings", [])]
+    rec_ids = [r["id"] for r in cm.data.get("recordings", [])
+               if r.get("kind", "recording") == "recording"]
     if len(rows) != len(rec_ids):
         msg = (f"stim-manifest / recording count mismatch: {len(rows)} rows in {mf.name} vs "
-               f"{len(rec_ids)} recordings. By-order pairing would silently mislabel trials "
-               f"(session crossed midnight? aborted/orphan trial?). Refusing to auto-pair.")
+               f"{len(rec_ids)} stimulus recordings. By-order pairing would silently mislabel "
+               f"trials (session crossed midnight? aborted/orphan trial?). Refusing to auto-pair.")
         if strict:
             raise ValueError(msg)
         import warnings
