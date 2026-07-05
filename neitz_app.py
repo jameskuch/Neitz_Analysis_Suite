@@ -198,7 +198,24 @@ def _try_native_window():
             return True
 
     try:
-        webview.create_window(TITLE, URL, width=1440, height=900, min_size=(940, 620), js_api=_Api())
+        win = webview.create_window(TITLE, URL, width=1440, height=900, min_size=(940, 620),
+                                    js_api=_Api())
+        if IS_WIN:                             # give the native (WinForms) window OUR taskbar icon,
+            ico = str(REPO / "assets" / "app_icon.ico")   # not pythonw's default Python icon
+
+            def _set_icon():
+                try:
+                    import clr
+                    clr.AddReference("System.Drawing")
+                    from System.Drawing import Icon as _Icon
+                    win.native.Icon = _Icon(ico)
+                    log.info("set native window icon from %s", ico)
+                except Exception as e:
+                    log.warning("could not set window icon: %s", e)
+            try:
+                win.events.shown += _set_icon
+            except Exception:
+                _set_icon()
         log.info("webview.start() — native window open")
         webview.start()                        # blocks on the main thread until the window closes
         log.info("webview.start() returned — window closed")
