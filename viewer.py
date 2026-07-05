@@ -46,6 +46,7 @@ from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
 from neitz.dataio import DataStore
 from neitz.run import run_cell_flicker, run_cell_noise, run_cell_checkerboard
+from neitz import pipeline as pipe            # analysis-pipeline model / storage / run mapping
 
 # default browse location is the managed data store (~/Documents/ephysdataio)
 EPHYS_ROOT = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
@@ -928,9 +929,119 @@ _EXPLORER_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
                    "zIndex": 2500, "flexDirection": "column", "padding": "10px",
                    "boxSizing": "border-box"}
 
+_PIPE_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
+               "width": "100%", "height": "100%", "background": "#12141a",
+               "zIndex": 2500, "flexDirection": "column", "padding": "10px",
+               "boxSizing": "border-box"}
+
 _DEL_SHOWN = {"display": "flex", "position": "fixed", "top": 0, "left": 0,
               "width": "100%", "height": "100%", "background": "rgba(0,0,0,0.6)",
               "zIndex": 2800, "alignItems": "center", "justifyContent": "center"}
+
+
+# ============================================================
+# Analysis Pipelines — node-graph editor (a third view). Nodes are Dash-rendered (so their param
+# fields are real components with callbacks); the connection curves + node dragging + click-to-
+# connect are drawn/handled in assets/pipeline.js. These geometry constants MUST match pipeline.js.
+# ============================================================
+_PNODE_W = 194      # node width (px)
+_PHDR_H = 26        # node header height (px) — also the drag handle
+_PPORT_Y0 = _PHDR_H + 12   # first port's center-y offset from the node top
+_PPORT_DY = 21             # vertical spacing between stacked ports
+_PORT_TYPE_COLOR = {pipe.PORT_RECORDINGS: "#6fb0ff", pipe.PORT_SPIKES: "#c78cff",
+                    pipe.PORT_RESULT: "#ffcf6f", pipe.PORT_OUTPUTS: "#9fe0b0"}
+
+
+def _pipe_param_field(node_id, pname, spec, value):
+    """One inline parameter control inside a node (its id feeds the {pparam} pattern callback)."""
+    pid = {"type": "pparam", "node": node_id, "param": pname}
+    ptype = spec.get("type", "text")
+    base = {"width": "100%", "boxSizing": "border-box", "fontSize": "10px", "height": "17px"}
+    if ptype == "choice":
+        return dcc.Dropdown(id=pid, options=[{"label": o, "value": o} for o in spec.get("options", [])],
+                            value=value, clearable=False, style={"fontSize": "10px"},
+                            className="pparam-dd")
+    if ptype == "bool":
+        return dcc.Checklist(id=pid, options=[{"label": "", "value": "on"}],
+                             value=["on"] if value else [], style={"margin": 0},
+                             inputStyle={"marginRight": "3px"})
+    if ptype == "number":
+        return dcc.Input(id=pid, type="number", value=value, debounce=True,
+                         step=spec.get("step"), style=base)
+    return dcc.Input(id=pid, type="text", value=value, debounce=True, style=base)
+
+
+def _pipe_port(node_id, port, io, index):
+    """A clickable port dot (id feeds the {pport} pattern callback for click-to-connect)."""
+    color = _PORT_TYPE_COLOR.get(port["type"], "#bbb")
+    y = _PPORT_Y0 + index * _PPORT_DY
+    side = {"left": "-6px"} if io == "in" else {"right": "-6px"}
+    return html.Div(
+        html.Div(style={"width": "11px", "height": "11px", "borderRadius": "50%",
+                        "background": color, "border": "1.5px solid #0c0e13"}),
+        id={"type": "pport", "node": node_id, "port": port["name"], "io": io},
+        className="pport", title=f"{port['name']} · {port['type']} ({io})",
+        **{"data-io": io, "data-ptype": port["type"], "data-node": node_id, "data-port": port["name"]},
+        style={"position": "absolute", "top": f"{y - 6}px", **side, "cursor": "crosshair",
+               "zIndex": 3, "padding": "3px"})
+
+
+def render_pipe_node(node):
+    """Render one component node as an absolutely-positioned Dash div (params inline)."""
+    spec = pipe.COMPONENT_REGISTRY.get(node["type"], {})
+    nid = node["id"]
+    ins, outs = spec.get("inputs", []), spec.get("outputs", [])
+    body_rows = max(len(ins), len(outs))
+    # parameter rows (label + control), each on its own line
+    prows = []
+    for pname, pspec in spec.get("params", {}).items():
+        prows.append(html.Div([
+            html.Div(pspec.get("label", pname), style={"fontSize": "9px", "color": "#c8ccd6",
+                                                       "marginBottom": "1px"}),
+            _pipe_param_field(nid, pname, pspec, node["params"].get(pname)),
+        ], style={"marginBottom": "4px"}))
+    port_dots = ([_pipe_port(nid, p, "in", i) for i, p in enumerate(ins)]
+                 + [_pipe_port(nid, p, "out", i) for i, p in enumerate(outs)])
+    header = html.Div([
+        html.Span(spec.get("label", node["type"]), style={"flex": "1", "overflow": "hidden",
+                                                          "textOverflow": "ellipsis"}),
+        html.Span("✕", id={"type": "pnode-del", "node": nid}, n_clicks=0, className="pnode-del",
+                  title="delete this component"),
+    ], className="pnode-header", **{"data-node": nid},
+        style={"height": f"{_PHDR_H}px", "lineHeight": f"{_PHDR_H}px", "padding": "0 7px",
+               "background": spec.get("color", "#444"), "color": "white", "fontSize": "11px",
+               "fontWeight": "bold", "borderTopLeftRadius": "6px", "borderTopRightRadius": "6px",
+               "cursor": "grab", "display": "flex", "alignItems": "center", "gap": "4px",
+               "whiteSpace": "nowrap"})
+    # min body height so ports never overflow the box even with few params
+    min_body = _PPORT_Y0 + max(0, body_rows - 1) * _PPORT_DY
+    body = html.Div(prows or [html.Div(spec.get("help", ""), style={"fontSize": "9px",
+                                       "color": "#8a90a0", "fontStyle": "italic"})],
+                    style={"padding": "7px 9px", "minHeight": f"{max(14, min_body - _PHDR_H)}px"})
+    return html.Div([header, body] + port_dots,
+                    id={"type": "pnode", "node": nid}, className="pnode",
+                    **{"data-node": nid, "data-x": node.get("x", 40), "data-y": node.get("y", 40)},
+                    style={"position": "absolute", "left": f"{node.get('x', 40)}px",
+                           "top": f"{node.get('y', 40)}px", "width": f"{_PNODE_W}px",
+                           "background": "#20242e", "border": "1px solid #3a3f4c",
+                           "borderRadius": "7px", "boxShadow": "0 2px 8px rgba(0,0,0,0.4)"})
+
+
+def pipe_palette():
+    """The component palette (left rail) — click a component to add it to the canvas."""
+    by_cat: dict = {}
+    for ctype, spec in pipe.COMPONENT_REGISTRY.items():
+        by_cat.setdefault(spec.get("category", "other"), []).append((ctype, spec))
+    order = ["source", "processing", "analysis", "output", "other"]
+    items = [html.Div("Components", style={"fontSize": "11px", "fontWeight": "bold",
+                                           "color": "#aab", "margin": "0 0 6px"})]
+    for cat in order:
+        for ctype, spec in by_cat.get(cat, []):
+            items.append(html.Button(spec.get("label", ctype),
+                         id={"type": "pal-add", "ctype": ctype}, n_clicks=0,
+                         title=spec.get("help", ""), className="pal-item",
+                         style={"borderLeft": f"4px solid {spec.get('color', '#555')}"}))
+    return items
 
 
 # ============================================================
@@ -1002,28 +1113,34 @@ def _neitz_health():
     return jsonify(boot=_BOOT_ID, code_mtime=_BOOT_CODE_MTIME, root=root)
 
 
+# view switcher: THREE pills (Analysis View · Data Explorer · Analysis Pipelines), always all three.
+# Every nav bar is in the DOM at once (the explorer + pipelines modals are display:none, not removed),
+# so each CLICKABLE pill needs a globally-unique id — hence per-active click ids (the active view's
+# pill is a non-clickable label). nav_route consumes all six; Escape closes via getElementById.
+_NAV_IDS = {
+    "analysis":  {"de": "open-explorer",    "pp": "open-pipelines"},
+    "explorer":  {"av": "exp-close",        "pp": "exp-to-pipelines"},
+    "pipelines": {"av": "pipe-to-analysis", "de": "pipe-to-explorer"},
+}
+
+
 def nav_toggle(active, dark=False):
-    """Upper view switcher: 'Analysis View' (left) … 'Data Explorer' (right), always both. Each sits
-    in a big rounded-rect pill whose gradient (a blurred rounded-rectangle behind the text — see the
-    .nav-pill CSS) is small at rest and blooms a little on hover, feathering into the background with
-    no clipped edges. The SELECTED view gets an inner text glow (yellow / blue) and isn't clickable;
-    the OTHER is the clickable target (ids open-explorer / exp-close, unchanged)."""
-    def pill(label, which, selected, click_id):
+    """Upper view switcher. Each pill is a big rounded-rect whose gradient (see the .nav-pill CSS)
+    blooms on hover; the SELECTED view gets an inner text glow and isn't clickable, the others are
+    the clickable targets (unique ids from _NAV_IDS[active])."""
+    ids = _NAV_IDS[active]
+
+    def pill(label, which):
+        click_id = ids.get(which)
+        selected = click_id is None
         cls = f"nav-pill nav-{which}" + (" nav-sel" if selected else " nav-clickable")
-        if selected:                                    # the current view: no arrow, not clickable
+        if selected:
             return html.Span(label, className=cls)
-        arrow_l = html.Span("➤", style={"display": "inline-block", "transform": "scaleX(-1)",
-                                         "marginRight": "7px"})
-        arrow_r = html.Span("➤", style={"marginLeft": "7px"})
-        kids = [arrow_l, label] if which == "av" else [label, arrow_r]   # arrow points its direction
-        return html.Span(kids, id=click_id, n_clicks=0, className=cls,
-                         title=("open the Data Explorer" if which == "de" else "go to the Analysis View"))
-    av = pill("Analysis View", "av", active == "analysis", "exp-close")
-    de = pill("Data Explorer", "de", active == "explorer", "open-explorer")
-    return html.Div([av, de], style={"display": "flex", "justifyContent": "flex-start",
-                                     "alignItems": "center",
-                                     "gap": "12px", "flexWrap": "wrap",
-                                     "marginTop": "16px"})   # lower the row (room above for the gradient)
+        return html.Span(label, id=click_id, n_clicks=0, className=cls, title=f"go to {label}")
+    return html.Div([pill("Analysis View", "av"), pill("Data Explorer", "de"),
+                     pill("Analysis Pipelines", "pp")],
+                    style={"display": "flex", "justifyContent": "flex-start", "alignItems": "center",
+                           "gap": "12px", "flexWrap": "wrap", "marginTop": "16px"})
 
 app.layout = html.Div(
     style={"fontFamily": "sans-serif", "display": "flex", "gap": "10px",
@@ -1095,12 +1212,18 @@ app.layout = html.Div(
                                        "borderRadius": "4px", "marginTop": "6px",
                                        "marginBottom": "8px"}),
 
-            # stimulus + cell metadata editing now lives in the Data Explorer; the analysis
-            # view only RUNS the analysis (dispatched by the cell's saved stimulus type).
+            # stimulus + cell metadata editing lives in the Data Explorer; the Analysis View RUNS a
+            # PIPELINE (pick which — default = the one matching the cell's stimulus). The run always
+            # uses the LIVE Analysis-View settings (region / detection / alignment / files).
+            html.Div([html.Label("pipeline", style=dict(_LBL, marginBottom="2px")),
+                      dcc.Dropdown(id="run-pipeline", options=[], clearable=True,
+                                   placeholder="auto (by stimulus type)",
+                                   style={"width": "100%", "fontSize": "12px"})],
+                     style={"marginTop": "2px"}),
             html.Div(html.Button("▶ Run analysis", id="run-cell", n_clicks=0,
-                                 style={"width": "100%", "marginTop": "2px"})),
-            html.Div([html.Label("run by the cell's stimulus type · run name keeps a variant "
-                                 "(blank = auto)", style=dict(_LBL, fontWeight="normal")),
+                                 style={"width": "100%", "marginTop": "5px"})),
+            html.Div([html.Label("edit pipelines in the Analysis Pipelines tab · run name keeps a "
+                                 "variant (blank = auto)", style=dict(_LBL, fontWeight="normal")),
                       dcc.Input(id="run-name", type="text", value="", debounce=True,
                                 placeholder="auto (sq wave / sta)",
                                 style={"width": "100%", "boxSizing": "border-box"})],
@@ -1318,6 +1441,13 @@ app.layout = html.Div(
     dcc.Store(id="align-seed"),                           # {file path: offset (ms) shown in the editor}
     dcc.Store(id="hist"),                                 # undo/redo: {"stack": [snapshot,...], "idx": n}
     dcc.Store(id="view-rev", data=0),                     # bumped on save/delete → refresh #view-select
+    # ---- Analysis Pipelines state ----
+    dcc.Store(id="pipe-graph"),                           # the current pipeline dict {name,nodes,connections}
+    dcc.Store(id="pipe-rev", data=0),                     # bumped on save/delete → refresh #pipe-select
+    dcc.Store(id="pipe-armed"),                           # {node,port} of a "clicked output" awaiting a target
+    dcc.Input(id="pipe-drag-sink", value="", style={"display": "none"}),     # JS: "node|x|y" on drag-end
+    dcc.Input(id="pipe-connect-sink", value="", style={"display": "none"}),  # JS: "fromN|fromP|toN|toP" on connect
+    dcc.Store(id="pipe-draw-tick"),                       # clientside connection-redraw sink
     dcc.Input(id="undo-key", value="", style={"display": "none"}),   # clientside writes "undo:N"/"redo:N"
     dcc.Input(id="align-focus", value="", style={"display": "none"}),  # JS: focused align box's file path
     dcc.Store(id="align-focus-sink"),                     # clientside highlight callback sink
@@ -1348,6 +1478,53 @@ app.layout = html.Div(
         html.Img(id="modal-img", style={"maxWidth": "94vw", "maxHeight": "92vh", "zIndex": 1,
                                         "position": "relative",
                                         "boxShadow": "0 0 24px #000", "background": "white"}),
+    ]),
+
+    # ================= ANALYSIS PIPELINES pop-out (node-graph editor) =====
+    html.Div(id="pipelines-modal", style={"display": "none"}, children=[
+        # header: view switcher + pipeline controls (load / new / save / save-as / delete / run)
+        html.Div(style={"display": "flex", "alignItems": "center", "gap": "10px", "flexWrap": "wrap",
+                        "color": "white", "marginBottom": "6px", "flex": "0 0 auto"}, children=[
+            nav_toggle("pipelines", dark=True),
+            html.Div(style={"borderLeft": "1px solid #3a3f4c", "alignSelf": "stretch",
+                            "margin": "0 4px"}),
+            html.Div(dcc.Dropdown(id="pipe-select", options=[], placeholder="load a pipeline…",
+                                  clearable=False, style={"fontSize": "12px"}),
+                     style={"width": "220px"}),
+            dcc.Input(id="pipe-name", type="text", value="", placeholder="name…", debounce=False,
+                      style={"width": "150px", "fontSize": "12px", "height": "24px"}),
+            html.Button("💾 Save", id="pipe-save", n_clicks=0, className="pipe-btn"),
+            html.Button("⧉ Save as", id="pipe-saveas", n_clicks=0, className="pipe-btn"),
+            html.Button("＋ New", id="pipe-new", n_clicks=0, className="pipe-btn"),
+            html.Button("🗑 Delete", id="pipe-delete", n_clicks=0, className="pipe-btn"),
+            html.Button("▶ Run on current cell", id="pipe-run", n_clicks=0,
+                        className="pipe-btn", style={"background": "#1a8c6e", "color": "white"}),
+            html.Span(id="pipe-msg", style={"fontSize": "12px", "color": "#7fdc9f"}),
+        ]),
+        # body: palette (left) · canvas (fills)
+        html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "8px"}, children=[
+            html.Div(id="pipe-palette", children=pipe_palette(),
+                     style={"flex": "0 0 168px", "overflowY": "auto", "background": "#181b22",
+                            "border": "1px solid #2a2f3a", "borderRadius": "6px", "padding": "8px",
+                            "display": "flex", "flexDirection": "column", "gap": "5px"}),
+            # the canvas: an absolutely-positioned node layer over an SVG connection layer (JS-drawn).
+            # #pipe-canvas is the positioning context; nodes + #pipe-conn (svg) are its children.
+            html.Div(id="pipe-canvas-wrap",
+                     style={"flex": "1 1 0", "minWidth": 0, "position": "relative",
+                            "overflow": "auto", "background": "#0e1015",
+                            "border": "1px solid #2a2f3a", "borderRadius": "6px",
+                            "backgroundImage": "radial-gradient(#20242e 1px, transparent 1px)",
+                            "backgroundSize": "22px 22px"}, children=[
+                html.Div(id="pipe-canvas", style={"position": "relative", "width": "2400px",
+                                                  "height": "1400px"}, children=[
+                    # SVG connection layer (JS fills its innerHTML from the graph + node DOM positions)
+                    html.Div(id="pipe-conn", style={"position": "absolute", "top": 0, "left": 0,
+                                                    "width": "100%", "height": "100%",
+                                                    "pointerEvents": "none", "zIndex": 1}),
+                    html.Div(id="pipe-nodes", style={"position": "absolute", "top": 0, "left": 0}),
+                ]),
+            ]),
+        ]),
     ]),
 
     # ================= DATA EXPLORER pop-out (dates → cells → files + JSON) =====
@@ -2664,11 +2841,90 @@ def _attach_output_files(ds, date, cell, analysis, saved):
         ds.update_index()
 
 
-# ---- run the analysis for the selected cell(s), dispatched by their stimulus type --
+# run ONE cell for a given analysis `kind`, using the LIVE Analysis-View settings (region /
+# detection / alignment / channels / files). Shared by the Analysis-View "Run analysis" and the
+# pipelines-view "Run on current cell" so both honor the current state (James's ask). Returns a
+# one-line summary string. `kind` ∈ gaussian_noise | checkerboard | (anything else → flicker).
+def _run_one(ds, s, kind, *, raw_name, user_name, detect, abs_map, checked, chan, ttl,
+             n_shuffle, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
+             fft_bin, align_map):
+    tag = f"{s['date']}/{s['cell']}"
+    cm = ds.cell(s["date"], s["cell"])
+    try:
+        if kind == "gaussian_noise":                     # temporal STA (seed → reverse correlation)
+            nm = user_name or "sta"
+            r = run_cell_noise(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
+                               chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
+            sm = r.summary[0]
+            return f"{tag} [{nm}]: STA {sm['n_epochs']} epochs, peak {sm['peak_ms']:.1f} ms {sm['peak_sign']}"
+        if kind == "checkerboard":                       # spatiotemporal STRF (seed → reverse corr.)
+            nm = user_name or "strf"
+            r = run_cell_checkerboard(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
+                                      chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
+            sm = r.summary[0]
+            return (f"{tag} [{nm}]: STRF {sm['n_epochs']} epochs, "
+                    f"peak (y{sm['peak_y']},x{sm['peak_x']}) {sm['peak_time_ms']:.1f} ms")
+        # default: square-wave (flicker) ON/OFF
+        nm = user_name or "flicker"
+        cmdir = str(cm.dir)
+        sub = [f for f in (checked or []) if f.startswith(cmdir) and f.endswith(".abf")]
+        r = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=int(n_shuffle or 500),
+                             name=nm, include=(sub or None),
+                             detect=detect, abs_map=abs_map, run_label=raw_name or None)
+        p = r.tables["pooled_onoff"][0]
+        msg = f"{tag} [{nm}]: {len(r.summary)} file(s), {p['flicker_hz']:.1f} Hz, '{p['verdict']}'"
+        try:                                             # also save the 4K window exports (kaleido)
+            exp_files = sub or [str(cm.dir / rr["file"]) for rr in cm.data.get("recordings", [])
+                                if str(rr.get("file", "")).endswith(".abf")]
+            saved = export_window_figures(
+                cm.output_dir(nm), f"{tag} [{raw_name or nm}]",
+                files=exp_files, chan=chan, ttl_name=ttl, polarity=detect["polarity"],
+                method=detect["method"], k=detect.get("k"), absth=detect.get("abs_threshold"),
+                refr=(detect.get("refractory_s") or 0.002) * 1000.0, rstart=rstart, rend=rend,
+                region_mode=region_mode, stagger_pct=stagger_pct, disp_show=disp_show,
+                disp_binned=disp_binned, train_bin=train_bin, absth_map=abs_map, fft_bin=fft_bin,
+                align_map=align_map)
+            if saved:
+                _attach_output_files(ds, s["date"], s["cell"], nm, saved)
+                msg += f" +{len(saved)} 4K file(s)"
+        except Exception as e:
+            msg += f" (4K export skipped: {e})"
+        return msg
+    except SystemExit as e:
+        return f"{tag}: {e}"
+    except Exception as e:
+        return f"{tag}: error {e}"
+
+
+def _run_banner(msgs):
+    return html.Div([
+        html.Span("✓ Analysis complete", style={"fontWeight": "bold", "fontSize": "16px"}),
+        html.Div("  ·  ".join(msgs), style={"fontSize": "12px", "marginTop": "3px"}),
+        html.Div("outputs saved — view them in the Data Explorer or Finder",
+                 style={"fontSize": "11px", "marginTop": "2px", "opacity": 0.8}),
+    ], style={"background": "#e7f6e7", "border": "1.5px solid #4fae4f", "borderRadius": "6px",
+              "padding": "9px 11px", "color": "#0a5a0a"})
+
+
+def _live_detect(polarity, method, k, absth, refr):
+    return dict(polarity=polarity, method=method,
+                k=float(k) if k is not None else None,
+                abs_threshold=float(absth) if absth is not None else None,
+                refractory_s=(float(refr) / 1000.0) if refr else 0.002)
+
+
+def _cell_stim_type(cm):
+    return next((r["stimulus"].get("type") for r in cm.data.get("recordings", [])
+                 if r.get("stimulus")), None)
+
+
+# ---- run the analysis for the selected cell(s). A pipeline may be chosen (its terminal node sets
+#      the analysis kind); otherwise the cell's saved stimulus type dispatches. Either way the LIVE
+#      Analysis-View settings are what runs (task: current state feeds the pipeline). ----
 @app.callback(Output("store-msg", "children", allow_duplicate=True),
               Output("gallery-trigger", "data", allow_duplicate=True),
               Input("run-cell", "n_clicks"), State("sel-cell", "data"),
-              State("file", "value"), State("run-name", "value"),
+              State("file", "value"), State("run-name", "value"), State("run-pipeline", "value"),
               State("polarity", "value"), State("method", "value"), State("k", "value"),
               State("absth", "value"), State("refr", "value"), State("absth-map", "data"),
               State("chan", "value"), State("ttl", "value"),
@@ -2680,78 +2936,75 @@ def _attach_output_files(ds, date, cell, analysis, saved):
               running=[(Output("run-cell", "disabled"), True, False),   # exports take ~1-2 min);
                        (Output("run-cell", "children"), "⏳ Running… (~1-2 min)", "▶ Run analysis")],
               prevent_initial_call=True)                   # outputs auto-refresh the UI when done
-def run_cell(_n, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
+def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, absth, refr, absth_map,
              chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
              fft_bin, align_map):
     import re
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "pick a cell first", no_update
-    raw_name = (run_name or "").strip()                  # the user's friendly run name (preserved)
+    raw_name = (run_name or "").strip()
     user_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name)
-    detect = dict(polarity=polarity, method=method,      # the live GUI spike-detection settings
-                  k=float(k) if k is not None else None,
-                  abs_threshold=float(absth) if absth is not None else None,
-                  refractory_s=(float(refr) / 1000.0) if refr else 0.002)
-    abs_map = absth_map or None                          # per-trace abs thresholds {path: value}
+    detect = _live_detect(polarity, method, k, absth, refr)
+    abs_map = absth_map or None
     checked = [c for c in (checked or []) if c]
+    sel_pipe = pipe.load_pipeline(run_pipeline) if run_pipeline else None
+    n_shuffle = pipe.run_kwargs(sel_pipe)["n_shuffle"] if sel_pipe else 500
     ds, msgs = DataStore(), []
     for s in sels:
-        tag = f"{s['date']}/{s['cell']}"
         cm = ds.cell(s["date"], s["cell"])
-        stype = next((r["stimulus"].get("type") for r in cm.data.get("recordings", [])
-                      if r.get("stimulus")), None)       # the cell's stimulus type (explicit metadata)
-        try:
-            if stype == "gaussian_noise":                # temporal STA (seed → reverse correlation)
-                nm = user_name or "sta"
-                r = run_cell_noise(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
-                                   chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
-                sm = r.summary[0]
-                msgs.append(f"{tag} [{nm}]: STA {sm['n_epochs']} epochs, "
-                            f"peak {sm['peak_ms']:.1f} ms {sm['peak_sign']}")
-            elif stype == "checkerboard":                # spatiotemporal STRF (seed → reverse corr.)
-                nm = user_name or "strf"
-                r = run_cell_checkerboard(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
-                                          chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
-                sm = r.summary[0]
-                msgs.append(f"{tag} [{nm}]: STRF {sm['n_epochs']} epochs, "
-                            f"peak (y{sm['peak_y']},x{sm['peak_x']}) {sm['peak_time_ms']:.1f} ms")
-            else:                                        # default: square-wave (flicker) ON/OFF
-                nm = user_name or "flicker"
-                cmdir = str(cm.dir)
-                sub = [f for f in checked if f.startswith(cmdir) and f.endswith(".abf")]
-                r = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=500,
-                                     name=nm, include=(sub or None),
-                                     detect=detect, abs_map=abs_map, run_label=raw_name or None)
-                p = r.tables["pooled_onoff"][0]
-                msgs.append(f"{tag} [{nm}]: {len(r.summary)} file(s), "
-                            f"{p['flicker_hz']:.1f} Hz, '{p['verdict']}'")
-                try:                                     # also save the 4K window exports (kaleido)
-                    exp_files = sub or [str(cm.dir / rr["file"]) for rr in cm.data.get("recordings", [])
-                                        if str(rr.get("file", "")).endswith(".abf")]
-                    saved = export_window_figures(
-                        cm.output_dir(nm), f"{tag} [{raw_name or nm}]",
-                        files=exp_files, chan=chan, ttl_name=ttl, polarity=polarity, method=method,
-                        k=k, absth=absth, refr=refr, rstart=rstart, rend=rend, region_mode=region_mode,
-                        stagger_pct=stagger_pct, disp_show=disp_show, disp_binned=disp_binned,
-                        train_bin=train_bin, absth_map=abs_map, fft_bin=fft_bin, align_map=align_map)
-                    if saved:
-                        _attach_output_files(ds, s["date"], s["cell"], nm, saved)
-                        msgs[-1] += f" +{len(saved)} 4K file(s)"
-                except Exception as e:
-                    msgs[-1] += f" (4K export skipped: {e})"
-        except SystemExit as e:
-            msgs.append(f"{tag}: {e}")
-        except Exception as e:
-            msgs.append(f"{tag}: error {e}")
-    banner = html.Div([
-        html.Span("✓ Analysis complete", style={"fontWeight": "bold", "fontSize": "16px"}),
-        html.Div("  ·  ".join(msgs), style={"fontSize": "12px", "marginTop": "3px"}),
-        html.Div("outputs saved — view them in the Data Explorer or Finder",
-                 style={"fontSize": "11px", "marginTop": "2px", "opacity": 0.8}),
-    ], style={"background": "#e7f6e7", "border": "1.5px solid #4fae4f", "borderRadius": "6px",
-              "padding": "9px 11px", "color": "#0a5a0a"})
-    return banner, (_n or 1)
+        # a chosen pipeline's terminal sets the analysis kind; else the cell's stimulus type
+        kind = (pipe.pipeline_stim_family(sel_pipe) if sel_pipe else None) or _cell_stim_type(cm)
+        msgs.append(_run_one(ds, s, kind, raw_name=raw_name, user_name=user_name, detect=detect,
+                             abs_map=abs_map, checked=checked, chan=chan, ttl=ttl, n_shuffle=n_shuffle,
+                             rstart=rstart, rend=rend, region_mode=region_mode, stagger_pct=stagger_pct,
+                             disp_show=disp_show, disp_binned=disp_binned, train_bin=train_bin,
+                             fft_bin=fft_bin, align_map=align_map))
+    return _run_banner(msgs), (_n or 1)
+
+
+# ---- pipelines view: "Run on current cell" runs the EDITED graph on the Analysis-View selection,
+#      using the live Analysis-View settings (same _run_one path as the sidebar Run). ----
+@app.callback(Output("pipe-msg", "children", allow_duplicate=True),
+              Output("gallery-trigger", "data", allow_duplicate=True),
+              Input("pipe-run", "n_clicks"), State("pipe-graph", "data"),
+              State("sel-cell", "data"), State("file", "value"), State("run-name", "value"),
+              State("polarity", "value"), State("method", "value"), State("k", "value"),
+              State("absth", "value"), State("refr", "value"), State("absth-map", "data"),
+              State("chan", "value"), State("ttl", "value"),
+              State("region-start", "value"), State("region-end", "value"),
+              State("region-mode", "value"), State("stagger-pct", "value"),
+              State("disp-show", "value"), State("disp-binned", "value"), State("train-bin", "value"),
+              State("fft-bin", "value"), State("align-map", "data"),
+              background=True,
+              running=[(Output("pipe-run", "disabled"), True, False),
+                       (Output("pipe-run", "children"), "⏳ Running…", "▶ Run on current cell")],
+              prevent_initial_call=True)
+def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
+             chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
+             fft_bin, align_map):
+    import re
+    sels = sel if isinstance(sel, list) else ([sel] if sel else [])
+    if not sels:
+        return "⚠ pick a cell in the Analysis View first", no_update
+    if not graph:
+        return "⚠ load or build a pipeline first", no_update
+    kind = pipe.pipeline_stim_family(graph)
+    if kind is None:
+        return "⚠ pipeline has no analysis node (flicker / STA / STRF)", no_update
+    raw_name = (run_name or "").strip() or (graph.get("name") or "")
+    user_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", raw_name)
+    detect = _live_detect(polarity, method, k, absth, refr)
+    n_shuffle = pipe.run_kwargs(graph)["n_shuffle"]
+    ds, msgs = DataStore(), []
+    for s in sels:
+        msgs.append(_run_one(ds, s, kind, raw_name=raw_name, user_name=user_name, detect=detect,
+                             abs_map=(absth_map or None), checked=[c for c in (checked or []) if c],
+                             chan=chan, ttl=ttl, n_shuffle=n_shuffle, rstart=rstart, rend=rend,
+                             region_mode=region_mode, stagger_pct=stagger_pct, disp_show=disp_show,
+                             disp_binned=disp_binned, train_bin=train_bin, fft_bin=fft_bin,
+                             align_map=align_map))
+    return "✓ " + " · ".join(msgs), (_n or 1)
 
 
 # Focusing an align box highlights that file's trace(s) in BOTH graphs (bold + others dimmed) so you
@@ -2840,6 +3093,11 @@ app.clientside_callback(
                     var ex = document.getElementById('explorer-modal');
                     if (ex && ex.style.display !== 'none') {
                         var c = document.getElementById('exp-close'); if (c) { c.click(); }
+                        return;
+                    }
+                    var pp = document.getElementById('pipelines-modal');
+                    if (pp && pp.style.display !== 'none') {
+                        var pc = document.getElementById('pipe-to-analysis'); if (pc) { pc.click(); }
                     }
                 }
             });
@@ -2904,22 +3162,247 @@ def _date_cell_of(path):
     return None, None
 
 
-@app.callback(Output("explorer-modal", "style"),
+# ONE callback owns BOTH overlay modals + routes all six nav pills (Analysis View is the base, no
+# modal). Each destination is reachable from two source views, so the pills carry unique per-source
+# ids (_NAV_IDS); this consolidates them so exactly one style is set per modal per click.
+@app.callback(Output("explorer-modal", "style"), Output("pipelines-modal", "style"),
               Output("exp-date", "data", allow_duplicate=True),
               Output("exp-cell", "data", allow_duplicate=True),
               Output("exp-autosel", "data"),
               Input("open-explorer", "n_clicks"), Input("exp-close", "n_clicks"),
+              Input("pipe-to-explorer", "n_clicks"), Input("open-pipelines", "n_clicks"),
+              Input("exp-to-pipelines", "n_clicks"), Input("pipe-to-analysis", "n_clicks"),
               State("file", "value"), prevent_initial_call=True)
-def toggle_explorer(_open, _close, files):
-    if ctx.triggered_id == "exp-close":
-        return {"display": "none"}, no_update, no_update, None
+def nav_route(*_args):
+    files = _args[-1]
+    t = ctx.triggered_id
+    if t in ("exp-close", "pipe-to-analysis"):                 # -> Analysis View (hide both)
+        return {"display": "none"}, {"display": "none"}, no_update, no_update, None
+    if t in ("open-pipelines", "exp-to-pipelines"):            # -> Analysis Pipelines
+        return {"display": "none"}, _PIPE_SHOWN, no_update, no_update, no_update
+    # -> Data Explorer (open-explorer / pipe-to-explorer)
     sel = [f for f in (files or []) if f]
     if len(sel) == 1:                          # exactly one file checked in Analysis View ->
         d, c = _date_cell_of(sel[0])           # jump straight to it and pre-check it
         if d and c:
-            return _EXPLORER_SHOWN, d, c, sel[0]
+            return _EXPLORER_SHOWN, {"display": "none"}, d, c, sel[0]
     dates = sorted({c["date"] for c in DataStore().index()}, reverse=True)
-    return _EXPLORER_SHOWN, (dates[0] if dates else None), None, None
+    return _EXPLORER_SHOWN, {"display": "none"}, (dates[0] if dates else None), None, None
+
+
+# ============================================================================================
+# Analysis Pipelines — editor callbacks. pipe-graph is the single source of truth; every mutation
+# funnels through it, and pipe_render_nodes derives the canvas from it. Connection curves + node
+# dragging + click-to-connect are drawn/handled in assets/pipeline.js.
+# ============================================================================================
+def _pipe_next_id(graph, ctype):
+    """A unique node id for a new component of type ctype."""
+    existing = {n["id"] for n in graph.get("nodes", [])}
+    i = 0
+    while f"{ctype}{i}" in existing:
+        i += 1
+    return f"{ctype}{i}"
+
+
+# populate the pipeline dropdowns (pipelines view + the Analysis-View run selector). Runs at startup
+# (materializing the three defaults) and whenever a save/delete bumps pipe-rev.
+@app.callback(Output("pipe-select", "options"), Output("run-pipeline", "options"),
+              Input("pipe-rev", "data"), prevent_initial_call=False)
+def pipe_list_options(_rev):
+    opts = [{"label": n, "value": n} for n in pipe.list_pipelines()]
+    return opts, opts
+
+
+# load a pipeline into the editor (structure + params + name box)
+@app.callback(Output("pipe-graph", "data"), Output("pipe-name", "value"),
+              Input("pipe-select", "value"), prevent_initial_call=True)
+def pipe_load(name):
+    if not name:
+        return no_update, no_update
+    g = pipe.load_pipeline(name)
+    if g is None:
+        return no_update, no_update
+    return g, g.get("name", name)
+
+
+# render the node divs from the graph (connections are drawn clientside afterwards)
+@app.callback(Output("pipe-nodes", "children"), Input("pipe-graph", "data"))
+def pipe_render_nodes(graph):
+    if not graph or not graph.get("nodes"):
+        return []
+    return [render_pipe_node(n) for n in graph["nodes"]]
+
+
+# add a component from the palette (staggered so a new node doesn't land on the last one)
+@app.callback(Output("pipe-graph", "data", allow_duplicate=True),
+              Input({"type": "pal-add", "ctype": ALL}, "n_clicks"),
+              State("pipe-graph", "data"), prevent_initial_call=True)
+def pipe_add_node(_clicks, graph):
+    t = ctx.triggered_id
+    if not isinstance(t, dict) or not (ctx.triggered and ctx.triggered[0].get("value")):
+        return no_update
+    g = graph or pipe.empty_pipeline("untitled")
+    n = len(g.get("nodes", []))
+    node = pipe.new_node(t["ctype"], _pipe_next_id(g, t["ctype"]),
+                         x=60 + (n % 6) * 30, y=60 + (n % 6) * 34)
+    g = dict(g); g["nodes"] = list(g.get("nodes", [])) + [node]
+    return g
+
+
+# edit a node parameter (guarded so the initial render / a restore doesn't loop)
+@app.callback(Output("pipe-graph", "data", allow_duplicate=True),
+              Input({"type": "pparam", "node": ALL, "param": ALL}, "value"),
+              State("pipe-graph", "data"), prevent_initial_call=True)
+def pipe_edit_param(_values, graph):
+    t = ctx.triggered_id
+    if not graph or not isinstance(t, dict) or not ctx.triggered:
+        return no_update
+    nid, pname = t["node"], t["param"]
+    node = next((n for n in graph.get("nodes", []) if n["id"] == nid), None)
+    if node is None:
+        return no_update
+    spec = pipe.COMPONENT_REGISTRY.get(node["type"], {}).get("params", {}).get(pname, {})
+    raw = ctx.triggered[0]["value"]
+    newv = ("on" in (raw or [])) if spec.get("type") == "bool" else raw
+    if node["params"].get(pname) == newv:
+        return no_update                       # unchanged (initial render) → no loop
+    g = dict(graph)
+    g["nodes"] = [dict(n, params={**n["params"], pname: newv}) if n["id"] == nid else n
+                  for n in graph["nodes"]]
+    return g
+
+
+# delete a node (and any connections touching it)
+@app.callback(Output("pipe-graph", "data", allow_duplicate=True),
+              Input({"type": "pnode-del", "node": ALL}, "n_clicks"),
+              State("pipe-graph", "data"), prevent_initial_call=True)
+def pipe_delete_node(_clicks, graph):
+    t = ctx.triggered_id
+    if not graph or not isinstance(t, dict) or not (ctx.triggered and ctx.triggered[0].get("value")):
+        return no_update
+    nid = t["node"]
+    g = dict(graph)
+    g["nodes"] = [n for n in graph.get("nodes", []) if n["id"] != nid]
+    g["connections"] = [c for c in graph.get("connections", [])
+                        if c["from_node"] != nid and c["to_node"] != nid]
+    return g
+
+
+# a node was dragged (JS wrote "node|x|y" to pipe-drag-sink on release) → persist its position
+@app.callback(Output("pipe-graph", "data", allow_duplicate=True),
+              Input("pipe-drag-sink", "value"), State("pipe-graph", "data"),
+              prevent_initial_call=True)
+def pipe_drag(val, graph):
+    if not val or not graph:
+        return no_update
+    try:
+        parts = val.split("|")                 # "node|x|y|nonce" — nonce (if any) ignored
+        nid, x, y = parts[0], float(parts[1]), float(parts[2])
+    except (ValueError, IndexError, AttributeError):
+        return no_update
+    node = next((n for n in graph.get("nodes", []) if n["id"] == nid), None)
+    if node is None or (node.get("x") == x and node.get("y") == y):
+        return no_update
+    g = dict(graph)
+    g["nodes"] = [dict(n, x=x, y=y) if n["id"] == nid else n for n in graph["nodes"]]
+    return g
+
+
+# a connection was drawn (JS wrote "fromN|fromP|toN|toP") → validate types + wire it (one per input)
+@app.callback(Output("pipe-graph", "data", allow_duplicate=True), Output("pipe-msg", "children"),
+              Input("pipe-connect-sink", "value"), State("pipe-graph", "data"),
+              prevent_initial_call=True)
+def pipe_connect(val, graph):
+    if not val or not graph:
+        return no_update, no_update
+    try:
+        fn, fp, tn, tp = val.split("|")[:4]    # "fromN|fromP|toN|toP|nonce" — nonce ignored
+    except (ValueError, AttributeError):
+        return no_update, no_update
+
+    def port(node_id, name, io):
+        node = next((n for n in graph["nodes"] if n["id"] == node_id), None)
+        if not node:
+            return None
+        ports = pipe.COMPONENT_REGISTRY.get(node["type"], {}).get("outputs" if io == "out" else "inputs", [])
+        return next((p for p in ports if p["name"] == name), None)
+    src, dst = port(fn, fp, "out"), port(tn, tp, "in")
+    if not src or not dst:
+        return no_update, no_update
+    if src["type"] != dst["type"]:
+        return no_update, f"⚠ can't connect {src['type']} → {dst['type']}"
+    if fn == tn:
+        return no_update, no_update
+    g = dict(graph)
+    # one source per input port: drop any existing connection into (tn, tp), then add
+    conns = [c for c in graph.get("connections", []) if not (c["to_node"] == tn and c["to_port"] == tp)]
+    conns.append({"from_node": fn, "from_port": fp, "to_node": tn, "to_port": tp})
+    g["connections"] = conns
+    return g, ""
+
+
+# ---- pipeline file ops: new / save / save-as / delete ----
+@app.callback(Output("pipe-graph", "data", allow_duplicate=True),
+              Output("pipe-name", "value", allow_duplicate=True), Output("pipe-msg", "children",
+              allow_duplicate=True),
+              Input("pipe-new", "n_clicks"), prevent_initial_call=True)
+def pipe_new(_n):
+    return pipe.empty_pipeline("untitled"), "untitled", "new empty pipeline — add components"
+
+
+@app.callback(Output("pipe-rev", "data"), Output("pipe-msg", "children", allow_duplicate=True),
+              Output("pipe-select", "value"),
+              Input("pipe-save", "n_clicks"), State("pipe-graph", "data"), State("pipe-name", "value"),
+              State("pipe-rev", "data"), prevent_initial_call=True)
+def pipe_save(_n, graph, name, rev):
+    if not graph:
+        return no_update, "⚠ nothing to save", no_update
+    nm = (name or "").strip() or graph.get("name") or "untitled"
+    g = dict(graph); g["name"] = nm
+    problems = pipe.validate(g)
+    pipe.save_pipeline(g)
+    msg = f"✓ saved “{nm}”" + (f"  ⚠ {'; '.join(problems)}" if problems else "")
+    return (rev or 0) + 1, msg, nm
+
+
+@app.callback(Output("pipe-rev", "data", allow_duplicate=True),
+              Output("pipe-msg", "children", allow_duplicate=True),
+              Output("pipe-select", "value", allow_duplicate=True),
+              Output("pipe-graph", "data", allow_duplicate=True),
+              Input("pipe-saveas", "n_clicks"), State("pipe-graph", "data"), State("pipe-name", "value"),
+              State("pipe-rev", "data"), prevent_initial_call=True)
+def pipe_saveas(_n, graph, name, rev):
+    if not graph:
+        return no_update, "⚠ nothing to save", no_update, no_update
+    nm = (name or "").strip()
+    if not nm:
+        return no_update, "⚠ type a name to save-as", no_update, no_update
+    g = dict(graph); g["name"] = nm
+    pipe.save_pipeline(g)
+    return (rev or 0) + 1, f"✓ saved a copy as “{nm}”", nm, g
+
+
+@app.callback(Output("pipe-rev", "data", allow_duplicate=True),
+              Output("pipe-msg", "children", allow_duplicate=True),
+              Input("pipe-delete", "n_clicks"), State("pipe-name", "value"),
+              State("pipe-rev", "data"), prevent_initial_call=True)
+def pipe_delete(_n, name, rev):
+    nm = (name or "").strip()
+    if not nm:
+        return no_update, "⚠ nothing selected to delete"
+    ok = pipe.delete_pipeline(nm)
+    return (rev or 0) + 1, (f"🗑 deleted “{nm}”" if ok else "not found")
+
+
+# redraw the connection curves clientside once the nodes are in the DOM (after every render), and on
+# demand from assets/pipeline.js during a drag. Reads node/port positions straight from the DOM.
+app.clientside_callback(
+    """function(_children, graph){
+        if (window.drawPipeConnections) { window.drawPipeConnections(graph); }
+        return '';
+    }""",
+    Output("pipe-draw-tick", "data"),
+    Input("pipe-nodes", "children"), State("pipe-graph", "data"))
 
 
 @app.callback(Output("exp-date", "data"), Output("exp-cell", "data", allow_duplicate=True),

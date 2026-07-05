@@ -80,6 +80,8 @@ neitz/                         tested core (no GUI deps)
   stimulus/  base.py + NoiseParadigm / FlickerParadigm / CheckerboardParadigm
   dataio/    DataStore, CellManifest, config (mirror), mirror_store  (the managed store)
   run.py     headless orchestration -> Result; run_cell_flicker(...name=,include=), run_cell_noise(...) (STA)
+  pipeline.py  analysis-pipeline model: COMPONENT_REGISTRY (palette), Pipeline dicts, default_*_pipeline,
+               JSON storage (<store>/pipelines/), detect_/region_/run_kwargs extraction, run dispatch
   plots.py   flicker_onoff_figure, flicker_cycle_grid
   cli.py / __main__.py
 viewer.py                      the Dash GUI (single file, ~1500 lines) — built ON the core
@@ -433,6 +435,47 @@ their noise is **regenerated from a seed here** — no per-frame stimulus values
 - Responsive: CSS `zoom` media-queries scale the whole UI on smaller windows (root height
   counter-scaled). Dash 4.2 renders checklist/radio/dropdown options as `.dash-options-list-option`
   — alignment/colors are set on those classes (labelStyle is ignored); see `assets/viewer.css`.
+
+## Analysis Pipelines (the THIRD view) — node-graph editor over the CLI
+
+A drag-and-drop pipeline builder (like `benaqTools_py`'s "pipeline" tab, which is React Flow; ours
+is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes** (typed I/O ports
++ inline params) wired by **connections**; the canonical "Run analysis" flow IS one of them.
+
+- **Three views now.** `nav_toggle` renders THREE pills (Analysis View · Data Explorer · Analysis
+  Pipelines). All three nav bars are in the DOM at once (the explorer + pipelines overlays are
+  `display:none`, not removed), so each CLICKABLE pill needs a globally-unique id — `_NAV_IDS[active]`
+  gives per-active ids (`open-explorer`/`exp-close`/`open-pipelines`/`exp-to-pipelines`/
+  `pipe-to-analysis`/`pipe-to-explorer`). `nav_route` (one callback) owns BOTH modal styles and
+  routes all six. Escape closes the top-most overlay (output-modal → explorer → pipelines).
+- **Model — `neitz/pipeline.py` (tested, no GUI deps).** `COMPONENT_REGISTRY` = the palette (each
+  entry: label/category/color/help + typed `inputs`/`outputs` ports + a `params` schema of
+  number|choice|bool|text). `Pipeline` is a plain dict `{version,name,nodes[],connections[]}`; a node
+  is `{id,type,params,x,y,label}`, a connection `{from_node,from_port,to_node,to_port}`. Seed
+  pipelines: `default_flicker_pipeline` (source→align→detect→region→flicker→figures), `_sta_`,
+  `_strf_`. Storage = one JSON per pipeline under `<store_root>/pipelines/` (materialized on first
+  `list_pipelines`); **"Save as" = copy under a new name**. The terminal (analysis) node carries a
+  `terminal` stim family (`pipeline_stim_family` → sq_wave/gaussian_noise/checkerboard).
+- **Editor — `viewer.py` + `assets/pipeline.js`.** Dash renders the NODES (so their param fields are
+  real components with a `{pparam,node,param}` pattern callback) at absolute (x,y); `pipeline.js`
+  draws the CONNECTION curves (SVG into `#pipe-conn`, reading node/port positions from the DOM),
+  handles NODE DRAGGING (pointer events on `.pnode-header` → writes `"node|x|y|nonce"` to
+  `#pipe-drag-sink`), and CLICK-TO-CONNECT (click an OUTPUT port to arm, an INPUT port to wire →
+  `"fromN|fromP|toN|toP|nonce"` to `#pipe-connect-sink`; Python validates type-match + one-source-
+  per-input). **`pipe-graph` (dcc.Store) is the single source of truth**; every mutation (add / edit
+  param / delete / drag / connect / load / new) funnels through it and `pipe_render_nodes` derives
+  the canvas. Geometry constants in `viewer.py` (`_PNODE_W`…) and `pipeline.js` must stay in sync,
+  but port positions are read from the DOM so curves follow drags without a server round-trip.
+- **Running (tasks: dropdown + current-state-feeds-pipeline).** The Analysis-View "Run analysis" now
+  has a **`#run-pipeline` dropdown**; a chosen pipeline's terminal sets the analysis kind (else the
+  cell's stimulus type dispatches). The pipelines view has its own "▶ Run on current cell". BOTH go
+  through one shared `_run_one(ds, s, kind, …)` using the **LIVE Analysis-View settings** (region /
+  detection / alignment / channels / files) — so the current manipulation is what runs (James's
+  ask); the pipeline supplies the kind + knobs (`n_shuffle`, 4K export). Both are `background=True`.
+- **Follow-ups:** the pipeline's own detect/region node params are the editable representation but do
+  NOT yet override the live Analysis-View state at run time (live state wins by design); execution is
+  dispatch-to-`run_cell_*`, not a true per-node graph interpreter; drag-to-add-from-palette (we have
+  click-to-add) and drag-to-connect (we have click-to-connect) are the obvious next polish.
 
 ## How to work here
 
