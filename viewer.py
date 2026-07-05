@@ -393,7 +393,8 @@ def _tool_btn(bid, glyph, title):
 
 
 def graph_tools():
-    return [_tool_btn("gm-zoomx", "↔", "Zoom horizontal — drag zooms X only"),
+    return [_tool_btn("gm-editregion", "‖", "Edit region — drag the start / end boundaries"),
+            _tool_btn("gm-zoomx", "↔", "Zoom horizontal — drag zooms X only"),
             _tool_btn("gm-zoomy", "↕", "Zoom vertical — drag zooms Y only"),
             _tool_btn("gm-zoombox", "▣", "Zoom box — drag zooms X + Y"),
             _tool_btn("gm-reset", "↺", "Reset zoom to the default window")]
@@ -1233,7 +1234,8 @@ app.layout = html.Div(
             # restructure the graph container, so Plotly's responsive resize stays stable)
             html.Div(id="graph-toolbar", style=_TOOLBAR, children=graph_tools()),
             dcc.Graph(id="time", style={"height": "100%"},
-                      config={"responsive": True, "scrollZoom": True, "doubleClick": "reset"},
+                      config={"responsive": True, "scrollZoom": True, "doubleClick": "reset",
+                              "edits": {"shapePosition": True}},   # drag region-boundary lines
                       figure=blank_fig("pick a cell, then check file(s) to display")),
             # top-left (flush with the plot's left): region start — hidden when cropping
             html.Div([html.Span("start (s)", style=_OVL),
@@ -1605,16 +1607,17 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
 # The mode buttons set the active tool; a clientside callback highlights it; reset autoscales the
 # #time graph back to its default window (layout.meta.xr) with no server round-trip.
 @app.callback(Output("graph-mode", "data"),
-              Input("gm-zoomx", "n_clicks"), Input("gm-zoomy", "n_clicks"),
-              Input("gm-zoombox", "n_clicks"), prevent_initial_call=True)
-def set_graph_mode(a, b, c):
-    return {"gm-zoomx": "zoomx", "gm-zoomy": "zoomy",
+              Input("gm-editregion", "n_clicks"), Input("gm-zoomx", "n_clicks"),
+              Input("gm-zoomy", "n_clicks"), Input("gm-zoombox", "n_clicks"),
+              prevent_initial_call=True)
+def set_graph_mode(*_):
+    return {"gm-editregion": "editregion", "gm-zoomx": "zoomx", "gm-zoomy": "zoomy",
             "gm-zoombox": "zoombox"}.get(ctx.triggered_id, no_update)
 
 
 app.clientside_callback(
     """function(mode){
-        var ids = {'gm-zoomx':'zoomx','gm-zoomy':'zoomy','gm-zoombox':'zoombox'};
+        var ids = {'gm-editregion':'editregion','gm-zoomx':'zoomx','gm-zoomy':'zoomy','gm-zoombox':'zoombox'};
         Object.keys(ids).forEach(function(id){
             var b = document.getElementById(id); if(!b) return;
             var on = ids[id] === mode;
@@ -1641,6 +1644,20 @@ app.clientside_callback(
     }""",
     Output("gtool-sink", "data", allow_duplicate=True),
     Input("gm-reset", "n_clicks"), prevent_initial_call=True)
+
+
+# edit-region tool: dragging a start/end boundary line (shapes[0]/[1], only present in editregion
+# mode) writes the new x back to the region-start / region-end boxes → the analysis window follows.
+@app.callback(Output("region-start", "value", allow_duplicate=True),
+              Output("region-end", "value", allow_duplicate=True),
+              Input("time", "relayoutData"), State("graph-mode", "data"),
+              prevent_initial_call=True)
+def drag_region(rl, mode):
+    if mode != "editregion" or not rl:
+        return no_update, no_update
+    ns = round(float(rl["shapes[0].x0"]), 3) if "shapes[0].x0" in rl else no_update
+    ne = round(float(rl["shapes[1].x0"]), 3) if "shapes[1].x0" in rl else no_update
+    return ns, ne
 
 
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
@@ -1680,6 +1697,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     do_input = bool(fft_input)               # FFT panel shows the time-domain input, not the spectrum
     free_x = graph_mode in ("zoomx", "zoombox")   # graph tool: which axis a drag-box zooms
     free_y = graph_mode in ("zoomy", "zoombox")
+    do_editregion = graph_mode == "editregion"    # draggable start/end boundary lines on the plot
 
     rec0 = get_recording(files[0])
     fs0 = rec0.fs
@@ -1859,6 +1877,10 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
                                             line=dict(width=1, color="#444"),
                                             name="TTL average"), row=2, col=1)
 
+    if do_editregion:                              # draggable start/end boundary lines = shapes[0],[1]
+        for xb in (rs, re_):                       # (added BEFORE the vrects so their indices are fixed)
+            time_fig.add_shape(type="line", xref="x", yref="paper", x0=xb, x1=xb, y0=0, y1=1,
+                               line=dict(color="#e4604e", width=3))
     if not crop:                                   # shade excluded blocks (skip when cropped out)
         for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
                                  (re_, t1_full, "excluded", "bottom right")]:

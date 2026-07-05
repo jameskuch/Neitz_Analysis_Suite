@@ -208,8 +208,14 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   drag-box zooms **X only** (`zoomx`, default = the historical behavior), **Y only** (`zoomy`), or
   **both** (`zoombox`). Reset (`#gm-reset`) is a clientside `Plotly.relayout` back to the default
   window — stashed as `time_fig.layout.meta.xr = [x0, x1]`. `graph_mode` is NOT in the `uirevision`
-  hash, so switching tools keeps the current zoom. Planned tools (edit-region drag-handles, highlight,
-  measure, drag-threshold, edit-spikes) plug into this same framework.
+  hash, so switching tools keeps the current zoom. **Edit region** (`‖`, `editregion` mode): draws two
+  draggable red boundary lines at the region start/end (added as `time_fig` `shapes[0]`/`[1]` — BEFORE
+  the excluded-block vrects, so their indices are fixed); the `#time` graph config carries
+  `edits: {shapePosition: True}`, and the `drag_region` callback writes `shapes[0].x0`/`shapes[1].x0`
+  from the relayout back to `region-start`/`region-end` so the analysis window follows the drag (no
+  loop — it converges; region boxes are already in `UNDO_TRACK`). In editregion mode both axes are
+  `fixedrange` (you drag boundaries, not zoom). Planned tools (highlight, measure, drag-threshold,
+  edit-spikes) plug into this same framework.
 - **ISI histogram** honors the "bin (ms)" box (`train-bin`): `xbins` size = the ms value; 0 → auto
   (60 bins). (That box also drives the spike-train row-1 view when "show binned spikes" is on.)
 - **Group → one average** (files panel checkbox `#group-avg`, needs 3+ checked): `build_figures`
