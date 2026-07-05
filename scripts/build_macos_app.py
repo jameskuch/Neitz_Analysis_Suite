@@ -54,7 +54,7 @@ if [ -f "$HOME/miniconda3/etc/profile.d/conda.sh" ]; then
 else
   PY="{PYTHON}"
 fi
-exec "$PY" neitz_app.py >"$LOG_DIR/app.log" 2>&1
+exec "$PY" neitz_app.py >"$LOG_DIR/app.boot.log" 2>&1   # neitz_app.py writes its own app.log
 """
 
 
