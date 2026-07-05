@@ -59,11 +59,14 @@ exec "$PY" neitz_app.py >"$LOG_DIR/app.log" 2>&1
 
 
 def main() -> None:
-    # 1) refresh the icon files from the SVG
-    subprocess.run([sys.executable, str(REPO / "scripts/build_icon.py")], check=True)
+    # 1) refresh the icon from the SVG; fall back to the committed .icns if cairosvg is unavailable
+    try:
+        subprocess.run([sys.executable, str(REPO / "scripts/build_icon.py")], check=True)
+    except Exception as e:
+        print(f"  (icon regen skipped: {e}; using committed assets/app_icon.icns)")
     icns = REPO / "assets/app_icon.icns"
     if not icns.exists():
-        raise SystemExit("assets/app_icon.icns was not produced — is iconutil available?")
+        raise SystemExit("assets/app_icon.icns not found (regen failed and none committed).")
 
     # 2) (re)assemble the bundle
     app = REPO / f"{APP_NAME}.app"

@@ -1,10 +1,22 @@
-// True full-screen toggle for the Analysis Suite (browser Fullscreen API).
-// The button (#fs-toggle) is created by Dash; we use event delegation so it works no matter when
-// Dash (re)renders it. Also bind the "F" key as a shortcut (ignored while typing in a field).
-// Fullscreen MUST be requested from a user gesture — a click / keypress both qualify.
+// Full-screen toggle for the Analysis Suite. In a normal browser it uses the Fullscreen API; in the
+// native app window (pywebview) that API is a no-op, so we toggle the NATIVE window fullscreen via
+// the JS API bridge (window.pywebview.api.toggle_fullscreen, wired in neitz_app.py). The button
+// (#fs-toggle) and the "F" key both trigger it; event delegation covers Dash re-renders. Fullscreen
+// must be requested from a user gesture — a click / keypress both qualify.
 (function () {
+  function inApp() {
+    return !!(window.pywebview && window.pywebview.api && window.pywebview.api.toggle_fullscreen);
+  }
+  var pywFs = false;                                   // tracked fullscreen state for the native window
+
   function toggle() {
-    if (document.fullscreenElement) {
+    if (inApp()) {                                     // native app window (WKWebView / WebView2)
+      window.pywebview.api.toggle_fullscreen();
+      pywFs = !pywFs;
+      relabel();
+      return;
+    }
+    if (document.fullscreenElement) {                  // browser tab
       (document.exitFullscreen || document.webkitExitFullscreen || function () {}).call(document);
     } else {
       var el = document.documentElement;
@@ -28,7 +40,9 @@
   // keep the button label in sync with the actual state
   function relabel() {
     var b = document.getElementById('fs-toggle');
-    if (b) b.textContent = document.fullscreenElement ? '⛶ Exit full screen' : '⛶ Full screen';
+    if (!b) return;
+    var fs = inApp() ? pywFs : !!document.fullscreenElement;
+    b.textContent = fs ? '⛶ Exit full screen' : '⛶ Full screen';
   }
   document.addEventListener('fullscreenchange', relabel);
   document.addEventListener('webkitfullscreenchange', relabel);

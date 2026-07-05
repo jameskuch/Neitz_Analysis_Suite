@@ -44,9 +44,16 @@ wrappers just point at it. Deps: `pip install -e ".[gui,app]"` (`pywebview`; `py
   it every 2 s and `location.reload()`s when `boot` changes — so relaunching after a code edit
   refreshes the open window with no Cmd-R. Works in a plain browser tab too (restart viewer.py → the
   tab refreshes itself). `code_mtime` (newest source mtime at boot) is exposed for launcher use.
+- **Full screen in the app**: the browser Fullscreen API is a **no-op** in WKWebView / WebView2, so
+  `neitz_app.py` exposes `toggle_fullscreen` via pywebview `js_api` and `assets/fullscreen.js` calls
+  `window.pywebview.api.toggle_fullscreen()` when it detects `window.pywebview` (falling back to the
+  Fullscreen API in a plain browser tab). The `F` key + the ⛶ button share that one `toggle()`.
 - **Icon — one source, both platforms**: `scripts/build_icon.py` renders `assets/app_icon.svg`
   (needs `cairosvg`) → `assets/app_icon.icns` (macOS, via `iconutil`) + `assets/app_icon.ico`
   (Windows, 16→256). The SVG is the trichromatic **cone mosaic + single-unit spike-train** icon.
+  Both rendered icons are **committed**, so `build_windows_app.py` needs no `cairosvg`/Cairo on
+  Windows (only regenerating from the SVG does); `build_macos_app.py` falls back to the committed
+  `.icns` if `cairosvg` is absent.
 - **Build** (idempotent — re-run after editing the SVG / viewer.py / neitz_app.py):
   - macOS: `python scripts/build_macos_app.py` → `NeitzAnalysisSuite.app`. Its launcher `exec`s
     `neitz_app.py` via conda base in the **foreground**, so the .app is the responsible, dock-resident

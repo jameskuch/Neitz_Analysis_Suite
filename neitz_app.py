@@ -156,7 +156,17 @@ def main():
         webbrowser.open(URL)
         return
 
-    webview.create_window(TITLE, URL, width=1440, height=900, min_size=(940, 620))
+    class _Api:
+        # exposed to the page as window.pywebview.api.* — lets assets/fullscreen.js toggle the
+        # NATIVE window fullscreen (the browser Fullscreen API is a no-op in WKWebView / WebView2).
+        def toggle_fullscreen(self):
+            try:
+                webview.windows[0].toggle_fullscreen()
+            except Exception:
+                pass
+            return True
+
+    webview.create_window(TITLE, URL, width=1440, height=900, min_size=(940, 620), js_api=_Api())
     try:
         webview.start()                        # blocks on the main thread until the window closes
     finally:

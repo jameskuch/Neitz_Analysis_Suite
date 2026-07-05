@@ -30,11 +30,14 @@ def main() -> None:
         print(f"NOTE: this builds the *Windows* launcher; you're on {sys.platform}. It will still "
               f"render assets/app_icon.ico, but run it on Windows 11 to create the shortcut.")
 
-    # 1) icon (.ico, and .icns too if on macOS)
-    subprocess.run([sys.executable, str(REPO / "scripts" / "build_icon.py")], check=True)
+    # 1) icon — prefer the committed assets/app_icon.ico so Windows needs NO cairosvg/Cairo (painful
+    #    to install there); only render from the SVG if the .ico is somehow missing.
     ico = REPO / "assets" / "app_icon.ico"
     if not ico.exists():
-        raise SystemExit("assets/app_icon.ico was not produced.")
+        print("  app_icon.ico missing — rendering it from the SVG (needs cairosvg)…")
+        subprocess.run([sys.executable, str(REPO / "scripts" / "build_icon.py")], check=True)
+    if not ico.exists():
+        raise SystemExit("assets/app_icon.ico not found and could not be generated.")
 
     # the windowless interpreter next to this one (python.exe -> pythonw.exe)
     pythonw = Path(sys.executable).with_name("pythonw.exe")
