@@ -11,6 +11,13 @@ cd /Users/j/Neitz_Analysis_Suite
 python viewer.py            # then open http://127.0.0.1:8050  (Ctrl-C to stop)
 ```
 
+**Desktop app (double-click → its own window, not a browser tab).** After `pip install -e ".[gui,app]"`,
+build the launcher once — macOS: `python scripts/build_macos_app.py` → `NeitzAnalysisSuite.app`;
+Windows 11: `python scripts\build_windows_app.py` → a Desktop shortcut. It opens the viewer in a
+native window (WKWebView / Edge WebView2) with its own dock/taskbar icon and Space, starts the back
+end if needed, keeps a single instance, and auto-reloads when the back end restarts. Drag the app to
+`/Applications` (or pin the Windows shortcut) and to the Dock.
+
 That's the program. A draggable splitter divides the **left sidebar** (controls) from the
 **right graphs**, and an upper-left switcher flips between the **Analysis View** and the
 **Data Explorer**:

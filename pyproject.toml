@@ -20,6 +20,8 @@ dependencies = [
 [project.optional-dependencies]
 gui = ["dash", "plotly", "kaleido",   # kaleido: server-side Plotly -> PDF/SVG for the 4K Run-Analysis exports
        "diskcache", "multiprocess", "psutil"]   # background-callback manager (non-blocking Run Analysis)
+app = ["pywebview",                              # native-window launcher (neitz_app.py): WKWebView (macOS) /
+       "pythonnet; platform_system == 'Windows'"]  # WebView2 (Windows, via pythonnet). pyobjc is pulled on macOS.
 dev = ["pytest"]
 
 [project.scripts]

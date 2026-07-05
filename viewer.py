@@ -943,6 +943,31 @@ app.title = "Neitz ABF Viewer"
 _files = discover_abf()
 
 
+# ---- health endpoint: front-end auto-reload + launcher single-instance reuse ----------------
+# The native-window launcher (neitz_app.py) and assets/autoreload.js both poll this. `boot` is
+# unique per server *process*, so when the back end restarts (e.g. a relaunch after editing the
+# code) the open window notices the new id and reloads itself — no manual refresh. `code_mtime`
+# (the newest source mtime, captured once at boot) lets the launcher tell a *stale* running
+# instance (code changed on disk since it started) from a current one it can simply reuse.
+import uuid as _uuid
+_BOOT_ID = _uuid.uuid4().hex
+
+
+def _code_mtime():
+    d = os.path.dirname(os.path.abspath(__file__))
+    paths = [os.path.abspath(__file__)] + glob.glob(os.path.join(d, "assets", "*"))
+    return max((os.path.getmtime(p) for p in paths if os.path.exists(p)), default=0.0)
+
+
+_BOOT_CODE_MTIME = _code_mtime()
+
+
+@app.server.route("/neitz-health")
+def _neitz_health():
+    from flask import jsonify
+    return jsonify(boot=_BOOT_ID, code_mtime=_BOOT_CODE_MTIME)
+
+
 def nav_toggle(active, dark=False):
     """Upper view switcher: 'Analysis View' (left) … 'Data Explorer' (right), always both. Each sits
     in a big rounded-rect pill whose gradient (a blurred rounded-rectangle behind the text — see the

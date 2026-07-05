@@ -11,6 +11,8 @@ productive immediately. Keep it current when the architecture changes.
 - **Python**: `/Users/j/miniconda3/bin/python` (conda base — has `pyabf`, `dash`, `plotly`,
   `scipy`, `pandas`, `matplotlib`). Plain `python` may not be it.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
+- **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
+  (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
 - **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (≈43 tests; synthetic tests run
   anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
@@ -22,6 +24,40 @@ productive immediately. Keep it current when the architecture changes.
   curl -s --retry 15 --retry-delay 1 --retry-connrefused -o /dev/null -w "HTTP %{http_code}\n" http://127.0.0.1:8050/
   lsof -ti tcp:8050   # confirm ONE pid
   ```
+  (With the desktop app open, a restart auto-reloads its window — see below.)
+
+## Desktop app — native window (macOS + Windows 11)
+
+A double-clickable launcher that opens the viewer as its OWN app window — its own dock/taskbar icon
+and macOS Space, NOT a Chrome tab (like Slack). `neitz_app.py` is the cross-platform core; the OS
+wrappers just point at it. Deps: `pip install -e ".[gui,app]"` (`pywebview`; `pythonnet` on Windows;
+`pyobjc` is pulled on macOS; the Edge **WebView2** runtime ships with Win11).
+
+- **`neitz_app.py`** (cross-platform, `sys.platform`-branched): reuses a healthy back end on
+  127.0.0.1:8050 or starts `python viewer.py` itself (freeing the port first if a half-dead process
+  holds it), then opens a **pywebview** window — WKWebView (macOS) / WebView2 (Windows). **Single
+  instance** via a lock socket (port **8051**): a second launch exits instead of stacking a window
+  (macOS also won't relaunch a running .app). On window close it stops ONLY a back end it *started*
+  (a reused / manually-run server is left alone). "Reuse the same instance" was James's explicit ask.
+- **Front-end auto-reload** (James's ask, mirrored from `benaqTools_py`): `viewer.py` serves
+  `/neitz-health` → `{boot, code_mtime}` (`boot` = a per-process uuid). `assets/autoreload.js` polls
+  it every 2 s and `location.reload()`s when `boot` changes — so relaunching after a code edit
+  refreshes the open window with no Cmd-R. Works in a plain browser tab too (restart viewer.py → the
+  tab refreshes itself). `code_mtime` (newest source mtime at boot) is exposed for launcher use.
+- **Icon — one source, both platforms**: `scripts/build_icon.py` renders `assets/app_icon.svg`
+  (needs `cairosvg`) → `assets/app_icon.icns` (macOS, via `iconutil`) + `assets/app_icon.ico`
+  (Windows, 16→256). The SVG is the trichromatic **cone mosaic + single-unit spike-train** icon.
+- **Build** (idempotent — re-run after editing the SVG / viewer.py / neitz_app.py):
+  - macOS: `python scripts/build_macos_app.py` → `NeitzAnalysisSuite.app`. Its launcher `exec`s
+    `neitz_app.py` via conda base in the **foreground**, so the .app is the responsible, dock-resident
+    process (Cmd-Q stops it cleanly); ad-hoc **codesigned** + quarantine cleared for a stable identity.
+    Drag to `/Applications` + the Dock.
+  - Windows 11: `python scripts\build_windows_app.py` → `NeitzAnalysisSuite.vbs` (silent, no console)
+    + a Desktop shortcut carrying the `.ico`; right-click its taskbar icon → **Pin to taskbar**. Sets
+    an AppUserModelID so Windows gives it its own taskbar identity.
+- **Tracked vs not**: the icon **source + `.icns`/`.ico`**, `neitz_app.py`, and the build scripts are
+  tracked; the built **`.app` / `.vbs` bundles bake machine-specific absolute paths → gitignored**
+  (regenerate with the build scripts). `build/` (icon intermediates) is ignored.
 
 ## Architecture
 

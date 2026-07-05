@@ -36,10 +36,12 @@ testingbed.ipynb
 *_metrics.csv
 barak-*.csv
 
-# macOS launcher app — the built bundle bakes in machine-specific absolute paths, so keep
-# it out of the repo; regenerate it with scripts/build_macos_app.py (build/ is ignored above).
+# Native-window launcher bundles — these bake in machine-specific absolute paths, so keep them
+# out of the repo; regenerate with scripts/build_macos_app.py / build_windows_app.py (build/ too).
 NeitzAnalysisSuite.app/
+NeitzAnalysisSuite.vbs
 
-# …but DO track the app-icon source + rendered icon (they override the blanket *.svg above).
+# …but DO track the app-icon source + rendered icons (they override the blanket *.svg above).
 !assets/app_icon.svg
 !assets/app_icon.icns
+!assets/app_icon.ico
