@@ -41,7 +41,10 @@ barak-*.csv
 NeitzAnalysisSuite.app/
 NeitzAnalysisSuite.vbs
 
-# …but DO track the app-icon source + rendered icons (they override the blanket *.svg above).
+# …but DO track the app-icon source + rendered icons (they override the blanket *.svg / *.png above).
 !assets/app_icon.svg
 !assets/app_icon.icns
 !assets/app_icon.ico
+!assets/favicon.ico
+!assets/icon-192.png
+!assets/icon-512.png

@@ -940,6 +940,30 @@ _bg_manager = _DiskcacheManager(_diskcache.Cache(os.path.join(_tempfile.gettempd
 app = Dash(__name__, suppress_callback_exceptions=True,   # detail-pane buttons (e.g. del-outputs)
            background_callback_manager=_bg_manager)       # are created dynamically by explorer_detail
 app.title = "Neitz ABF Viewer"
+
+# Web-app manifest → "Install this site as an app" (Edge/Chrome) gives a standalone window with OUR
+# icon + its own taskbar/Start entry (assets/manifest.webmanifest + icon-192/512.png). The native
+# launcher's Windows fallback opens a --app window; installing it as a PWA is how it gets our icon.
+app.index_string = """<!DOCTYPE html>
+<html>
+<head>
+{%metas%}
+<title>{%title%}</title>
+{%favicon%}
+<link rel="manifest" href="/assets/manifest.webmanifest">
+<meta name="theme-color" content="#0e1533">
+<link rel="apple-touch-icon" href="/assets/icon-192.png">
+{%css%}
+</head>
+<body>
+{%app_entry%}
+<footer>
+{%config%}
+{%scripts%}
+{%renderer%}
+</footer>
+</body>
+</html>"""
 _files = discover_abf()
 
 
