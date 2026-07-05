@@ -3,11 +3,13 @@
 neitz_app.py — cross-platform native-window launcher for the Neitz Analysis Suite.
 
 Double-clicked from the macOS .app or the Windows launcher, this:
-  1. FULLY RESTARTS the back end on every launch — frees port 8050 (killing any stale/leftover
-     server) and starts a fresh `python viewer.py`, so the icon always runs the latest code. There
-     is no separate compiled front end (Dash serves the layout from Python and fingerprints
-     `assets/` by mtime, so changed CSS/JS auto-busts the cache), so a fresh back end + a fresh
-     window load IS a full front-and-back rebuild. (Mirrors benaqTools' benaq_app.py, James's ask.)
+  1. KILLS then REBUILDS the back end on every launch — frees port 8050 (killing any stale/leftover
+     server) and, on **macOS**, runs a full REBUILD (clear stale bytecode + the background-callback
+     diskcache + `pip install -e ".[gui]"`, via `neitz.rebuild_backend.rebuild`) before starting a
+     fresh `python viewer.py`, so the icon always runs freshly-rebuilt latest code. (Mirrors
+     benaqTools' benaq_app.py calling `restart_full.sh`; James's ask. Windows stays a plain fresh
+     restart for now.) There is no separate compiled front end — Dash fingerprints `assets/` by
+     mtime, so a fresh back end + fresh window load already picks up changed CSS/JS.
   2. opens the viewer in its OWN window (its own dock / taskbar icon and Space), NOT a browser tab:
        - preferred: a real native window via pywebview (WKWebView on macOS, WebView2 on Windows);
          a spinner loading-page shows INSTANTLY while the back end boots in the background, so the
@@ -70,7 +72,7 @@ _LOADING_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8"><style>
  .u{font-size:13px;color:#8b93a7;}
 </style></head><body><div class="w"><div class="s"></div>
  <div class="t">Neitz Analysis Suite</div>
- <div class="u">Starting — restarting the analysis server…</div>
+ <div class="u">Starting — rebuilding the analysis server…</div>
 </div></body></html>"""
 
 
@@ -167,16 +169,39 @@ def _wait_health(timeout=45.0):
     return False
 
 
+def _rebuild():
+    """macOS ONLY (James's ask): a double-click of the dock/desktop icon KILLS then REBUILDS the back
+    end — not just restarts it. Mirrors benaqTools' benaq_app.py calling `restart_full.sh`; for our
+    Dash app the "rebuild" is pure Python, so we reuse `neitz.rebuild_backend.rebuild()` — the SAME
+    steps as the standalone `python -m neitz.rebuild_backend`: clear stale bytecode + wipe the
+    background-callback diskcache + `pip install -e ".[gui]"`. We call ONLY that (not its
+    `force_close`), because this launcher already freed port 8050 above and must NOT kill its own
+    single-instance lock on 8051. Best-effort — a failure (e.g. offline pip) never blocks the launch.
+    Windows is intentionally left as a plain fresh-restart for now."""
+    if IS_WIN:
+        return
+    try:
+        from neitz import rebuild_backend
+        rebuild_backend._QUIET = True                  # its progress -> our log, not double-printed
+        log.info("rebuilding the back end (clear caches + pip install -e '.[gui]') …")
+        rebuild_backend.rebuild(reinstall=True)
+        log.info("rebuild complete")
+    except Exception as e:
+        log.warning("rebuild step skipped (%s) — starting the existing back end", e)
+
+
 def ensure_backend():
-    """FRESH-START policy (James's ask, mirrored from benaq_app.py): every launch fully restarts the
-    back end so the icon always runs the latest code. Free the port first (kill any healthy OR
-    half-dead server holding it), then spawn a new `viewer.py` and wait for it. Returns the Popen we
-    started (always non-None on success), so the caller can tear it down on close."""
+    """FRESH-START + REBUILD on every launch (James's ask, mirrored from benaq_app.py): free port 8050
+    (kill any healthy OR half-dead server), REBUILD the back end (macOS — see `_rebuild`), then spawn
+    a new `viewer.py` and wait for it. So a double-click of the icon always runs freshly-rebuilt,
+    latest code. Returns the Popen we started (non-None on success) so the caller tears it down on
+    close."""
     pids = _pids_on_port(PORT)
     if pids:
         log.info("fresh start: freeing port %s held by %s", PORT, pids)
         _kill(pids)
         time.sleep(0.5)
+    _rebuild()                                          # macOS: kill (above) -> REBUILD -> start
     proc = _spawn_backend()
     if _wait_health():
         log.info("back end is up (fresh)")
@@ -236,6 +261,32 @@ def _set_win_icon(win):
         _apply()
 
 
+def _set_macos_dock_identity():
+    """Force OUR Dock icon (+ menu/Dock name) onto the running NSApplication — the "icon displays
+    properly" fix James mirrored from benaq_app.py. The .app launcher `exec`s python, so
+    `[NSBundle mainBundle]` resolves to the interpreter and macOS would otherwise show the Dock tile
+    as a generic 'Python' icon. Call this BEFORE `webview.create_window` so pywebview reuses the same
+    shared NSApplication. Needs pyobjc (pulled by the `[app]` extra on macOS); all best-effort."""
+    if IS_WIN:
+        return
+    try:
+        from AppKit import NSApplication, NSImage
+        icns = REPO / "assets" / "app_icon.icns"
+        img = NSImage.alloc().initWithContentsOfFile_(str(icns)) if icns.exists() else None
+        if img is not None:
+            NSApplication.sharedApplication().setApplicationIconImage_(img)
+            log.info("set macOS Dock icon from %s", icns)
+    except Exception as e:
+        log.warning("dock icon set skipped: %s", e)
+    try:
+        from Foundation import NSBundle
+        info = NSBundle.mainBundle().infoDictionary()
+        if info is not None:
+            info["CFBundleName"] = TITLE               # menu-bar / Dock label
+    except Exception:
+        pass
+
+
 def _try_native_window():
     """Open the pywebview native window (spinner loading-page first) and boot a FRESH back end in the
     background, swapping to the real UI when healthy. Blocks until the window closes; tears the back
@@ -276,6 +327,7 @@ def _try_native_window():
             pass
 
     try:
+        _set_macos_dock_identity()                    # our Dock icon BEFORE the window (macOS no-op elsewhere)
         win = webview.create_window(TITLE, html=_LOADING_HTML, width=1440, height=900,
                                     min_size=(940, 620), js_api=_Api())
         try:
@@ -286,8 +338,8 @@ def _try_native_window():
             _set_win_icon(win)
 
         def _boot():
-            # background thread (once the GUI is up): the FRESH back-end restart happens HERE, so it
-            # never delays the window/icon appearing. Swap the loading page for the real UI when up.
+            # background thread (once the GUI is up): the kill + REBUILD + fresh start happens HERE, so
+            # the slow rebuild never delays the window/icon appearing. Swap to the real UI when up.
             state["proc"] = ensure_backend()
             if state["closing"]:                      # window closed while we were starting
                 _teardown(state.get("proc"))

@@ -37,22 +37,27 @@ and macOS Space, NOT a Chrome tab (like Slack). `neitz_app.py` is the cross-plat
 wrappers just point at it. Deps: `pip install -e ".[gui,app]"` (`pywebview`; `pythonnet` on Windows;
 `pyobjc` is pulled on macOS; the Edge **WebView2** runtime ships with Win11).
 
-- **`neitz_app.py`** (cross-platform, `sys.platform`-branched). **FRESH-START on every launch**
-  (James's ask, mirrored from `benaq_app.py`): `ensure_backend()` ALWAYS frees port 8050 (kills any
-  server holding it, healthy or half-dead) and spawns a new `python viewer.py`, so double-clicking the
-  icon always runs the latest code — verified the port owner + `/neitz-health` boot uuid change each
-  launch. There is no compiled front end (Dash serves the layout from Python and fingerprints
-  `assets/` by mtime → changed CSS/JS auto-busts cache), so a fresh back end + a fresh window load IS
-  a full "rebuild both ends." The window is a **pywebview** one (WKWebView macOS / WebView2 Windows);
-  a spinner **loading-page shows INSTANTLY** (`_LOADING_HTML`), then `webview.start(_boot)` restarts
-  the back end in a background thread and `window.load_url(URL)` swaps to the real UI when healthy —
-  so the window + Dock icon appear at once (a slow windowless launch makes macOS drop the .app
-  identity → generic python icon). **Single instance** via a lock socket (port **8051**): a second
-  launch exits instead of stacking a window (macOS also won't relaunch a running .app). **Quit =
-  everything down** (`_teardown`): on red-button close / Cmd-Q / signal / atexit it stops the back end
-  AND sweeps port 8050, so nothing lingers to be reused — that's what keeps every next start fresh.
-  (This SUPERSEDES the earlier "reuse the same instance" behavior.) The `.app`/Windows launcher just
-  `exec`s this script, so editing `neitz_app.py` takes effect on the next launch — no rebuild needed.
+- **`neitz_app.py`** (cross-platform, `sys.platform`-branched). **KILL + REBUILD on every launch**
+  (James's ask, mirrored from `benaq_app.py`→`restart_full.sh`): `ensure_backend()` ALWAYS frees port
+  8050 (kills any server holding it, healthy or half-dead) and, on **macOS**, then REBUILDS via
+  `_rebuild()` → `neitz.rebuild_backend.rebuild(reinstall=True)` (clear stale bytecode + wipe the
+  background diskcache + `pip install -e ".[gui]"`) BEFORE spawning a new `python viewer.py`. So
+  double-clicking the icon runs freshly-**rebuilt** latest code (verified: log shows dock-icon →
+  loading window → "rebuilding…" → "rebuild complete" → "back end is up (fresh)"; new boot uuid each
+  launch). It calls `rebuild()` only (NOT `rebuild_backend.force_close`, which kills the 8051 lock this
+  launcher holds). *Windows stays a plain fresh-restart for now.* There is no compiled front end (Dash
+  fingerprints `assets/` by mtime → changed CSS/JS auto-busts cache). The window is a **pywebview** one
+  (WKWebView macOS / WebView2 Windows); a spinner **loading-page shows INSTANTLY** (`_LOADING_HTML`),
+  then `webview.start(_boot)` does the slow rebuild+restart in a background thread and
+  `window.load_url(URL)` swaps to the real UI when healthy — so the window appears at once.
+  **Dock icon** (macOS, mirrored from benaq — "the icon displays properly"): `_set_macos_dock_identity()`
+  forces `assets/app_icon.icns` onto the shared NSApplication (via pyobjc) BEFORE `create_window`, since
+  the `.app` `exec`s python and `[NSBundle mainBundle]` would otherwise show a generic Python tile.
+  **Single instance** via a lock socket (port **8051**): a second launch exits. **Quit = everything
+  down** (`_teardown` on window-close / Cmd-Q / atexit stops the back end AND sweeps port 8050; a bare
+  SIGTERM is unreliable while the macOS GUI loop is blocked, but the next launch's kill self-heals it).
+  The `.app` just `exec`s this script (via conda base, which has pyobjc), so editing `neitz_app.py`
+  takes effect on the next launch — no `.app` rebuild needed.
 - **Front-end auto-reload** (James's ask, mirrored from `benaqTools_py`): `viewer.py` serves
   `/neitz-health` → `{boot, code_mtime}` (`boot` = a per-process uuid). `assets/autoreload.js` polls
   it every 2 s and `location.reload()`s when `boot` changes — so relaunching after a code edit
