@@ -198,8 +198,11 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   the layout `uirevision` = a hash of every NON-align parameter (constant across zoom+align → Plotly
   holds the zoom; changes on any other edit → Plotly resets) AND honoring the relayout range only
   when keeping. (Replaces the old blanket `uirevision="keep"`.)
-- **Graph interaction toolbar** (vertical icon strip left of the signal graph — `graph_tools()` /
-  `#graph-toolbar`, a "current tool" palette; the first of a growing set): the active tool lives in
+- **Graph interaction toolbar** (vertical icon strip — `graph_tools()` / `#graph-toolbar`, a "current
+  tool" palette; the first of a growing set). It's an **absolute overlay** on the plot's top-left, NOT
+  a flex sibling of the graph — wrapping the graph in a flex row lost its `minHeight:0` and made
+  Plotly's `responsive` resize churn (whole-GUI jumpiness under the CSS `zoom` scaling); an overlay
+  leaves the graph container untouched. The active tool lives in
   the `graph-mode` store (in `UNDO_TRACK`). `set_graph_mode` (buttons → store), a clientside callback
   highlights the active button, and `build_figures(graph_mode=)` sets each axis' `fixedrange` so a
   drag-box zooms **X only** (`zoomx`, default = the historical behavior), **Y only** (`zoomy`), or

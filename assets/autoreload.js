@@ -15,6 +15,6 @@
       })
       .catch(function () { /* server restarting / unreachable — keep polling, no reload yet */ });
   }
-  setInterval(check, 2000);
+  setInterval(check, 5000);   // gentle cadence — a restart just takes ≤5 s to reflect
   check();
 })();

@@ -383,8 +383,9 @@ _OVI = {"fontSize": "10px", "height": "16px", "padding": "0 3px", "boxSizing": "
 _GTOOL = {"width": "30px", "height": "30px", "fontSize": "15px", "lineHeight": "1", "padding": "0",
           "cursor": "pointer", "border": "1px solid #bbb", "borderRadius": "6px",
           "background": "#f6f6f6"}
-_TOOLBAR = {"display": "flex", "flexDirection": "column", "gap": "5px", "flex": "0 0 auto",
-            "paddingTop": "2px", "alignItems": "center"}
+_TOOLBAR = {"position": "absolute", "left": "3px", "top": "30px", "zIndex": 25,
+            "display": "flex", "flexDirection": "column", "gap": "5px",
+            "background": "rgba(255,255,255,0.55)", "borderRadius": "6px", "padding": "2px"}
 
 
 def _tool_btn(bid, glyph, title):
@@ -1227,10 +1228,10 @@ app.layout = html.Div(
         ]),
         # signal + frame-sync (frame-sync row enlarged) — gets the lion's share of height.
         # Region & display controls float in the corners, hugging the graph.
-        html.Div(style={"flex": "3 1 0", "minHeight": 0, "display": "flex", "gap": "4px"}, children=[
-            # graph interaction tools (vertical strip left of the plot, so it never covers traces)
+        html.Div(style={"flex": "3 1 0", "minHeight": 0, "position": "relative"}, children=[
+            # graph interaction tools — an absolute overlay on the plot's top-left corner (does NOT
+            # restructure the graph container, so Plotly's responsive resize stays stable)
             html.Div(id="graph-toolbar", style=_TOOLBAR, children=graph_tools()),
-            html.Div(style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}, children=[
             dcc.Graph(id="time", style={"height": "100%"},
                       config={"responsive": True, "scrollZoom": True, "doubleClick": "reset"},
                       figure=blank_fig("pick a cell, then check file(s) to display")),
@@ -1266,7 +1267,6 @@ app.layout = html.Div(
                       dcc.Input(id="stagger-pct", type="number", value=0, min=0, max=100, step=5,
                                 debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
                      style=ov(bottom="26px", right="8px")),
-            ]),
         ]),
         # bottom strip (less tall): FFT at half width + ISI histogram at the other half
         html.Div(style={"flex": "1 1 0", "minHeight": 0, "display": "flex", "gap": "6px"},
