@@ -76,7 +76,7 @@ def pair_by_order(manifest_rows, recording_ids) -> list[tuple]:
     return list(zip(recording_ids, manifest_rows))
 
 
-def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True) -> int:
+def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True, strict=True) -> int:
     """Auto-fill a cell's recordings' stimulus metadata from the day's stim manifest.
 
     Finds ``<date>_stim_manifest.jsonl`` in `source_dir`, pairs its rows to the cell's
@@ -86,6 +86,12 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True) -
     so the stored cell is self-contained. Returns the number of recordings tagged — ``0``
     (a no-op) when no manifest is found, so callers can fall back to hand-entered stimulus.
 
+    By-order pairing is only valid with exactly one manifest row per recording. If the
+    counts differ (a session that crossed midnight into a second manifest file, an aborted
+    trial, or an orphan row) pairing would SILENTLY mislabel trials — so with ``strict``
+    (default) this raises ``ValueError`` instead of mispairing; ``strict=False`` warns and
+    returns 0 so the caller can fall back to hand-entry.
+
     `cm` is duck-typed (needs ``.data["recordings"]``, ``.set_stimulus``, ``.dir``) so this
     stays free of a `dataio` import.
     """
@@ -94,6 +100,15 @@ def apply_session_manifest(cm, source_dir, *, date=None, copy_into_store=True) -
         return 0
     rows = load_session_manifest(mf)
     rec_ids = [r["id"] for r in cm.data.get("recordings", [])]
+    if len(rows) != len(rec_ids):
+        msg = (f"stim-manifest / recording count mismatch: {len(rows)} rows in {mf.name} vs "
+               f"{len(rec_ids)} recordings. By-order pairing would silently mislabel trials "
+               f"(session crossed midnight? aborted/orphan trial?). Refusing to auto-pair.")
+        if strict:
+            raise ValueError(msg)
+        import warnings
+        warnings.warn(msg)
+        return 0
     n = 0
     for rec_id, rec in pair_by_order(rows, rec_ids):
         stim_type, params = stimulus_metadata(rec)
