@@ -1234,8 +1234,7 @@ app.layout = html.Div(
             # restructure the graph container, so Plotly's responsive resize stays stable)
             html.Div(id="graph-toolbar", style=_TOOLBAR, children=graph_tools()),
             dcc.Graph(id="time", style={"height": "100%"},
-                      config={"responsive": True, "scrollZoom": True, "doubleClick": "reset",
-                              "edits": {"shapePosition": True}},   # drag region-boundary lines
+                      config={"responsive": True, "scrollZoom": True, "doubleClick": "reset"},
                       figure=blank_fig("pick a cell, then check file(s) to display")),
             # top-left (flush with the plot's left): region start — hidden when cropping
             html.Div([html.Span("start (s)", style=_OVL),
@@ -1660,6 +1659,18 @@ def drag_region(rl, mode):
     return ns, ne
 
 
+# shape-dragging (the region boundary lines) is enabled ONLY in edit-region mode. Toggling the graph
+# config re-inits Plotly, so return no_update unless editregion-ness actually flips — that keeps the
+# zoom across zoom-mode switches (which don't change editregion-ness).
+@app.callback(Output("time", "config"), Input("graph-mode", "data"), State("time", "config"))
+def time_config(mode, cur):
+    want = (mode == "editregion")
+    if bool((cur or {}).get("edits", {}).get("shapePosition")) == want:
+        return no_update
+    return {"responsive": True, "scrollZoom": True, "doubleClick": "reset",
+            "edits": {"shapePosition": want}}
+
+
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
                   fft_bin=5.0, align_map=None, group=None, fft_input=None, graph_mode="zoomx",
@@ -1881,7 +1892,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
         for xb in (rs, re_):                       # (added BEFORE the vrects so their indices are fixed)
             time_fig.add_shape(type="line", xref="x", yref="paper", x0=xb, x1=xb, y0=0, y1=1,
                                line=dict(color="#e4604e", width=3))
-    if not crop:                                   # shade excluded blocks (skip when cropped out)
+    if not crop and not do_editregion:             # shade excluded (skip when cropped OR editing region)
         for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
                                  (re_, t1_full, "excluded", "bottom right")]:
             if b > a + 1e-6:
