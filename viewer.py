@@ -1286,12 +1286,13 @@ app.layout = html.Div(
                                               options=[{"label": " view input", "value": "on"}],
                                               value=[], inline=True,
                                               labelStyle={"fontSize": "10px"}, **PERSIST)],
-                               style=ov(top="56px", left="58px"))],
+                               style=ov(top="4px", left="6px"))],   # above the spectrum, not over it
                      style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}),
             # ISI histogram with the spike-train bin control floated inside, below the toolbar
             html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True},
                                 figure=blank_fig("")),
-                      html.Div([html.Span("bin (ms)", style=_OVL),
+                      html.Div([html.Span("bin (ms)", style=_OVL,
+                                          title="ISI bin width in ms — 0 = auto (~60 bins)"),
                                 dcc.Input(id="train-bin", type="number", value=0, min=0,
                                           debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
                                style=ov(top="34px", right="8px"))],
