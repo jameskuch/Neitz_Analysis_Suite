@@ -1597,6 +1597,12 @@ def toggle_disp_show(binned):
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
            align_map, group, fft_input, graph_mode, relayout):
+    # a boundary-line DRAG fires this relayout too; let drag_region update region-start/end (which
+    # re-renders cleanly) instead of redrawing here with the OLD region — that redraw is what snaps
+    # the dragged line back to where it started.
+    if (ctx.triggered_id == "time" and relayout
+            and any(str(kk).startswith("shapes[") for kk in relayout)):
+        return no_update, no_update, no_update, no_update
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
                          fft_bin=fft_bin, align_map=align_map, group=group, fft_input=fft_input,
@@ -1655,9 +1661,11 @@ app.clientside_callback(
 def drag_region(rl, mode):
     if mode != "editregion" or not rl:
         return no_update, no_update
-    ns = round(float(rl["shapes[0].x0"]), 3) if "shapes[0].x0" in rl else no_update
-    ne = round(float(rl["shapes[1].x0"]), 3) if "shapes[1].x0" in rl else no_update
-    return ns, ne
+    def edited_x(idx):                          # a real drag emits BOTH shapes[i].x0 and .x1; average
+        vals = [float(v) for k, v in rl.items()
+                if k.startswith(f"shapes[{idx}].x") and (k.endswith(".x0") or k.endswith(".x1"))]
+        return round(sum(vals) / len(vals), 3) if vals else no_update
+    return edited_x(0), edited_x(1)
 
 
 # shape-dragging (the region boundary lines) is enabled ONLY in edit-region mode. Toggling the graph
