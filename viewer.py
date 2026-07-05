@@ -28,6 +28,7 @@ import base64
 import shutil
 import platform
 import subprocess
+from datetime import datetime
 from pathlib import Path
 import numpy as np
 import matplotlib
@@ -1105,6 +1106,33 @@ app.layout = html.Div(
                                 style={"width": "100%", "boxSizing": "border-box"})],
                      style={"marginTop": "6px"}),
             html.Div(id="store-msg", style={"marginTop": "6px", "minHeight": "14px"}),
+
+            # ---- saved Analysis-View states (stored in the cell's manifest.json) ----
+            # Snapshot every analysis/display control (region, detection, alignment, per-trace
+            # thresholds, display toggles, …) under a name; restore it onto this cell later. The
+            # file selection itself is NOT part of the snapshot (settings apply to the current files).
+            html.Hr(style={"border": "none", "borderTop": "1px solid #ddd", "margin": "8px 0 5px"}),
+            html.Span("saved views — snapshot / restore this cell's settings",
+                      style={"fontSize": "11px", "fontWeight": "bold", "color": "#333"}),
+            html.Div([
+                dcc.Input(id="view-name", type="text", value="", debounce=False,
+                          placeholder="name this view…",
+                          style={"flex": "1", "minWidth": 0, "boxSizing": "border-box",
+                                 "fontSize": "11px", "height": "20px"}),
+                html.Button("💾 Save", id="save-view", n_clicks=0,
+                            title="save the current analysis settings for this cell",
+                            style={"fontSize": "11px", "padding": "0 8px", "marginLeft": "5px",
+                                   "cursor": "pointer", "flex": "0 0 auto"}),
+            ], style={"display": "flex", "alignItems": "center", "marginTop": "4px"}),
+            html.Div([
+                dcc.Dropdown(id="view-select", options=[], placeholder="restore a saved view…",
+                             style={"flex": "1", "minWidth": 0, "fontSize": "11px"}),
+                html.Button("🗑", id="del-view", n_clicks=0, title="delete the selected saved view",
+                            style={"fontSize": "12px", "padding": "0 7px", "marginLeft": "5px",
+                                   "cursor": "pointer", "flex": "0 0 auto", "color": "#c0392b"}),
+            ], style={"display": "flex", "alignItems": "center", "marginTop": "4px"}),
+            html.Div(id="view-msg", style={"fontSize": "10px", "color": "#2a7a2a",
+                                           "marginTop": "3px", "minHeight": "12px"}),
         ]),
 
         # ---- compartment: channels & spike detection ----
@@ -1289,6 +1317,7 @@ app.layout = html.Div(
     dcc.Store(id="align-map"),                            # {file path: trial-align offset (SECONDS)}
     dcc.Store(id="align-seed"),                           # {file path: offset (ms) shown in the editor}
     dcc.Store(id="hist"),                                 # undo/redo: {"stack": [snapshot,...], "idx": n}
+    dcc.Store(id="view-rev", data=0),                     # bumped on save/delete → refresh #view-select
     dcc.Input(id="undo-key", value="", style={"display": "none"}),   # clientside writes "undo:N"/"redo:N"
     dcc.Input(id="align-focus", value="", style={"display": "none"}),  # JS: focused align box's file path
     dcc.Store(id="align-focus-sink"),                     # clientside highlight callback sink
@@ -3260,6 +3289,103 @@ def undo_apply(key, hist):
         return blank
     snap = stack[idx]
     return [snap.get(kk) for kk in _UNDO_KEYS] + [{"stack": stack, "idx": idx}]
+
+
+# ===================== SAVE / RESTORE Analysis-View state (per cell) =========================
+# A named snapshot of every analysis/display control, stored in the cell's manifest.json (same data
+# structure as everything else). Reuses the UNDO_TRACK contract MINUS the file selection: the file
+# checklist is left as-is on restore (settings apply to the current files) — restoring `file` would
+# retrigger load_meta and clobber the snapshot's channel/region. Add a control to UNDO_TRACK and it
+# is captured here automatically too.
+_VIEW_TRACK = [t for t in UNDO_TRACK if t != ("file", "value")]
+_VIEW_KEYS = [f"{cid}.{prop}" for cid, prop in _VIEW_TRACK]
+
+
+def _sel_first(sel):
+    """First {date, cell} of the sel-cell store (list or single), or None."""
+    sels = sel if isinstance(sel, list) else ([sel] if sel else [])
+    return sels[0] if sels else None
+
+
+# populate the restore dropdown from the selected cell's manifest (refreshes on save/delete via view-rev)
+@app.callback(Output("view-select", "options"),
+              Input("sel-cell", "data"), Input("view-rev", "data"), prevent_initial_call=False)
+def list_view_states(sel, _rev):
+    s = _sel_first(sel)
+    if not s:
+        return []
+    try:
+        cm = DataStore().cell(s["date"], s["cell"])
+        return [{"label": v["name"], "value": v["name"]} for v in cm.view_states()]
+    except Exception:
+        return []
+
+
+# save: snapshot the tracked controls into the cell's manifest under the given name (blank → timestamp)
+@app.callback(Output("view-rev", "data"), Output("view-msg", "children"),
+              Output("view-name", "value"), Output("view-select", "value"),
+              Input("save-view", "n_clicks"),
+              State("view-name", "value"), State("sel-cell", "data"),
+              [State(cid, prop) for cid, prop in _VIEW_TRACK],
+              State("view-rev", "data"), prevent_initial_call=True)
+def save_view(_n, name, sel, *rest):
+    vals, rev = list(rest[:-1]), rest[-1]
+    s = _sel_first(sel)
+    if not s:
+        return no_update, "⚠ pick a cell first", no_update, no_update
+    nm = (name or "").strip() or datetime.now().strftime("view %Y-%m-%d %H:%M:%S")
+    state = dict(zip(_VIEW_KEYS, vals))
+    try:
+        cm = DataStore().cell(s["date"], s["cell"])
+        cm.save_view_state(nm, state)
+        cm.save()
+    except Exception as e:
+        return no_update, f"⚠ save failed: {e}", no_update, no_update
+    return (rev or 0) + 1, f"✓ saved “{nm}”", "", nm
+
+
+# restore: write the snapshot back to every tracked control (undo_record captures it as one step)
+@app.callback([Output(cid, prop, allow_duplicate=True) for cid, prop in _VIEW_TRACK]
+              + [Output("view-msg", "children", allow_duplicate=True)],
+              Input("view-select", "value"), State("sel-cell", "data"),
+              prevent_initial_call=True)
+def restore_view(name, sel):
+    blank = [no_update] * (len(_VIEW_TRACK) + 1)
+    s = _sel_first(sel)
+    if not name or not s:
+        return blank
+    try:
+        cm = DataStore().cell(s["date"], s["cell"])
+        rec = next((v for v in cm.view_states() if v["name"] == name), None)
+    except Exception:
+        rec = None
+    if not rec:
+        return blank
+    state = rec.get("state", {})
+    return [state.get(kk) for kk in _VIEW_KEYS] + [f"✓ restored “{name}”"]
+
+
+# delete: remove the selected saved view from the manifest
+@app.callback(Output("view-rev", "data", allow_duplicate=True),
+              Output("view-msg", "children", allow_duplicate=True),
+              Output("view-select", "value", allow_duplicate=True),
+              Input("del-view", "n_clicks"),
+              State("view-select", "value"), State("sel-cell", "data"),
+              State("view-rev", "data"), prevent_initial_call=True)
+def delete_view(_n, name, sel, rev):
+    s = _sel_first(sel)
+    if not name:
+        return no_update, "select a saved view to delete", no_update
+    if not s:
+        return no_update, no_update, no_update
+    try:
+        cm = DataStore().cell(s["date"], s["cell"])
+        removed = cm.delete_view_state(name)
+        if removed:
+            cm.save()
+    except Exception as e:
+        return no_update, f"⚠ delete failed: {e}", no_update
+    return (rev or 0) + 1, (f"🗑 deleted “{name}”" if removed else "not found"), None
 
 
 if __name__ == "__main__":

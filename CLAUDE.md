@@ -172,6 +172,18 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   boxes → re-derives the maps → renders; `undoredo.js` leaves native text-undo alone while a text
   field is focused. This rule was James's explicit ask ("always remember to update the undo/redo
   queue"). A debounced input only records on blur/Enter (that's how dcc.Input commits).
+- **Saved Analysis-View states (per cell, in the manifest).** The "saved views" block in the Data
+  store card snapshots the analysis/display controls under a name and restores them onto a cell.
+  Storage is `manifest.json` → `view_states[]` = `{name, created, state}` (same data structure as
+  everything else; `CellManifest.save_view_state` / `view_states` / `delete_view_state`, re-save by
+  name REPLACES). The snapshot reuses the UNDO_TRACK contract MINUS `file` — `_VIEW_TRACK = [t for t
+  in UNDO_TRACK if t != ("file","value")]` — because restoring the file checklist would retrigger
+  `load_meta` and clobber the snapshot's channel/region; settings apply to the CURRENT file
+  selection. Callbacks: `list_view_states` (fills `#view-select` from the cell, refreshed by a
+  `view-rev` bump), `save_view`, `restore_view` (writes every `_VIEW_TRACK` prop with
+  `allow_duplicate`; `undo_record` then captures it as one undo step), `delete_view`. So adding a
+  control to UNDO_TRACK also makes it save/restore automatically. Known follow-up: view states don't
+  yet capture the file subset (a robust file-restore needs load_meta to yield to the restore).
 - **Settable FFT bin** (power panel overlay `#fft-bin`, default 5 ms = 200 Hz): threaded through
   `binned_rate` + `power_w` (both MUST share the rate) via `build_figures(fft_bin=)`. Coarser bins
   low-pass the impulse train → fewer harmonics; the title shows the bin and the spectrum caps at its

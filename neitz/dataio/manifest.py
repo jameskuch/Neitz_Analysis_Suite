@@ -86,6 +86,29 @@ class CellManifest:
         d.mkdir(parents=True, exist_ok=True)
         return d
 
+    # -- saved Analysis-View states -----------------------------------------
+    # A named snapshot of the GUI's analysis/display controls for this cell (region, detection,
+    # alignment, per-trace thresholds, display toggles, …). Stored right in the manifest so the
+    # settings you worked out on a cell can be restored later. Keyed by `name` (re-save REPLACES).
+    def view_states(self) -> list:
+        return self.data.get("view_states", [])
+
+    def save_view_state(self, name, state) -> dict:
+        rec = {"name": name, "created": datetime.now().isoformat(timespec="seconds"), "state": state}
+        states = self.data.setdefault("view_states", [])
+        for i, s in enumerate(states):
+            if s.get("name") == name:
+                states[i] = rec
+                return rec
+        states.append(rec)
+        return rec
+
+    def delete_view_state(self, name) -> bool:
+        states = self.data.get("view_states", [])
+        kept = [s for s in states if s.get("name") != name]
+        self.data["view_states"] = kept
+        return len(kept) < len(states)
+
     def record_output(self, analysis, *, files, params=None, summary=None,
                       inputs=None, created=None, label=None) -> dict:
         out = {"analysis": analysis,
