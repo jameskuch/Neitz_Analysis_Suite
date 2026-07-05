@@ -1788,11 +1788,12 @@ def toggle_disp_show(binned):
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
            align_map, group, fft_input, relayout):
-    # a boundary-line DRAG fires this relayout too; let drag_region update region-start/end (which
-    # re-renders cleanly) instead of redrawing here with the OLD region — that redraw is what snaps
-    # the dragged line back to where it started.
+    # a boundary-line DRAG fires this relayout too; let the (clientside) drag_region update
+    # region-start/end (which re-renders cleanly) instead of redrawing here with the OLD region —
+    # that redraw is what snaps the dragged line back. Match BOTH relayout shapes: individual
+    # "shapes[0].x0" keys AND a full "shapes" array (WKWebView / some Plotly builds emit the latter).
     if (ctx.triggered_id == "time" and relayout
-            and any(str(kk).startswith("shapes[") for kk in relayout)):
+            and any(str(kk).startswith("shapes") for kk in relayout)):
         return no_update, no_update, no_update, no_update
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
@@ -1800,20 +1801,48 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
                          relayout=relayout, trig=ctx.triggered_id)
 
 
-# Dragging a start/end boundary line (shapes[0]/[1], always editable) writes the new x back to the
-# region-start / region-end boxes → the analysis window follows. Plotly emits this relayout on
-# release (mouse-up), so the boxes update when the drag ends.
-@app.callback(Output("region-start", "value", allow_duplicate=True),
-              Output("region-end", "value", allow_duplicate=True),
-              Input("time", "relayoutData"), prevent_initial_call=True)
-def drag_region(rl):
-    if not rl:
-        return no_update, no_update
-    def edited_x(idx):                          # a real drag emits BOTH shapes[i].x0 and .x1; average
-        vals = [float(v) for k, v in rl.items()
-                if k.startswith(f"shapes[{idx}].x") and (k.endswith(".x0") or k.endswith(".x1"))]
-        return round(sum(vals) / len(vals), 3) if vals else no_update
-    return edited_x(0), edited_x(1)
+# Dragging a start/end boundary line (shapes[0]=start, shapes[1]=end, both editable) writes the new x
+# back to the region-start / region-end boxes → the analysis window follows. Done CLIENTSIDE so it
+# updates the instant Plotly fires the drag relayout (mouse-up) — a server round-trip here was racing
+# the re-render and sometimes dropping the update (the boxes needed a manual re-type). Handles BOTH
+# relayout formats: individual "shapes[0].x0"/".x1" keys and a full "shapes" array (WKWebView emits
+# the latter). The shape is yref="paper" so ONE line spans BOTH the signal + frame-sync subplots —
+# grabbing it in either graph moves the same boundary, and this keeps the boxes (hence everything
+# downstream) in lock-step. NO_UPDATE unless a shape actually moved, so zooms/pans don't touch it.
+app.clientside_callback(
+    """
+    function(rl){
+        var NO = window.dash_clientside.no_update;
+        if(!rl) return [NO, NO];
+        function mid(x0, x1){
+            var v = [];
+            if(x0 !== undefined && x0 !== null) v.push(+x0);
+            if(x1 !== undefined && x1 !== null) v.push(+x1);
+            if(!v.length) return NO;
+            var s = 0; v.forEach(function(z){ s += z; });
+            return Math.round((s / v.length) * 1000) / 1000;
+        }
+        // format A: individual dotted keys  shapes[0].x0, shapes[0].x1, shapes[1].x0, ...
+        var a0, a1, b0, b1;
+        for(var k in rl){
+            if(k === 'shapes[0].x0') a0 = rl[k];
+            else if(k === 'shapes[0].x1') a1 = rl[k];
+            else if(k === 'shapes[1].x0') b0 = rl[k];
+            else if(k === 'shapes[1].x1') b1 = rl[k];
+        }
+        var start = mid(a0, a1), end = mid(b0, b1);
+        // format B: a full shapes[] array (only override if format A didn't supply the value)
+        if(rl.shapes && rl.shapes.length){
+            if(start === NO && rl.shapes[0]) start = mid(rl.shapes[0].x0, rl.shapes[0].x1);
+            if(end   === NO && rl.shapes[1]) end   = mid(rl.shapes[1].x0, rl.shapes[1].x1);
+        }
+        return [start, end];
+    }
+    """,
+    Output("region-start", "value", allow_duplicate=True),
+    Output("region-end", "value", allow_duplicate=True),
+    Input("time", "relayoutData"),
+    prevent_initial_call=True)
 
 
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
