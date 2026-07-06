@@ -107,7 +107,8 @@
   var drag = null;   // {node, startX, startY, origLeft, origTop, moved}
   document.addEventListener("pointerdown", function (e) {
     var header = e.target.closest && e.target.closest(".pnode-header");
-    if (!header || (e.target.closest && e.target.closest(".pnode-del"))) return;
+    if (!header || (e.target.closest && (e.target.closest(".pnode-del") ||
+                                         e.target.closest(".pnode-info")))) return;
     var node = header.closest(".pnode");
     if (!node) return;
     drag = {

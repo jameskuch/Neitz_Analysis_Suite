@@ -261,6 +261,14 @@ html, body { margin: 0; }
 .pnode-header:active { cursor: grabbing; }
 .pnode-del { cursor: pointer; opacity: 0.7; font-size: 11px; padding: 0 2px; }
 .pnode-del:hover { opacity: 1; color: #ffd0d0; }
+.pnode-info { cursor: pointer; opacity: 0.7; font-size: 12px; padding: 0 1px; }
+.pnode-info:hover { opacity: 1; color: #bfe0ff; }
+/* node breakout panel (large detail: description + math + settable variables) */
+.pnode-detail-card { width: 92%; max-width: 700px; max-height: 88vh; overflow-y: auto;
+  background: #1a1d25; border: 1px solid #363b47; border-radius: 10px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.6); color: #e3e7ef; }
+.pnode-detail-card .dash-dropdown, .pnode-detail-card input { background: #12141a;
+  color: #e3e7ef; border: 1px solid #363b47; border-radius: 3px; }
 .pport:hover > div { transform: scale(1.35); }
 .pport.armed > div { box-shadow: 0 0 0 3px rgba(255,208,32,0.6); }
 /* the inline param controls sit on the dark node body */

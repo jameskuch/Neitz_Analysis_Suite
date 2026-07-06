@@ -155,9 +155,13 @@ def _spawn_backend():
     kw = {}
     if IS_WIN:
         kw["creationflags"] = 0x08000000       # CREATE_NO_WINDOW: no console pop-up for the server
-    log.info("starting back end: %s %s (cwd=%s)", sys.executable, VIEWER, LOG_DIR)
+    # Stamp OUR pid so the back end can watchdog us and self-exit the instant the GUI quits (Cmd-Q /
+    # red-button / crash) — a hard guarantee on top of _teardown that no server outlives the window.
+    env = dict(os.environ, NEITZ_APP_PARENT_PID=str(os.getpid()))
+    log.info("starting back end: %s %s (cwd=%s, parent_pid=%s)", sys.executable, VIEWER, LOG_DIR,
+             os.getpid())
     return subprocess.Popen([sys.executable, str(VIEWER)], cwd=str(LOG_DIR),
-                            stdout=logf, stderr=subprocess.STDOUT, **kw)
+                            stdout=logf, stderr=subprocess.STDOUT, env=env, **kw)
 
 
 def _wait_health(timeout=45.0):

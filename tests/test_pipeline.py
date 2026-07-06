@@ -52,7 +52,7 @@ def test_storage_roundtrip_and_copy():
         names = pl.list_pipelines(root=d)
         assert set(pl.DEFAULT_PIPELINES).issubset(set(names))
 
-        p = pl.load_pipeline("Flicker ON/OFF", root=d)
+        p = pl.load_pipeline("Sq wave ON/OFF", root=d)
         assert p is not None
         pl.node_of_type(p, "detect")["params"]["k"] = 9
         p["name"] = "my-flicker"
@@ -74,3 +74,36 @@ def test_new_node_uses_defaults_and_overrides():
     assert n["params"]["k"] == 10
     assert "bogus" not in n["params"]          # unknown params dropped
     assert n["params"]["polarity"] == "neg"    # default kept
+
+
+def test_flicker_node_relabeled_sq_wave():
+    # display label renamed; the internal type / stimulus family stay 'flicker' / 'sq_wave'
+    assert pl.COMPONENT_REGISTRY["flicker"]["label"] == "Sq wave ON/OFF"
+    assert pl.COMPONENT_REGISTRY["flicker"]["terminal"] == "sq_wave"
+
+
+def test_registry_has_desc_and_math_for_every_component():
+    for ctype, spec in pl.COMPONENT_REGISTRY.items():
+        assert spec.get("desc"), f"{ctype} missing desc"
+        assert isinstance(spec.get("math"), list) and spec["math"], f"{ctype} missing math"
+
+
+def test_smooth_and_tfilter_extraction():
+    p = pl.default_flicker_pipeline()
+    # no smooth / tfilter node in the default chain
+    assert pl.smooth_from_pipeline(p) is None
+    assert pl.tfilter_from_pipeline(p) is None
+
+    p["nodes"].append(pl.new_node("smooth", "sm0", params={"window": 6, "method": "gaussian"}))
+    sm = pl.smooth_from_pipeline(p)
+    assert sm == {"method": "gaussian", "window": 6.0, "polyorder": 2}
+
+    # a span < 2 is a no-op (None)
+    pl.node_of_type(p, "smooth")["params"]["window"] = 1
+    assert pl.smooth_from_pipeline(p) is None
+
+    p["nodes"].append(pl.new_node("tfilter", "tf0",
+                                  params={"cutoff_hz": 25, "mode": "highpass", "taps": 41}))
+    tf = pl.tfilter_from_pipeline(p)
+    assert tf["cutoff_hz"] == 25.0 and tf["mode"] == "highpass" and tf["taps"] == 41
+    assert pl.pipeline_stim_family(p) == "sq_wave"    # new processing nodes don't change dispatch

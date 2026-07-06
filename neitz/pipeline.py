@@ -44,6 +44,11 @@ COMPONENT_REGISTRY: dict = {
         "category": "source",
         "color": "#2d7d46",
         "help": "The selected cell's .abf recordings (from the Analysis View selection).",
+        "desc": ("The pipeline's input: the recordings checked in the Analysis View for the "
+                 "current cell. Each .abf carries the signal channel (Im_prime / Vm_sec), the "
+                 "frame-clock TTL, and its sample rate. One recording = one epoch."),
+        "math": ["No computation — this node hands the selected epochs downstream.",
+                 "signal xᵢ(t), frame-clock TTLᵢ(t), sample rate fs   for each epoch i"],
         "inputs": [],
         "outputs": [{"name": "recordings", "type": PORT_RECORDINGS}],
         "params": {},
@@ -53,6 +58,13 @@ COMPONENT_REGISTRY: dict = {
         "category": "processing",
         "color": "#2f6fb0",
         "help": "Nudge each file so its frame-sync (trial start) lines up before pooling.",
+        "desc": ("Shifts every epoch in time so its frame-clock (trial start) lines up before "
+                 "the epochs are pooled/averaged. 'auto' seeds each offset from the TTL's first "
+                 "onset, then refines to sample precision by FFT cross-correlating the two "
+                 "frame-sync waveforms. The signal, TTL, and spikes all move together."),
+        "math": ["seed:   τ₀ᵢ = first TTL onset of epoch i",
+                 "refine: τᵢ* = argmaxτ  Σₜ syncᵢ(t)·sync_ref(t+τ)     (cross-correlation peak)",
+                 "apply:  t → t − τᵢ*   for signal, TTL and spikes of epoch i"],
         "inputs": [{"name": "recordings", "type": PORT_RECORDINGS}],
         "outputs": [{"name": "aligned", "type": PORT_RECORDINGS}],
         "params": {
@@ -65,6 +77,15 @@ COMPONENT_REGISTRY: dict = {
         "category": "processing",
         "color": "#8e44ad",
         "help": "Threshold-detect spikes on the signal channel (per-trace thresholds honored).",
+        "desc": ("Finds spikes on the signal channel by threshold crossing. 'mad' sets the "
+                 "threshold from the robust noise level (median absolute deviation); 'matlab' "
+                 "reproduces Sara's spikeDetectorOnline.m (500 Hz high-pass, max/3 threshold, "
+                 "4σ noise gate). Polarity picks the crossing direction; a refractory period "
+                 "suppresses double-counts."),
+        "math": ["MAD(x) = median(|x − median(x)|),   σ̂ = 1.4826·MAD(x)",
+                 "θ = k·σ̂        (mad)      θ = max|x|/3   (matlab)",
+                 "spike at t where x(t) crosses ∓θ (polarity), gated by a refractory Δt",
+                 "neg → −x,   pos → x,   abs → |x|  before thresholding"],
         "inputs": [{"name": "recordings", "type": PORT_RECORDINGS}],
         "outputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "params": {
@@ -83,6 +104,12 @@ COMPONENT_REGISTRY: dict = {
         "category": "processing",
         "color": "#c0803a",
         "help": "Restrict the analysis to the [start, end] window (drops the adapting block).",
+        "desc": ("Restricts the analysis to a [start, end] time window — typically to drop the "
+                 "pre-stimulus adapting block and keep only the steady-state response. Blank "
+                 "start/end use the auto-detected stimulus window. 'crop' hard-trims; otherwise "
+                 "the window is a mask."),
+        "math": ["keep spikes with  t_start ≤ tⱼ ≤ t_end",
+                 "blank ⇒ auto window from the flicker envelope (t₀, t₁)"],
         "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "outputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "params": {
@@ -91,11 +118,79 @@ COMPONENT_REGISTRY: dict = {
             "crop": {"type": "bool", "default": False, "label": "crop to region"},
         },
     },
+    "smooth": {
+        "label": "Smooth (pre-FFT)",
+        "category": "processing",
+        "color": "#3a8f8f",
+        "help": "Moving-average / gaussian / Savitzky-Golay smoothing of the binned rate "
+                "before the transform (MATLAB smooth(y, span)).",
+        "desc": ("Low-pass smooths the binned spike-rate trace before it is transformed — the "
+                 "operation Sara ran on the online traces (smooth(YData, 4)). 'moving' is the "
+                 "MATLAB moving average (odd span, windows shrink at the ends); 'gaussian' "
+                 "weights by a bell of FWHM = span; 'savgol' fits a local polynomial "
+                 "(preserves peak height/width). Insert it right before the analysis/FFT node."),
+        "math": ["moving:   ỹ[i] = (1/(2w+1)) Σ_{j=−w}^{w} y[i+j],   w = min((span−1)/2, i, n−1−i)",
+                 "gaussian: ỹ = y ∗ g,   g[k] ∝ exp(−k²/2σ²),   σ = span / 2.3548 (FWHM)",
+                 "savgol:   ỹ[i] = local degree-p least-squares fit over `span` samples",
+                 "an even span is reduced to span−1 (odd, symmetric — the MATLAB rule)"],
+        "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
+        "outputs": [{"name": "spikes", "type": PORT_SPIKES}],
+        "params": {
+            "method": {"type": "choice", "default": "moving", "label": "method",
+                       "options": ["moving", "gaussian", "savgol"]},
+            "window": {"type": "number", "default": 4, "label": "span (samples)",
+                       "min": 0, "max": 999, "step": 1},
+            "polyorder": {"type": "number", "default": 2, "label": "savgol order",
+                          "min": 1, "max": 6, "step": 1},
+        },
+    },
+    "tfilter": {
+        "label": "Temporal filter",
+        "category": "processing",
+        "color": "#5a7fb0",
+        "help": "Zero-phase FIR low-/high-pass in time (Hz). Time-domain port of the "
+                "benaqTools spatial filter.",
+        "desc": ("A zero-phase FIR low-pass or high-pass applied to the binned rate in the time "
+                 "domain — the 1-D (time) port of the benaqTools spatial filter. The cutoff is "
+                 "in Hz (converted to cycles/sample with the bin rate). Low-pass keeps slow "
+                 "trends; high-pass removes drift/DC. Types trade sharpness for ringing; the "
+                 "realized (truncated-kernel) response is what runs."),
+        "math": ["fc = cutoff_Hz / fs   (cycles/sample)",
+                 "butterworth:  |H(f)| = 1 / √(1 + (f/fc)^{2n})",
+                 "windowed-sinc: h[k] = 2fc·sinc(2fc·k)·w[k]   (hamming/hann/blackman/ideal)",
+                 "high-pass = δ − low-pass   (spectral inversion, exact for symmetric FIRs)",
+                 "ỹ = y ∗ h   (reflect-padded, centered ⇒ zero phase)"],
+        "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
+        "outputs": [{"name": "spikes", "type": PORT_SPIKES}],
+        "params": {
+            "ftype": {"type": "choice", "default": "butterworth", "label": "type",
+                      "options": ["gaussian", "butterworth", "ideal", "hamming",
+                                  "hanning", "blackman"]},
+            "mode": {"type": "choice", "default": "lowpass", "label": "mode",
+                     "options": ["lowpass", "highpass"]},
+            "cutoff_hz": {"type": "number", "default": 30, "label": "cutoff (Hz)",
+                          "min": 0.1, "step": 1},
+            "order": {"type": "number", "default": 2, "label": "order (butter)",
+                      "min": 1, "max": 10, "step": 1},
+            "taps": {"type": "number", "default": 33, "label": "taps", "min": 3,
+                     "max": 129, "step": 2},
+        },
+    },
     "flicker": {
-        "label": "Flicker ON/OFF",
+        "label": "Sq wave ON/OFF",
         "category": "analysis",
         "color": "#b0392f",
-        "help": "Square-wave cycle/transition PSTH + pooled ON/OFF shift test.",
+        "help": "Square-wave (sq wave) cycle/transition PSTH + pooled ON/OFF shift test.",
+        "desc": ("The square-wave (flicker) analysis: folds spikes over the stimulus period into "
+                 "a cycle PSTH, measures how tightly they lock to the cycle (vector strength), "
+                 "and tests whether the ON and OFF transitions drive a transient response — the "
+                 "pooled ON/OFF ratio against a spike-shuffled null. The analysis internals stay "
+                 "named 'flicker' (output folder, run function) for data compatibility."),
+        "math": ["period  T = 1/f   (stimulus frequency f from the frame clock)",
+                 "cycle PSTH:  r(φ) = (1/N_cyc)·(count of spikes with phase φ)/Δφ,  φ = (t mod T)/T",
+                 "vector strength:  VS = | (1/N) Σⱼ e^{i2πφⱼ} |   ∈ [0,1]",
+                 "ON/OFF ratio = mean rate in the transition window / baseline rate",
+                 "p = fraction of `shuffles` circular/jitter nulls with ratio ≥ observed"],
         "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "outputs": [{"name": "result", "type": PORT_RESULT}],
         "terminal": "sq_wave",
@@ -108,6 +203,13 @@ COMPONENT_REGISTRY: dict = {
         "category": "analysis",
         "color": "#b0392f",
         "help": "Temporal spike-triggered average from the seed-regenerated Gaussian noise.",
+        "desc": ("Temporal spike-triggered average: the mean stimulus contrast in the window "
+                 "preceding each spike — the cell's linear temporal filter. The Gaussian-noise "
+                 "stimulus is regenerated from its seed (bit-identical to MATLAB), and the STA's "
+                 "FFT gives the temporal modulation-transfer function (tuning)."),
+        "math": ["STA(τ) = (1/N) Σⱼ v(tⱼ − τ),   v = linear stimulus contrast (mean-subtracted)",
+                 "τ ∈ [0, filter_s];  peak lag = the cell's response latency",
+                 "temporal MTF:  |FFT{ STA(τ) }|   (low-pass tuning peaking ~18–20 Hz)"],
         "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "outputs": [{"name": "result", "type": PORT_RESULT}],
         "terminal": "gaussian_noise",
@@ -120,6 +222,11 @@ COMPONENT_REGISTRY: dict = {
         "category": "analysis",
         "color": "#b0392f",
         "help": "Spatiotemporal reverse correlation from the seed-regenerated checkerboard.",
+        "desc": ("Spatiotemporal receptive field: reverse-correlation of the spikes against the "
+                 "seed-regenerated checkerboard, giving response as a function of space (x, y) and "
+                 "time lag τ. The spatial slice at the peak lag is the receptive-field map."),
+        "math": ["STRF(x, y, τ) = (1/N) Σⱼ S(x, y, tⱼ − τ),   S = checkerboard contrast",
+                 "spatial RF = STRF(·, ·, τ_peak);   temporal kernel = STRF(x₀, y₀, ·)"],
         "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "outputs": [{"name": "result", "type": PORT_RESULT}],
         "terminal": "checkerboard",
@@ -129,7 +236,30 @@ COMPONENT_REGISTRY: dict = {
         "label": "Figures & exports",
         "category": "output",
         "color": "#555b66",
-        "help": "Write PNG/PDF/SVG figures (+ 4K exports for flicker) into the cell's outputs.",
+        "help": "Write PNG/PDF/SVG figures (+ 4K exports) into the cell's outputs. Which figures "
+                "depends on the analysis (see the breakout panel).",
+        "desc": ("Writes the analysis figures into the cell's outputs/ folder (PNG for the "
+                 "gallery, PDF+SVG at 4K when '4K exports' is on). WHICH figures are produced is "
+                 "set by the analysis feeding this node — the square-wave, STA, and STRF paths "
+                 "each emit their own set (listed here). Files are recorded as one integrity-safe "
+                 "manifest entry."),
+        "math": ["PNG 1920×1080 (gallery)  ·  PDF/SVG 3840×2160 (4K) when enabled",
+                 "one record_output(analysis, files=…) per run — replaces by name, no duplicates"],
+        # which figures each stimulus family generates through this node (drives the breakout list)
+        "figures_by_stim": {
+            "sq_wave": ["window_4k (signal + frame-sync, 250 ms stim zoom)",
+                        "power_4k (spike-power spectrum)",
+                        "analog_framesync_4k (color signal+spikes / B&W / frame-syncs)",
+                        "framesync_separated_4k (per-epoch frame-sync)",
+                        "cycle grid (per-epoch cycle PSTH)",
+                        "assumptions_4k (detection settings + per-file counts)"],
+            "gaussian_noise": ["sta (temporal linear filter)",
+                               "temporal MTF (|FFT| of the filter)",
+                               "assumptions (detection settings + counts)"],
+            "checkerboard": ["strf spatial RF (peak-lag frame)",
+                             "strf temporal kernel",
+                             "assumptions (detection settings + counts)"],
+        },
         "inputs": [{"name": "result", "type": PORT_RESULT}],
         "outputs": [{"name": "outputs", "type": PORT_OUTPUTS}],
         "params": {
@@ -185,8 +315,8 @@ def _chain(name, steps) -> dict:
 
 
 def default_flicker_pipeline() -> dict:
-    """The canonical 'Run analysis' flow for square-wave (flicker) cells."""
-    return _chain("Flicker ON/OFF", ["source", "align", "detect", "region", "flicker", "figures"])
+    """The canonical 'Run analysis' flow for square-wave (sq wave / flicker) cells."""
+    return _chain("Sq wave ON/OFF", ["source", "align", "detect", "region", "flicker", "figures"])
 
 
 def default_sta_pipeline() -> dict:
@@ -198,7 +328,7 @@ def default_strf_pipeline() -> dict:
 
 
 DEFAULT_PIPELINES = {
-    "Flicker ON/OFF": default_flicker_pipeline,
+    "Sq wave ON/OFF": default_flicker_pipeline,
     "Gaussian-noise STA": default_sta_pipeline,
     "Checkerboard STRF": default_strf_pipeline,
 }
@@ -373,3 +503,40 @@ def run_kwargs(pipe) -> dict:
         "export_4k": bool(fig["params"].get("export_4k", True)) if fig else True,
         "align_mode": align["params"].get("mode", "auto") if align else "off",
     }
+
+
+def smooth_from_pipeline(pipe) -> dict | None:
+    """{method, window, polyorder} from the Smooth node, or None if the graph has none.
+
+    Feeds neitz.analysis.dsp.smooth_1d — applied to the binned rate before the FFT/power."""
+    n = node_of_type(pipe, "smooth")
+    if n is None:
+        return None
+    p = n["params"]
+    try:
+        win = float(p.get("window") or 0)
+    except (TypeError, ValueError):
+        win = 0.0
+    if win < 2:
+        return None                        # a span < 2 is a no-op
+    return {"method": p.get("method", "moving"), "window": win,
+            "polyorder": int(p.get("polyorder", 2) or 2)}
+
+
+def tfilter_from_pipeline(pipe) -> dict | None:
+    """{ftype, mode, cutoff_hz, order, taps} from the Temporal-filter node, or None.
+
+    Feeds neitz.analysis.dsp.apply_temporal_filter — applied to the binned rate before FFT."""
+    n = node_of_type(pipe, "tfilter")
+    if n is None:
+        return None
+    p = n["params"]
+    try:
+        cut = float(p.get("cutoff_hz") or 0)
+    except (TypeError, ValueError):
+        cut = 0.0
+    if cut <= 0:
+        return None
+    return {"ftype": p.get("ftype", "butterworth"), "mode": p.get("mode", "lowpass"),
+            "cutoff_hz": cut, "order": int(p.get("order", 2) or 2),
+            "taps": int(p.get("taps", 33) or 33)}

@@ -44,6 +44,7 @@ from neitz.io import load_recording
 from neitz.io import stim as stim_io          # seed-based stim-manifest reader (aliased: local var `stim`)
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
+from neitz.analysis import dsp                  # 1-D smoothing + temporal filtering (pre-FFT)
 from neitz.dataio import DataStore
 from neitz.run import run_cell_flicker, run_cell_noise, run_cell_checkerboard
 from neitz import pipeline as pipe            # analysis-pipeline model / storage / run mapping
@@ -60,6 +61,63 @@ PALETTE = pc.qualitative.Plotly
 BIN_RATE = 200      # Hz — bin spikes to this rate before FFT
 FMAX = 60           # Hz — FFT display limit
 PERSIST = dict(persistence=True, persistence_type="local")
+
+
+# ---- die-with-the-GUI watchdog ---------------------------------------------
+# When the desktop launcher (neitz_app.py) starts this back end it stamps its own pid into
+# NEITZ_APP_PARENT_PID. We poll that launcher and HARD-EXIT the instant it's gone — so quitting the
+# GUI (Cmd-Q, red-button close, or a crash) never leaves an orphan server holding port 8050. This is
+# the belt to the launcher's suspenders (its _teardown is unreliable when the macOS GUI loop is torn
+# down abruptly — see neitz_app.py). No-op for a standalone / nohup `python viewer.py` (env absent),
+# so it can't interfere with the documented dev-restart flow or the test suite.
+def _pid_alive(pid):
+    """Best-effort 'is process pid still running', cross-platform. Unknown → assume ALIVE (never
+    kill the back end on an ambiguous check)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        try:
+            import ctypes
+            h = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)   # PROCESS_QUERY_LIMITED_INFO
+            if not h:
+                return False
+            code = ctypes.c_ulong()
+            ok = ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
+            ctypes.windll.kernel32.CloseHandle(h)
+            return bool(ok) and code.value == 259          # STILL_ACTIVE
+        except Exception:
+            return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                                        # exists, just not ours to signal
+    except OSError:
+        return True
+    return True
+
+
+def _install_parent_watchdog():
+    raw = os.environ.get("NEITZ_APP_PARENT_PID")
+    if not raw:
+        return                                             # not launched by the desktop app → no-op
+    try:
+        ppid = int(raw)
+    except ValueError:
+        return
+    import threading
+    import time as _time
+
+    def _watch():
+        while True:
+            _time.sleep(0.5)
+            if not _pid_alive(ppid):
+                os._exit(0)                                # GUI gone → free port 8050 immediately
+    threading.Thread(target=_watch, name="parent-watchdog", daemon=True).start()
+
+
+_install_parent_watchdog()
 
 
 # ---- discovery & native dialogs --------------------------------------------
@@ -235,6 +293,58 @@ def power_db(pw):
     pk = float(pw.max()) if pw.size else 0.0
     floor = pk * 1e-8 if pk > 0 else 1e-20
     return 10.0 * np.log10(np.maximum(pw, floor))
+
+
+def pre_fft(rate, bin_rate, smooth=None, tfilt=None):
+    """Condition a binned-rate trace BEFORE the FFT: smoothing then temporal filtering.
+
+    This is the pipeline's "Smooth (pre-FFT)" + "Temporal filter" nodes made real: both act on
+    the exact array `power_w` transforms, so the live spectrum (and the 'view input' trace) show
+    the conditioned signal. `smooth` = {method, window, polyorder} or None; `tfilt` =
+    {ftype, mode, cutoff_hz, order, taps} or None. `bin_rate` (Hz) is the rate's sample rate.
+    Each is a no-op when falsy."""
+    r = np.asarray(rate, dtype=float)
+    if smooth:
+        try:
+            win = float(smooth.get("window") or 0)
+        except (TypeError, ValueError):
+            win = 0.0
+        if win >= 2:
+            r = dsp.smooth_1d(r, window=win, method=smooth.get("method", "moving"),
+                              polyorder=int(smooth.get("polyorder", 2) or 2))
+    if tfilt:
+        try:
+            cut = float(tfilt.get("cutoff_hz") or 0)
+        except (TypeError, ValueError):
+            cut = 0.0
+        if cut > 0 and tfilt.get("mode", "off") not in ("off", None, ""):
+            r = dsp.apply_temporal_filter(r, ftype=tfilt.get("ftype", "butterworth"),
+                                          mode=tfilt.get("mode", "lowpass"), cutoff_hz=cut,
+                                          fs=float(bin_rate), order=int(tfilt.get("order", 2) or 2),
+                                          taps=int(tfilt.get("taps", 33) or 33))
+    return r
+
+
+def _cond_dicts(smooth_win, smooth_method, smooth_poly, tfilt_mode, tfilt_cut,
+                tfilt_type, tfilt_order, tfilt_taps):
+    """Build the (smooth, tfilt) dicts pre_fft consumes from the raw sidebar-control values.
+    A group is None (bypassed) when off — span < 2, or filter mode 'off'/blank."""
+    smooth = None
+    try:
+        if smooth_win is not None and float(smooth_win) >= 2:
+            smooth = {"method": smooth_method or "moving", "window": float(smooth_win),
+                      "polyorder": int(smooth_poly or 2)}
+    except (TypeError, ValueError):
+        smooth = None
+    tfilt = None
+    try:
+        if tfilt_mode in ("lowpass", "highpass") and tfilt_cut is not None and float(tfilt_cut) > 0:
+            tfilt = {"ftype": tfilt_type or "butterworth", "mode": tfilt_mode,
+                     "cutoff_hz": float(tfilt_cut), "order": int(tfilt_order or 2),
+                     "taps": int(tfilt_taps or 33)}
+    except (TypeError, ValueError):
+        tfilt = None
+    return smooth, tfilt
 
 
 def blank_fig(msg=""):
@@ -952,9 +1062,11 @@ _PORT_TYPE_COLOR = {pipe.PORT_RECORDINGS: "#6fb0ff", pipe.PORT_SPIKES: "#c78cff"
                     pipe.PORT_RESULT: "#ffcf6f", pipe.PORT_OUTPUTS: "#9fe0b0"}
 
 
-def _pipe_param_field(node_id, pname, spec, value):
-    """One inline parameter control inside a node (its id feeds the {pparam} pattern callback)."""
-    pid = {"type": "pparam", "node": node_id, "param": pname}
+def _pipe_param_field(node_id, pname, spec, value, id_type="pparam"):
+    """One inline parameter control inside a node. `id_type` selects the pattern-callback family
+    — "pparam" for the on-canvas node, "pmparam" for the breakout detail modal (so the two
+    copies never collide as duplicate ids)."""
+    pid = {"type": id_type, "node": node_id, "param": pname}
     ptype = spec.get("type", "text")
     base = {"width": "100%", "boxSizing": "border-box", "fontSize": "10px", "height": "17px"}
     if ptype == "choice":
@@ -1005,6 +1117,8 @@ def render_pipe_node(node):
     header = html.Div([
         html.Span(spec.get("label", node["type"]), style={"flex": "1", "overflow": "hidden",
                                                           "textOverflow": "ellipsis"}),
+        html.Span("ⓘ", id={"type": "pnode-info", "node": nid}, n_clicks=0, className="pnode-info",
+                  title="what this does + the math + all variables (breakout panel)"),
         html.Span("✕", id={"type": "pnode-del", "node": nid}, n_clicks=0, className="pnode-del",
                   title="delete this component"),
     ], className="pnode-header", **{"data-node": nid},
@@ -1025,6 +1139,98 @@ def render_pipe_node(node):
                            "top": f"{node.get('y', 40)}px", "width": f"{_PNODE_W}px",
                            "background": "#20242e", "border": "1px solid #3a3f4c",
                            "borderRadius": "7px", "boxShadow": "0 2px 8px rgba(0,0,0,0.4)"})
+
+
+def _detail_var_row(nid, pname, pspec, value):
+    """One editable variable row in the breakout panel: label · control · range/units hint."""
+    hint_bits = []
+    if pspec.get("type") == "choice":
+        hint_bits.append("one of " + " / ".join(str(o) for o in pspec.get("options", [])))
+    else:
+        if pspec.get("min") is not None:
+            hint_bits.append(f"min {pspec['min']}")
+        if pspec.get("max") is not None:
+            hint_bits.append(f"max {pspec['max']}")
+        if pspec.get("step") is not None:
+            hint_bits.append(f"step {pspec['step']}")
+    if pspec.get("default") is not None:
+        hint_bits.append(f"default {pspec['default']}")
+    return html.Div([
+        html.Div(pspec.get("label", pname),
+                 style={"fontSize": "12px", "color": "#e3e7ef", "fontWeight": "600"}),
+        html.Div(_pipe_param_field(nid, pname, pspec, value, id_type="pmparam"),
+                 style={"width": "170px", "flex": "0 0 170px"}),
+        html.Div("  ·  ".join(hint_bits), style={"fontSize": "10px", "color": "#8a90a0",
+                                                 "flex": "1", "textAlign": "right"}),
+    ], style={"display": "flex", "alignItems": "center", "gap": "12px", "padding": "6px 2px",
+              "borderBottom": "1px solid #23262f"})
+
+
+def render_pnode_detail(node):
+    """Breakout panel body for one node: description + math + (figures list) + settable variables.
+    `node` carries live params so the variable controls show current values."""
+    spec = pipe.COMPONENT_REGISTRY.get(node["type"], {})
+    nid = node["id"]
+    accent = spec.get("color", "#555")
+
+    def section(title):
+        return html.Div(title, style={"fontSize": "11px", "letterSpacing": "0.06em",
+                                       "textTransform": "uppercase", "color": "#8a90a0",
+                                       "margin": "16px 0 6px", "fontWeight": "700"})
+
+    blocks = [
+        # title row
+        html.Div([
+            html.Span(style={"display": "inline-block", "width": "12px", "height": "12px",
+                             "borderRadius": "3px", "background": accent, "marginRight": "9px"}),
+            html.Span(spec.get("label", node["type"]),
+                      style={"fontSize": "20px", "fontWeight": "700", "color": "#f0f2f7"}),
+            html.Span(spec.get("category", ""), style={"marginLeft": "10px", "fontSize": "11px",
+                      "color": "#aab", "border": "1px solid #3a3f4c", "borderRadius": "10px",
+                      "padding": "1px 8px"}),
+        ], style={"display": "flex", "alignItems": "center"}),
+        # description
+        section("What it does"),
+        html.Div(spec.get("desc", spec.get("help", "")),
+                 style={"fontSize": "13px", "lineHeight": "1.5", "color": "#c8ccd6"}),
+    ]
+
+    math_lines = spec.get("math") or []
+    if math_lines:
+        blocks.append(section("Math"))
+        blocks.append(html.Div(
+            [html.Div(ln, style={"padding": "3px 0"}) for ln in math_lines],
+            style={"fontFamily": "ui-monospace, SFMono-Regular, Menlo, monospace",
+                   "fontSize": "12.5px", "lineHeight": "1.5", "color": "#d7dbe6",
+                   "background": "#12141a", "border": "1px solid #23262f", "borderRadius": "6px",
+                   "padding": "10px 12px", "whiteSpace": "pre-wrap", "overflowX": "auto"}))
+
+    fbs = spec.get("figures_by_stim")
+    if fbs:
+        blocks.append(section("Figures produced (by analysis type)"))
+        stim_label = {"sq_wave": "Square-wave (sq wave)", "gaussian_noise": "Gaussian-noise STA",
+                      "checkerboard": "Checkerboard STRF"}
+        rows = []
+        for fam, figs in fbs.items():
+            rows.append(html.Div([
+                html.Div(stim_label.get(fam, fam), style={"fontSize": "12px", "fontWeight": "700",
+                         "color": "#d7dbe6", "margin": "6px 0 2px"}),
+                html.Ul([html.Li(f, style={"fontSize": "12px", "color": "#c8ccd6",
+                                            "margin": "1px 0"}) for f in figs],
+                        style={"margin": "0 0 4px 18px", "padding": 0}),
+            ]))
+        blocks.append(html.Div(rows))
+
+    params = spec.get("params") or {}
+    blocks.append(section("Variables" + ("" if params else " — none")))
+    if params:
+        blocks.append(html.Div(
+            [_detail_var_row(nid, pn, ps, node.get("params", {}).get(pn)) for pn, ps in params.items()],
+            style={"background": "#161922", "border": "1px solid #23262f", "borderRadius": "6px",
+                   "padding": "4px 12px"}))
+        blocks.append(html.Div("Edits here apply live to the node on the canvas.",
+                               style={"fontSize": "10px", "color": "#8a90a0", "marginTop": "6px"}))
+    return blocks
 
 
 def pipe_palette():
@@ -1340,6 +1546,68 @@ app.layout = html.Div(
             html.Div(id="align-editor", style={"marginTop": "4px"}),
         ]),
 
+        # ---- compartment: pre-FFT conditioning (the Smooth + Temporal-filter pipeline nodes,
+        #      made live). Both act on the binned rate BEFORE the transform, so the spectrum +
+        #      "view input" trace update immediately. Off by default (span 0 / mode off = bypass).
+        card("Pre-FFT conditioning (smooth · filter)", [
+            html.Div("Applied to the binned spike-rate before the FFT — the pipeline's "
+                     "Smooth (pre-FFT) and Temporal-filter nodes, live on the spectrum.",
+                     style={"fontSize": "10px", "color": "#666", "marginBottom": "6px"}),
+            # smoothing: span (samples, 0 = off) + method
+            html.Div([
+                html.Div([html.Label("smooth span", style=_LBL,
+                                     title="samples; 0 = off. MATLAB smooth(y, span)."),
+                          dcc.Input(id="smooth-win", type="number", value=0, min=0, step=1,
+                                    debounce=True, style={"width": "62px"}, **PERSIST)],
+                         style={"flex": "0 0 auto"}),
+                html.Div([html.Label("method", style=_LBL),
+                          dcc.Dropdown(id="smooth-method",
+                                       options=[{"label": m, "value": m} for m in
+                                                ("moving", "gaussian", "savgol")],
+                                       value="moving", clearable=False,
+                                       style={"fontSize": "11px"})],
+                         style={"flex": "1", "minWidth": 0, "marginLeft": "10px"}),
+                html.Div([html.Label("savgol order", style=_LBL),
+                          dcc.Input(id="smooth-poly", type="number", value=2, min=1, max=6,
+                                    step=1, debounce=True, style={"width": "48px"}, **PERSIST)],
+                         style={"flex": "0 0 auto", "marginLeft": "10px"}),
+            ], style=dict(_FIELD, display="flex", alignItems="flex-end")),
+            html.Hr(style={"border": "none", "borderTop": "1px solid #eee", "margin": "6px 0"}),
+            # temporal filter: mode (off/low/high) + cutoff Hz + type
+            html.Div([
+                html.Div([html.Label("filter", style=_LBL,
+                                     title="zero-phase FIR, time-domain port of the spatial filter"),
+                          dcc.Dropdown(id="tfilt-mode",
+                                       options=[{"label": "off", "value": "off"},
+                                                {"label": "low-pass", "value": "lowpass"},
+                                                {"label": "high-pass", "value": "highpass"}],
+                                       value="off", clearable=False, style={"fontSize": "11px"})],
+                         style={"flex": "1", "minWidth": 0}),
+                html.Div([html.Label("cutoff (Hz)", style=_LBL),
+                          dcc.Input(id="tfilt-cut", type="number", value=30, min=0.1, step=1,
+                                    debounce=True, style={"width": "58px"}, **PERSIST)],
+                         style={"flex": "0 0 auto", "marginLeft": "10px"}),
+            ], style=dict(_FIELD, display="flex", alignItems="flex-end")),
+            html.Div([
+                html.Div([html.Label("type", style=_LBL),
+                          dcc.Dropdown(id="tfilt-type",
+                                       options=[{"label": t, "value": t} for t in
+                                                ("butterworth", "gaussian", "ideal", "hamming",
+                                                 "hanning", "blackman")],
+                                       value="butterworth", clearable=False,
+                                       style={"fontSize": "11px"})],
+                         style={"flex": "1", "minWidth": 0}),
+                html.Div([html.Label("order", style=_LBL),
+                          dcc.Input(id="tfilt-order", type="number", value=2, min=1, max=10,
+                                    step=1, debounce=True, style={"width": "44px"}, **PERSIST)],
+                         style={"flex": "0 0 auto", "marginLeft": "10px"}),
+                html.Div([html.Label("taps", style=_LBL),
+                          dcc.Input(id="tfilt-taps", type="number", value=33, min=3, max=129,
+                                    step=2, debounce=True, style={"width": "48px"}, **PERSIST)],
+                         style={"flex": "0 0 auto", "marginLeft": "10px"}),
+            ], style=dict(_FIELD, display="flex", alignItems="flex-end")),
+        ], opened=False),
+
         # (the region & display controls now live as overlays ON the graphs, right)
 
         # ---- compartment: cell outputs (click to enlarge) ----
@@ -1448,10 +1716,13 @@ app.layout = html.Div(
     dcc.Store(id="align-seed"),                           # {file path: offset (ms) shown in the editor}
     dcc.Store(id="hist"),                                 # undo/redo: {"stack": [snapshot,...], "idx": n}
     dcc.Store(id="view-rev", data=0),                     # bumped on save/delete → refresh #view-select
+    dcc.Store(id="pending-view"),                          # deferred saved-view restore (settings applied
+                                                          # after load_meta settles; see restore_view)
     # ---- Analysis Pipelines state ----
     dcc.Store(id="pipe-graph"),                           # the current pipeline dict {name,nodes,connections}
     dcc.Store(id="pipe-rev", data=0),                     # bumped on save/delete → refresh #pipe-select
     dcc.Store(id="pipe-armed"),                           # {node,port} of a "clicked output" awaiting a target
+    dcc.Store(id="pnode-detail"),                         # node id whose breakout panel is open (None = closed)
     dcc.Input(id="pipe-drag-sink", value="", style={"display": "none"}),     # JS: "node|x|y" on drag-end
     dcc.Input(id="pipe-connect-sink", value="", style={"display": "none"}),  # JS: "fromN|fromP|toN|toP" on connect
     dcc.Store(id="pipe-draw-tick"),                       # clientside connection-redraw sink
@@ -1532,6 +1803,20 @@ app.layout = html.Div(
                 ]),
             ]),
         ]),
+    ]),
+
+    # ===== node BREAKOUT PANEL (large detail: description + math + settable variables) =====
+    # Stacks above the pipelines editor; opened by a node's ⓘ button, closed by ✕ / Escape.
+    html.Div(id="pnode-detail-modal", style={"display": "none"}, children=[
+        html.Div(id="pnode-detail-backdrop", n_clicks=0,
+                 style={"position": "absolute", "top": 0, "left": 0, "width": "100%",
+                        "height": "100%", "zIndex": 0, "cursor": "zoom-out"}),
+        html.Div([
+            html.Button("✕ close", id="pnode-detail-close", n_clicks=0,
+                        style={"position": "absolute", "top": "12px", "right": "14px",
+                               "fontSize": "13px", "padding": "4px 10px", "zIndex": 2}),
+            html.Div(id="pnode-detail-body", style={"padding": "26px 30px 30px"}),
+        ], className="pnode-detail-card", style={"position": "relative", "zIndex": 1}),
     ]),
 
     # ================= DATA EXPLORER pop-out (dates → cells → files + JSON) =====
@@ -1785,10 +2070,15 @@ def toggle_disp_show(binned):
               Input("region-mode", "value"), Input("train-bin", "value"),
               Input("absth-map", "data"), Input("fft-bin", "value"), Input("align-map", "data"),
               Input("group-avg", "value"), Input("fft-input", "value"),
+              Input("smooth-win", "value"), Input("smooth-method", "value"),
+              Input("smooth-poly", "value"), Input("tfilt-mode", "value"),
+              Input("tfilt-cut", "value"), Input("tfilt-type", "value"),
+              Input("tfilt-order", "value"), Input("tfilt-taps", "value"),
               Input("time", "relayoutData"), prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
-           align_map, group, fft_input, relayout):
+           align_map, group, fft_input, smooth_win, smooth_method, smooth_poly,
+           tfilt_mode, tfilt_cut, tfilt_type, tfilt_order, tfilt_taps, relayout):
     # a boundary-line DRAG fires this relayout too; let the (clientside) drag_region update
     # region-start/end (which re-renders cleanly) instead of redrawing here with the OLD region —
     # that redraw is what snaps the dragged line back. Match BOTH relayout shapes: individual
@@ -1796,10 +2086,12 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
     if (ctx.triggered_id == "time" and relayout
             and any(str(kk).startswith("shapes") for kk in relayout)):
         return no_update, no_update, no_update, no_update
+    smooth, tfilt = _cond_dicts(smooth_win, smooth_method, smooth_poly,
+                                tfilt_mode, tfilt_cut, tfilt_type, tfilt_order, tfilt_taps)
     return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                          disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
                          fft_bin=fft_bin, align_map=align_map, group=group, fft_input=fft_input,
-                         relayout=relayout, trig=ctx.triggered_id)
+                         relayout=relayout, trig=ctx.triggered_id, smooth=smooth, tfilt=tfilt)
 
 
 # Dragging a start/end boundary line (shapes[0]=start, shapes[1]=end, both editable) writes the new x
@@ -1849,7 +2141,7 @@ app.clientside_callback(
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
                   fft_bin=5.0, align_map=None, group=None, fft_input=None,
-                  relayout=None, trig=None):
+                  relayout=None, trig=None, smooth=None, tfilt=None):
     files = [f for f in (files or []) if f]
     if not files:
         return blank_fig("No file selected"), blank_fig(""), blank_fig(""), "No file selected."
@@ -2034,6 +2326,10 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
 
         rate = binned_rate(in_reg - rs, 0.0, re_ - rs, bin_rate=fft_rate)
         if rate is not None:
+            # smooth + temporal-filter the rate BEFORE the FFT (pipeline: Smooth / Temporal filter
+            # nodes). Applied once here so the per-file spectrum, the group average (mean of these),
+            # and the 'view input' trace all show the conditioned signal.
+            rate = pre_fft(rate, fft_rate, smooth=smooth, tfilt=tfilt)
             per_file_rates.append(rate)
             if not do_group:                             # group mode shows only the black avg (below)
                 if do_input:                             # the exact array power_w transforms (mean-removed)
@@ -2115,11 +2411,20 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     legend_names = [os.path.basename(p) for p in files] + (["GROUP AVG"] if multi else [])
     maxlen = max((len(s) for s in legend_names), default=8)
     r_margin = int(min(240, max(80, maxlen * 6.5 + 26)))
+    # note any pre-FFT conditioning in the title so the spectrum is never silently altered
+    cond_bits = []
+    if smooth and float(smooth.get("window") or 0) >= 2:
+        cond_bits.append(f"smooth {smooth.get('method', 'moving')} {int(float(smooth['window']))}")
+    if tfilt and float(tfilt.get("cutoff_hz") or 0) > 0 and tfilt.get("mode") not in ("off", None, ""):
+        cond_bits.append(f"{tfilt.get('mode')} {tfilt.get('ftype', 'butterworth')} "
+                         f"{float(tfilt['cutoff_hz']):g} Hz")
+    cond = ("  ·  ⟨" + " ; ".join(cond_bits) + "⟩") if cond_bits else ""
     if do_input:                                   # time-domain view of what's fed to the FFT
-        fft_title = f"FFT input · spikes binned at {fft_ms:g} ms, mean-subtracted (inside region)"
+        fft_title = f"FFT input · spikes binned at {fft_ms:g} ms, mean-subtracted (inside region){cond}"
         fft_xtitle, fft_ytitle, fft_xrange = "time (s)", "rate − mean (Hz)", [rs, re_]
     else:
-        fft_title = f"spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region · {fft_ms:g} ms bins)"
+        fft_title = (f"spike-train power  10·log₁₀(2|X[k]|²/N²)  (inside region · {fft_ms:g} ms "
+                     f"bins){cond}")
         fft_xtitle, fft_ytitle, fft_xrange = "frequency (Hz)", "power (dB, R=1Ω)", [0, FMAX]
     fft_fig.update_layout(
         title=dict(text=fft_title, x=0.5, xanchor="center", y=0.97, yanchor="top", font=dict(size=12)),
@@ -2162,8 +2467,11 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
 #      actual (possibly small) browser window. ----------------------------------------------------
 def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, method, k, absth, refr,
                           rstart, rend, region_mode, stagger_pct, disp_show, disp_binned,
-                          train_bin, absth_map, fft_bin=5.0, align_map=None):
-    """Save the four requested 4K figures into outdir. Returns {name: Path} of what was written."""
+                          train_bin, absth_map, fft_bin=5.0, align_map=None,
+                          smooth=None, tfilt=None):
+    """Save the four requested 4K figures into outdir. Returns {name: Path} of what was written.
+    `smooth`/`tfilt` carry the live pre-FFT conditioning so the exported power figure matches
+    what's on screen."""
     import copy
     import plotly.io as pio
     W, H = 3840, 2160                                  # 4K (27" full-screen)
@@ -2173,7 +2481,7 @@ def export_window_figures(outdir, stem, *, files, chan, ttl_name, polarity, meth
     tf, ff, isf, _ = build_figures(files, chan, ttl_name, polarity, method, k, absth, refr,
                                    rstart, rend, disp_show, disp_binned, stagger_pct,
                                    region_mode, train_bin, absth_map, fft_bin=fft_bin,
-                                   align_map=align_map)
+                                   align_map=align_map, smooth=smooth, tfilt=tfilt)
     cp = copy.deepcopy                                  # traces can't live in two figures at once
     saved = {}
 
@@ -2883,7 +3191,7 @@ def _attach_output_files(ds, date, cell, analysis, saved):
 # one-line summary string. `kind` ∈ gaussian_noise | checkerboard | (anything else → flicker).
 def _run_one(ds, s, kind, *, raw_name, user_name, detect, abs_map, checked, chan, ttl,
              n_shuffle, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
-             fft_bin, align_map):
+             fft_bin, align_map, smooth=None, tfilt=None):
     tag = f"{s['date']}/{s['cell']}"
     cm = ds.cell(s["date"], s["cell"])
     try:
@@ -2919,7 +3227,7 @@ def _run_one(ds, s, kind, *, raw_name, user_name, detect, abs_map, checked, chan
                 refr=(detect.get("refractory_s") or 0.002) * 1000.0, rstart=rstart, rend=rend,
                 region_mode=region_mode, stagger_pct=stagger_pct, disp_show=disp_show,
                 disp_binned=disp_binned, train_bin=train_bin, absth_map=abs_map, fft_bin=fft_bin,
-                align_map=align_map)
+                align_map=align_map, smooth=smooth, tfilt=tfilt)
             if saved:
                 _attach_output_files(ds, s["date"], s["cell"], nm, saved)
                 msg += f" +{len(saved)} 4K file(s)"
@@ -2985,13 +3293,17 @@ def _run_name(raw_name, pipe_name, kind, stamp):
               State("region-mode", "value"), State("stagger-pct", "value"),
               State("disp-show", "value"), State("disp-binned", "value"), State("train-bin", "value"),
               State("fft-bin", "value"), State("align-map", "data"),
+              State("smooth-win", "value"), State("smooth-method", "value"),
+              State("smooth-poly", "value"), State("tfilt-mode", "value"), State("tfilt-cut", "value"),
+              State("tfilt-type", "value"), State("tfilt-order", "value"), State("tfilt-taps", "value"),
               background=True,                              # run off the UI thread (analysis + 4K
               running=[(Output("run-cell", "disabled"), True, False),   # exports take ~1-2 min);
                        (Output("run-cell", "children"), "⏳ Running… (~1-2 min)", "▶ Run analysis")],
               prevent_initial_call=True)                   # outputs auto-refresh the UI when done
 def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, absth, refr, absth_map,
              chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
-             fft_bin, align_map):
+             fft_bin, align_map, smooth_win, smooth_method, smooth_poly, tfilt_mode, tfilt_cut,
+             tfilt_type, tfilt_order, tfilt_taps):
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "pick a cell first", no_update
@@ -3002,6 +3314,12 @@ def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, abst
     sel_pipe = pipe.load_pipeline(run_pipeline) if run_pipeline else None
     pipe_name = (sel_pipe.get("name") if sel_pipe else "") or ""
     n_shuffle = pipe.run_kwargs(sel_pipe)["n_shuffle"] if sel_pipe else 500
+    # pre-FFT conditioning: a chosen pipeline's Smooth / Temporal-filter NODES win (the graph is
+    # what's being run); otherwise the live sidebar controls apply.
+    live_sm, live_tf = _cond_dicts(smooth_win, smooth_method, smooth_poly, tfilt_mode, tfilt_cut,
+                                   tfilt_type, tfilt_order, tfilt_taps)
+    smooth = (pipe.smooth_from_pipeline(sel_pipe) if sel_pipe else None) or live_sm
+    tfilt = (pipe.tfilter_from_pipeline(sel_pipe) if sel_pipe else None) or live_tf
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")   # blank-name runs get a per-run timestamp
     ds, msgs = DataStore(), []
     for s in sels:
@@ -3013,7 +3331,7 @@ def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, abst
                              abs_map=abs_map, checked=checked, chan=chan, ttl=ttl, n_shuffle=n_shuffle,
                              rstart=rstart, rend=rend, region_mode=region_mode, stagger_pct=stagger_pct,
                              disp_show=disp_show, disp_binned=disp_binned, train_bin=train_bin,
-                             fft_bin=fft_bin, align_map=align_map))
+                             fft_bin=fft_bin, align_map=align_map, smooth=smooth, tfilt=tfilt))
     return _run_banner(msgs), (_n or 1)
 
 
@@ -3030,13 +3348,17 @@ def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, abst
               State("region-mode", "value"), State("stagger-pct", "value"),
               State("disp-show", "value"), State("disp-binned", "value"), State("train-bin", "value"),
               State("fft-bin", "value"), State("align-map", "data"),
+              State("smooth-win", "value"), State("smooth-method", "value"),
+              State("smooth-poly", "value"), State("tfilt-mode", "value"), State("tfilt-cut", "value"),
+              State("tfilt-type", "value"), State("tfilt-order", "value"), State("tfilt-taps", "value"),
               background=True,
               running=[(Output("pipe-run", "disabled"), True, False),
                        (Output("pipe-run", "children"), "⏳ Running…", "▶ Run on current cell")],
               prevent_initial_call=True)
 def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr, absth_map,
              chan, ttl, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
-             fft_bin, align_map):
+             fft_bin, align_map, smooth_win, smooth_method, smooth_poly, tfilt_mode, tfilt_cut,
+             tfilt_type, tfilt_order, tfilt_taps):
     sels = sel if isinstance(sel, list) else ([sel] if sel else [])
     if not sels:
         return "⚠ pick a cell in the Analysis View first", no_update
@@ -3049,6 +3371,12 @@ def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr
     pipe_name = graph.get("name") or ""
     detect = _live_detect(polarity, method, k, absth, refr)
     n_shuffle = pipe.run_kwargs(graph)["n_shuffle"]
+    # the EDITED graph's Smooth / Temporal-filter nodes drive this run; live sidebar controls
+    # fill in whichever node the graph doesn't contain.
+    live_sm, live_tf = _cond_dicts(smooth_win, smooth_method, smooth_poly, tfilt_mode, tfilt_cut,
+                                   tfilt_type, tfilt_order, tfilt_taps)
+    smooth = pipe.smooth_from_pipeline(graph) or live_sm
+    tfilt = pipe.tfilter_from_pipeline(graph) or live_tf
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")   # blank-name runs get a per-run timestamp
     friendly, nm_key = _run_name(raw_name, pipe_name, kind, stamp)
     ds, msgs = DataStore(), []
@@ -3058,7 +3386,7 @@ def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr
                              chan=chan, ttl=ttl, n_shuffle=n_shuffle, rstart=rstart, rend=rend,
                              region_mode=region_mode, stagger_pct=stagger_pct, disp_show=disp_show,
                              disp_binned=disp_binned, train_bin=train_bin, fft_bin=fft_bin,
-                             align_map=align_map))
+                             align_map=align_map, smooth=smooth, tfilt=tfilt))
     return "✓ " + " · ".join(msgs), (_n or 1)
 
 
@@ -3140,6 +3468,12 @@ app.clientside_callback(
             window._neitzEsc = true;
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' || e.keyCode === 27) {
+                    var nd = document.getElementById('pnode-detail-modal');
+                    if (nd && nd.style.display !== 'none') {
+                        var ndc = document.getElementById('pnode-detail-close');
+                        if (ndc) { ndc.click(); }
+                        return;
+                    }
                     var im = document.getElementById('output-modal');
                     if (im && im.style.display !== 'none') {
                         var b = document.getElementById('modal-close'); if (b) { b.click(); }
@@ -3460,6 +3794,70 @@ app.clientside_callback(
     Input("pipe-nodes", "children"), State("pipe-graph", "data"))
 
 
+# ---- node BREAKOUT PANEL: open (ⓘ) / close (✕ / backdrop / Escape) / render / edit-vars ----
+_PDETAIL_OPEN = {"display": "flex", "position": "fixed", "top": 0, "left": 0, "right": 0,
+                 "bottom": 0, "zIndex": 4000, "alignItems": "center", "justifyContent": "center",
+                 "padding": "30px", "background": "rgba(6,7,10,0.86)"}
+
+
+@app.callback(Output("pnode-detail", "data"),
+              Input({"type": "pnode-info", "node": ALL}, "n_clicks"),
+              prevent_initial_call=True)
+def pipe_open_detail(_clicks):
+    t = ctx.triggered_id
+    if not isinstance(t, dict) or not (ctx.triggered and ctx.triggered[0].get("value")):
+        return no_update
+    return t["node"]
+
+
+@app.callback(Output("pnode-detail", "data", allow_duplicate=True),
+              Input("pnode-detail-close", "n_clicks"),
+              Input("pnode-detail-backdrop", "n_clicks"),
+              prevent_initial_call=True)
+def pipe_close_detail(_c, _b):
+    if not ctx.triggered or not ctx.triggered[0].get("value"):
+        return no_update
+    return None
+
+
+# render the panel body from the selected node (re-renders on pipe-graph edits so a variable
+# change here — or on the canvas — is reflected live). Hidden when no node is selected / missing.
+@app.callback(Output("pnode-detail-modal", "style"), Output("pnode-detail-body", "children"),
+              Input("pnode-detail", "data"), Input("pipe-graph", "data"),
+              prevent_initial_call=False)
+def show_pnode_detail(nid, graph):
+    if not nid or not graph:
+        return {"display": "none"}, no_update
+    node = next((n for n in graph.get("nodes", []) if n["id"] == nid), None)
+    if node is None:
+        return {"display": "none"}, no_update
+    return _PDETAIL_OPEN, render_pnode_detail(node)
+
+
+# edit a variable from inside the breakout panel (its own {pmparam} id family, so it never
+# collides with the on-canvas {pparam} copy). Writes back to the single-source-of-truth graph.
+@app.callback(Output("pipe-graph", "data", allow_duplicate=True),
+              Input({"type": "pmparam", "node": ALL, "param": ALL}, "value"),
+              State("pipe-graph", "data"), prevent_initial_call=True)
+def pipe_edit_param_modal(_values, graph):
+    t = ctx.triggered_id
+    if not graph or not isinstance(t, dict) or not ctx.triggered:
+        return no_update
+    nid, pname = t["node"], t["param"]
+    node = next((n for n in graph.get("nodes", []) if n["id"] == nid), None)
+    if node is None:
+        return no_update
+    spec = pipe.COMPONENT_REGISTRY.get(node["type"], {}).get("params", {}).get(pname, {})
+    raw = ctx.triggered[0]["value"]
+    newv = ("on" in (raw or [])) if spec.get("type") == "bool" else raw
+    if node["params"].get(pname) == newv:
+        return no_update                       # unchanged (initial render) → no loop
+    g = dict(graph)
+    g["nodes"] = [dict(n, params={**n["params"], pname: newv}) if n["id"] == nid else n
+                  for n in graph["nodes"]]
+    return g
+
+
 @app.callback(Output("exp-date", "data"), Output("exp-cell", "data", allow_duplicate=True),
               Input({"type": "exp-date", "date": ALL}, "n_clicks"), prevent_initial_call=True)
 def exp_pick_date(_clicks):
@@ -3776,6 +4174,9 @@ UNDO_TRACK = [
     ("stagger-pct", "value"), ("train-bin", "value"), ("fft-bin", "value"),
     ("group-avg", "value"), ("fft-input", "value"), ("run-name", "value"),
     ("absth-sync", "value"), ("absth-seed", "data"), ("align-seed", "data"),
+    ("smooth-win", "value"), ("smooth-method", "value"), ("smooth-poly", "value"),
+    ("tfilt-mode", "value"), ("tfilt-cut", "value"), ("tfilt-type", "value"),
+    ("tfilt-order", "value"), ("tfilt-taps", "value"),
 ]
 _UNDO_KEYS = [f"{cid}.{prop}" for cid, prop in UNDO_TRACK]
 _UNDO_MAX = 50
@@ -3831,12 +4232,17 @@ def undo_apply(key, hist):
 
 # ===================== SAVE / RESTORE Analysis-View state (per cell) =========================
 # A named snapshot of every analysis/display control, stored in the cell's manifest.json (same data
-# structure as everything else). Reuses the UNDO_TRACK contract MINUS the file selection: the file
-# checklist is left as-is on restore (settings apply to the current files) — restoring `file` would
-# retrigger load_meta and clobber the snapshot's channel/region. Add a control to UNDO_TRACK and it
-# is captured here automatically too.
+# structure as everything else). The snapshot ALSO records the selected files/epochs (under the
+# "file.value" key), but the file checklist is restored in a SEPARATE phase from the settings:
+# `_VIEW_TRACK` is UNDO_TRACK MINUS file, so `restore_view` writes settings without racing the file
+# change. When the saved file set differs from the current one, restore sets `file` first (which
+# retriggers load_meta → resets channels/region to cell defaults) and stashes the snapshot in
+# `pending-view`; `apply_pending_view` then re-applies the tracked settings AFTER load_meta settles
+# (keyed off the `meta` readout it writes) so the snapshot wins the clobber. Add a control to
+# UNDO_TRACK and it is captured/restored here automatically too.
 _VIEW_TRACK = [t for t in UNDO_TRACK if t != ("file", "value")]
 _VIEW_KEYS = [f"{cid}.{prop}" for cid, prop in _VIEW_TRACK]
+_VIEW_FILE_KEY = "file.value"          # the selected files/epochs, stored alongside the settings
 
 
 def _sel_first(sel):
@@ -3859,36 +4265,42 @@ def list_view_states(sel, _rev):
         return []
 
 
-# save: snapshot the tracked controls into the cell's manifest under the given name (blank → timestamp)
+# save: snapshot the tracked controls + the selected files into the cell's manifest under `name`
 @app.callback(Output("view-rev", "data"), Output("view-msg", "children"),
               Output("view-name", "value"), Output("view-select", "value"),
               Input("save-view", "n_clicks"),
-              State("view-name", "value"), State("sel-cell", "data"),
+              State("view-name", "value"), State("sel-cell", "data"), State("file", "value"),
               [State(cid, prop) for cid, prop in _VIEW_TRACK],
               State("view-rev", "data"), prevent_initial_call=True)
-def save_view(_n, name, sel, *rest):
+def save_view(_n, name, sel, files, *rest):
     vals, rev = list(rest[:-1]), rest[-1]
     s = _sel_first(sel)
     if not s:
         return no_update, "⚠ pick a cell first", no_update, no_update
     nm = (name or "").strip() or datetime.now().strftime("view %Y-%m-%d %H:%M:%S")
     state = dict(zip(_VIEW_KEYS, vals))
+    state[_VIEW_FILE_KEY] = [f for f in (files or []) if f]   # remember selected files/epochs
     try:
         cm = DataStore().cell(s["date"], s["cell"])
         cm.save_view_state(nm, state)
         cm.save()
     except Exception as e:
         return no_update, f"⚠ save failed: {e}", no_update, no_update
-    return (rev or 0) + 1, f"✓ saved “{nm}”", "", nm
+    n_files = len(state[_VIEW_FILE_KEY])
+    return (rev or 0) + 1, f"✓ saved “{nm}” ({n_files} file{'s' if n_files != 1 else ''})", "", nm
 
 
-# restore: write the snapshot back to every tracked control (undo_record captures it as one step)
-@app.callback([Output(cid, prop, allow_duplicate=True) for cid, prop in _VIEW_TRACK]
-              + [Output("view-msg", "children", allow_duplicate=True)],
-              Input("view-select", "value"), State("sel-cell", "data"),
+# restore (phase 1): pick the snapshot. If its file set differs from the current one, set `file`
+# first and defer the settings to `apply_pending_view` (so load_meta doesn't clobber them); if the
+# files match (or the view predates file-capture), apply the settings synchronously right here.
+@app.callback([Output("file", "value", allow_duplicate=True)]
+              + [Output(cid, prop, allow_duplicate=True) for cid, prop in _VIEW_TRACK]
+              + [Output("pending-view", "data"), Output("view-msg", "children", allow_duplicate=True)],
+              Input("view-select", "value"), State("sel-cell", "data"), State("file", "value"),
               prevent_initial_call=True)
-def restore_view(name, sel):
-    blank = [no_update] * (len(_VIEW_TRACK) + 1)
+def restore_view(name, sel, cur_files):
+    n = len(_VIEW_TRACK)
+    blank = [no_update] * (1 + n + 2)          # file + tracked + pending-view + msg
     s = _sel_first(sel)
     if not name or not s:
         return blank
@@ -3900,7 +4312,33 @@ def restore_view(name, sel):
     if not rec:
         return blank
     state = rec.get("state", {})
-    return [state.get(kk) for kk in _VIEW_KEYS] + [f"✓ restored “{name}”"]
+    track_vals = [state.get(kk) for kk in _VIEW_KEYS]
+    saved_files = state.get(_VIEW_FILE_KEY)
+    cur = set(f for f in (cur_files or []) if f)
+    if isinstance(saved_files, list) and saved_files and set(saved_files) != cur:
+        # file set changes → load_meta will fire; DEFER the settings until it settles
+        return ([saved_files] + [no_update] * n
+                + [{"state": state}, f"↻ restoring “{name}” (loading {len(saved_files)} file(s))…"])
+    # files unchanged (or a pre-file-capture view) → apply settings now, no clobber race; don't
+    # touch `file` (a same-set reorder would needlessly retrigger load_meta)
+    return [no_update] + track_vals + [None, f"✓ restored “{name}”"]
+
+
+# restore (phase 2): after load_meta re-renders the metadata for the newly-selected files, apply the
+# deferred settings so they win over load_meta's cell-default channel/region. No-op when nothing is
+# pending (every normal file load also fires this).
+@app.callback([Output(cid, prop, allow_duplicate=True) for cid, prop in _VIEW_TRACK]
+              + [Output("pending-view", "data", allow_duplicate=True),
+                 Output("view-msg", "children", allow_duplicate=True)],
+              Input("meta", "children"), State("pending-view", "data"),
+              prevent_initial_call=True)
+def apply_pending_view(_meta, pending):
+    n = len(_VIEW_TRACK)
+    if not pending or not pending.get("state"):
+        return [no_update] * n + [no_update, no_update]
+    state = pending["state"]
+    vals = [state.get(kk) for kk in _VIEW_KEYS]
+    return vals + [None, "✓ restored view (files + settings)"]
 
 
 # delete: remove the selected saved view from the manifest

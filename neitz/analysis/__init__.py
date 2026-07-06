@@ -1,3 +1,3 @@
-from . import revcorr, flicker, strf
+from . import revcorr, flicker, strf, dsp
 
-__all__ = ["revcorr", "flicker", "strf"]
+__all__ = ["revcorr", "flicker", "strf", "dsp"]
