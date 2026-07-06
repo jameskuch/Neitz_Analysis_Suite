@@ -252,6 +252,15 @@ html, body { margin: 0; }
 .pipe-btn { font-size: 12px; padding: 3px 9px; cursor: pointer; border: 1px solid #3a3f4c;
     border-radius: 5px; background: #262b36; color: #dfe4ee; }
 .pipe-btn:hover { background: #303645; }
+/* Header controls (load-pipeline dropdown + name box) sit on the dark modal header, which cascades
+   color:white into them → white-on-white and unreadable. Force the dark theme on both (the open
+   dropdown menu portals to <body>, outside this header, so it keeps its own readable colors). */
+#pipe-name { background: #171a21 !important; color: #e3e7ef !important;
+    border: 1px solid #363b47 !important; border-radius: 4px; }
+#pipe-name::placeholder { color: #7a8296 !important; }
+#pipe-select .dash-dropdown, #pipe-select .dash-dropdown-trigger,
+#pipe-select .dash-dropdown-value, #pipe-select .dash-dropdown-placeholder {
+    background: #171a21 !important; color: #e3e7ef !important; border-color: #363b47 !important; }
 .pal-item { display: block; width: 100%; text-align: left; font-size: 11px; padding: 5px 7px;
     margin: 0; cursor: pointer; border: 1px solid #2a2f3a; border-radius: 5px;
     background: #22262f; color: #e3e7ef; }
