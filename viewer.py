@@ -4314,6 +4314,7 @@ def restore_view(name, sel, cur_files):
     state = rec.get("state", {})
     track_vals = [state.get(kk) for kk in _VIEW_KEYS]
     saved_files = state.get(_VIEW_FILE_KEY)
+    has_file_key = _VIEW_FILE_KEY in state            # False = view saved before file-remembering
     cur = set(f for f in (cur_files or []) if f)
     if isinstance(saved_files, list) and saved_files and set(saved_files) != cur:
         # file set changes → load_meta will fire; DEFER the settings until it settles
@@ -4321,7 +4322,14 @@ def restore_view(name, sel, cur_files):
                 + [{"state": state}, f"↻ restoring “{name}” (loading {len(saved_files)} file(s))…"])
     # files unchanged (or a pre-file-capture view) → apply settings now, no clobber race; don't
     # touch `file` (a same-set reorder would needlessly retrigger load_meta)
-    return [no_update] + track_vals + [None, f"✓ restored “{name}”"]
+    if not has_file_key:
+        # OLD view (no file selection stored) — say so instead of silently loading nothing, so a
+        # blank "files" panel isn't mistaken for a broken restore. Re-save to capture the files.
+        msg = (f"✓ restored “{name}” settings — this view was saved before file-remembering, so it "
+               f"has no file selection; check the files you want and re-save it to capture them")
+    else:
+        msg = f"✓ restored “{name}”"
+    return [no_update] + track_vals + [None, msg]
 
 
 # restore (phase 2): after load_meta re-renders the metadata for the newly-selected files, apply the
