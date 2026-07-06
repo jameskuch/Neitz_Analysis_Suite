@@ -9,7 +9,7 @@
 <linearGradient id="spikeGrad" x1="180" y1="30" x2="180" y2="262" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#ffdf3a"/><stop offset="0.5" stop-color="#83e2b8"/><stop offset="1" stop-color="#7cc8ff"/></linearGradient>
 <linearGradient id="edgeGrad" x1="0" y1="0" x2="360" y2="0" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset="0.045" stop-color="#fff" stop-opacity="0"/><stop offset="0.15" stop-color="#fff" stop-opacity="1"/><stop offset="0.85" stop-color="#fff" stop-opacity="1"/><stop offset="0.955" stop-color="#fff" stop-opacity="0"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></linearGradient>
 <mask id="apEdge"><rect x="0" y="0" width="360" height="360" fill="url(#edgeGrad)"/></mask>
-<path id="apPath" d="M14,254 L28,254 L32,36 L36,260 L44,250 L50,255 L54,254 L58,34 L62,260 L69,250 L74,255 L78,254 L82,38 L86,260 L98,251 L110,255 L116,248 L118,254 L122,36 L126,260 L134,250 L140,255 L146,254 L150,34 L154,260 L161,250 L166,255 L168,254 L172,40 L176,260 L188,251 L198,255 L204,248 L206,254 L210,36 L214,260 L222,250 L228,255 L240,254 L244,34 L248,260 L256,250 L262,255 L272,254 L276,38 L280,260 L288,250 L300,255 L308,248 L316,254 L320,36 L324,260 L332,252 L346,254" fill="none"/>
+<path id="apPath" d="M16,254 L59,254 L71,48 L75,34 L79,48 L91,260 L105,254 L202,254 L214,48 L218,34 L222,48 L234,260 L248,254 L279,254 L291,48 L295,34 L299,48 L311,260 L325,254 L344,254" fill="none"/>
 </defs>
 <rect x="0" y="0" width="360" height="360" rx="84" fill="#0e1533"/>
 <circle cx="180" cy="180" r="166" fill="url(#rgDark)"/>
@@ -25,13 +25,13 @@
 <circle cx="104" cy="312" r="17" fill="url(#cR)"/><circle cx="142" cy="312" r="17" fill="url(#cG)"/><circle cx="180" cy="312" r="17" fill="url(#cR)"/><circle cx="218" cy="312" r="17" fill="url(#cG)"/><circle cx="256" cy="312" r="17" fill="url(#cG)"/>
 </g>
 <g transform="translate(0,33)" mask="url(#apEdge)">
-<use xlink:href="#apPath" stroke="#000000" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.09"/>
-<use xlink:href="#apPath" stroke="#000000" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.24"/>
-<use xlink:href="#apPath" stroke="#000000" stroke-width="19" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.42"/>
-<use xlink:href="#apPath" stroke="#080808" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.6"/>
-<use xlink:href="#apPath" stroke="#1e1e1e" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.72"/>
-<use xlink:href="#apPath" stroke="#282828" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.8"/>
-<use xlink:href="#apPath" stroke="url(#spikeGrad)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.6"/>
+<use xlink:href="#apPath" stroke="#000000" stroke-width="60" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.09"/>
+<use xlink:href="#apPath" stroke="#000000" stroke-width="48" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.24"/>
+<use xlink:href="#apPath" stroke="#000000" stroke-width="38" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.42"/>
+<use xlink:href="#apPath" stroke="#080808" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.6"/>
+<use xlink:href="#apPath" stroke="#1e1e1e" stroke-width="20" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.72"/>
+<use xlink:href="#apPath" stroke="#282828" stroke-width="14" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.8"/>
+<use xlink:href="#apPath" stroke="url(#spikeGrad)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.6"/>
 </g>
 <rect x="3" y="3" width="354" height="354" rx="82" fill="none" stroke="#33477e" stroke-width="3" stroke-opacity="0.55"/>
 </svg>
