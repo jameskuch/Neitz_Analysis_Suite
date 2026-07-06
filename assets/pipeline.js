@@ -70,7 +70,8 @@
   };
 
   function portColor(ptype) {
-    return ({ recordings: "#6fb0ff", spikes: "#c78cff", result: "#ffcf6f", outputs: "#9fe0b0" }
+    return ({ recordings: "#6fb0ff", spikes: "#c78cff", result: "#ffcf6f", outputs: "#9fe0b0",
+              signal: "#5fd0d0", display: "#d0a0ff" }
             )[ptype] || "#7a8296";
   }
 

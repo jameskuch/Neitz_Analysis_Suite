@@ -48,6 +48,7 @@ from neitz.analysis import dsp                  # 1-D smoothing + temporal filte
 from neitz.dataio import DataStore
 from neitz.run import run_cell_flicker, run_cell_noise, run_cell_checkerboard
 from neitz import pipeline as pipe            # analysis-pipeline model / storage / run mapping
+from neitz import signal_flow as sf           # discrete DSP block engine (evaluate signal pathways)
 
 # default browse location is the managed data store (~/Documents/ephysdataio)
 EPHYS_ROOT = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
@@ -1059,7 +1060,8 @@ _PHDR_H = 26        # node header height (px) — also the drag handle
 _PPORT_Y0 = _PHDR_H + 12   # first port's center-y offset from the node top
 _PPORT_DY = 21             # vertical spacing between stacked ports
 _PORT_TYPE_COLOR = {pipe.PORT_RECORDINGS: "#6fb0ff", pipe.PORT_SPIKES: "#c78cff",
-                    pipe.PORT_RESULT: "#ffcf6f", pipe.PORT_OUTPUTS: "#9fe0b0"}
+                    pipe.PORT_RESULT: "#ffcf6f", pipe.PORT_OUTPUTS: "#9fe0b0",
+                    pipe.PORT_SIGNAL: "#5fd0d0", pipe.PORT_DISPLAY: "#d0a0ff"}
 
 
 def _pipe_param_field(node_id, pname, spec, value, id_type="pparam"):
@@ -1238,7 +1240,7 @@ def pipe_palette():
     by_cat: dict = {}
     for ctype, spec in pipe.COMPONENT_REGISTRY.items():
         by_cat.setdefault(spec.get("category", "other"), []).append((ctype, spec))
-    order = ["source", "processing", "analysis", "output", "other"]
+    order = ["source", "processing", "transform", "display", "analysis", "output", "other"]
     items = [html.Div("Components", style={"fontSize": "11px", "fontWeight": "bold",
                                            "color": "#aab", "margin": "0 0 6px"})]
     for cat in order:
@@ -1248,6 +1250,67 @@ def pipe_palette():
                          title=spec.get("help", ""), className="pal-item",
                          style={"borderLeft": f"4px solid {spec.get('color', '#555')}"}))
     return items
+
+
+# ---- signal-flow evaluation: feed the live selection's spikes into the DSP graph + draw sinks ----
+def _pipeline_spikes(files, chan, detect, abs_map, rstart, rend, align_map):
+    """Per-epoch spike times (aligned, inside the region) for the checked files under the LIVE
+    detection settings — the input the signal-flow evaluator binds to context['spikes']. Mirrors
+    build_figures' per-file detection. Returns (spikes_per_epoch, t0, t1)."""
+    files = [f for f in (files or []) if f and loadable(f)]
+    amap, det = abs_map or {}, dict(detect or {})
+    spikes, t0s, t1s = [], [], []
+    for path in files:
+        try:
+            rec = get_recording(path)
+            y = get_channel(path, chan or rec.channel_names[0])
+            fs = rec.fs
+        except Exception:
+            continue
+        off = 0.0
+        if align_map:
+            try:
+                off = float(align_map.get(path, 0.0) or 0.0)
+            except (TypeError, ValueError):
+                off = 0.0
+        eff_abs = amap.get(path, det.get("abs_threshold"))
+        det_i = dict(det, abs_threshold=(float(eff_abs) if eff_abs is not None else None))
+        try:
+            at = detect_spikes(y, fs, **det_i).times + off
+        except Exception:
+            continue
+        rs = float(rstart) if rstart is not None else (float(at.min()) if at.size else 0.0)
+        re_ = float(rend) if rend is not None else (float(at.max()) if at.size else 1.0)
+        spikes.append(at[(at >= rs) & (at <= re_)])
+        t0s.append(rs); t1s.append(re_)
+    if not spikes:
+        return [], 0.0, 1.0
+    return spikes, min(t0s), max(t1s)
+
+
+def _sink_figure(spec, label):
+    """A compact dark plotly figure for one display-sink's plot spec (from signal_flow sinks)."""
+    fig = go.Figure()
+    kind = spec.get("kind")
+    if kind == "error":
+        fig.add_annotation(text="⚠ " + str(spec.get("error", "")), showarrow=False, x=0.5, y=0.5,
+                           xref="paper", yref="paper", font=dict(color="#e6a3a3", size=11))
+    else:
+        for tr in spec.get("traces", []):
+            if kind == "hist":
+                fig.add_trace(go.Bar(x=tr["x"], y=tr["y"], name=tr.get("name", ""),
+                                     marker_color="#8a63c0"))
+            else:
+                fig.add_trace(go.Scattergl(x=tr["x"], y=tr["y"], mode="lines", name=tr.get("name", ""),
+                                           line=dict(width=1.3)))
+    fig.update_layout(template="plotly_dark", paper_bgcolor="#12141a", plot_bgcolor="#12141a",
+                      margin=dict(l=46, r=8, t=22, b=32), height=196,
+                      showlegend=len(spec.get("traces", [])) > 1,
+                      title=dict(text=label, x=0.5, xanchor="center", font=dict(size=11, color="#d7dbe6")),
+                      xaxis_title=spec.get("x_title", ""), yaxis_title=spec.get("y_title", ""),
+                      font=dict(size=9, color="#aab2c5"),
+                      legend=dict(font=dict(size=8), orientation="h", y=-0.28))
+    return fig
 
 
 # ============================================================
@@ -1803,6 +1866,12 @@ app.layout = html.Div(
                 ]),
             ]),
         ]),
+        # results strip — the live output of each display sink (FFT Power / Time trace / ISI) in the
+        # graph renders here (pipe_eval), recomputed as you edit the pathway or the cell selection.
+        html.Div(id="pipe-results",
+                 style={"flex": "0 0 auto", "maxHeight": "240px", "overflowX": "auto",
+                        "overflowY": "hidden", "display": "flex", "gap": "8px",
+                        "marginTop": "8px", "alignItems": "stretch"}),
     ]),
 
     # ===== node BREAKOUT PANEL (large detail: description + math + settable variables) =====
@@ -3856,6 +3925,55 @@ def pipe_edit_param_modal(_values, graph):
     g["nodes"] = [dict(n, params={**n["params"], pname: newv}) if n["id"] == nid else n
                   for n in graph["nodes"]]
     return g
+
+
+# ---- LIVE signal-flow evaluation: run the DSP pathway on the current cell's spikes and draw each
+#      display sink into the results strip. Recomputes on any pathway edit (pipe-graph) or change to
+#      the live selection / region, so it's "live as you edit". Detection settings ride as State. ----
+_PIPE_HINT = {"fontSize": "12px", "color": "#8a90a0", "padding": "14px 16px", "lineHeight": "1.5",
+              "alignSelf": "center"}
+
+
+@app.callback(Output("pipe-results", "children"),
+              Input("pipe-graph", "data"), Input("sel-cell", "data"), Input("file", "value"),
+              Input("region-start", "value"), Input("region-end", "value"), Input("align-map", "data"),
+              State("chan", "value"), State("polarity", "value"), State("method", "value"),
+              State("k", "value"), State("absth", "value"), State("refr", "value"),
+              State("absth-map", "data"), prevent_initial_call=False)
+def pipe_eval(graph, sel, files, rstart, rend, align_map, chan, polarity, method, k, absth, refr,
+              absth_map):
+    sinks = [n for n in (graph or {}).get("nodes", []) if n.get("type") in sf.SINKS]
+    if not sinks:
+        return html.Div("Add a display block — FFT Power / Time trace / ISI histogram — and wire a "
+                        "pathway into it (e.g. Select-region → Spike binning → Smooth → FFT Power). "
+                        "Its live output appears here.", style=_PIPE_HINT)
+    if not _sel_first(sel):
+        return html.Div("Pick a cell in the Analysis View to feed the pathway.", style=_PIPE_HINT)
+    detect = _live_detect(polarity, method, k, absth, refr)
+    try:
+        spikes, t0, t1 = _pipeline_spikes(files, chan, detect, absth_map, rstart, rend, align_map)
+    except Exception as e:
+        return html.Div(f"could not read spikes: {e}", style=_PIPE_HINT)
+    if not spikes:
+        return html.Div("Check some files (epochs) in the Analysis View — the pathway runs on the "
+                        "selected recordings' detected spikes.", style=_PIPE_HINT)
+    try:
+        results = sf.evaluate(graph, {"spikes": spikes, "t0": t0, "t1": t1})
+    except Exception as e:
+        return html.Div(f"pathway error: {e}", style=_PIPE_HINT)
+    label_of = {n["id"]: pipe.COMPONENT_REGISTRY.get(n["type"], {}).get("label", n["type"])
+                for n in graph["nodes"]}
+    cols = []
+    for n in sinks:
+        spec = results.get(n["id"], {"kind": "error", "error": "not connected to a source",
+                                     "traces": []})
+        title = f"{label_of.get(n['id'], n['id'])}  ·  {len(spikes)} epoch(s)"
+        cols.append(html.Div(
+            dcc.Graph(figure=_sink_figure(spec, title), config={"displayModeBar": False},
+                      style={"height": "212px"}),
+            style={"flex": "0 0 360px", "minWidth": "360px", "background": "#12141a",
+                   "border": "1px solid #23262f", "borderRadius": "6px"}))
+    return cols
 
 
 @app.callback(Output("exp-date", "data"), Output("exp-cell", "data", allow_duplicate=True),

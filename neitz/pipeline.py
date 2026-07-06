@@ -37,6 +37,8 @@ PORT_RECORDINGS = "recordings"      # a set of loaded .abf recordings (+ their f
 PORT_SPIKES = "spikes"              # detected spike trains per recording
 PORT_RESULT = "result"             # an analysis Result (metrics + figure specs)
 PORT_OUTPUTS = "outputs"           # written files (figures / csv / json)
+PORT_SIGNAL = "signal"             # a per-epoch sampled 1-D series (signal-flow DSP layer)
+PORT_DISPLAY = "display"           # a rendered plot from a sink (FFT / time / ISI …)
 
 COMPONENT_REGISTRY: dict = {
     "source": {
@@ -118,6 +120,186 @@ COMPONENT_REGISTRY: dict = {
             "crop": {"type": "bool", "default": False, "label": "crop to region"},
         },
     },
+
+    # ── Signal-flow DSP kit (neitz/signal_flow.py) — discrete blocks, each a pure Signal→Signal
+    #    with the math on its face. Bin turns the region's spikes into a sampled rate; the rest are
+    #    signal→signal; the display sinks (FFT/time/ISI) render a pathway. A "signal" is per-epoch. ──
+    "sf_bin": {
+        "label": "Spike binning",
+        "category": "transform",
+        "color": "#2f8f8f",
+        "help": "Spikes → a sampled rate: count spikes into Δ-wide bins, r = count/Δ (Hz).",
+        "desc": ("Turns spike times into a uniformly-sampled rate trace — the entry point to the "
+                 "signal kit. Counts the spikes falling in each Δ = bin-width window over the "
+                 "region; the result is one rate value per bin (Hz), or raw counts. 'gaussian' "
+                 "smooths the counts with a σ = 1-bin bell for a continuous rate. The bin width sets "
+                 "the new sample rate fs = 1/Δ (and the FFT's Nyquist)."),
+        "math": ["r[n] = (# spikes in [t₀+nΔ, t₀+(n+1)Δ)) / Δ    (Hz;  Δ = bin_ms/1000)",
+                 "fs = 1/Δ   →   spectrum Nyquist = fs/2",
+                 "gaussian: r ← r ∗ g,  g[k] ∝ exp(−k²/2),  σ = 1 bin"],
+        "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
+        "outputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "params": {
+            "bin_ms": {"type": "number", "default": 5, "label": "bin (ms)", "min": 0.1, "step": 0.5},
+            "kernel": {"type": "choice", "default": "boxcar", "label": "kernel",
+                       "options": ["boxcar", "gaussian"]},
+            "unit": {"type": "choice", "default": "hz", "label": "unit", "options": ["hz", "count"]},
+        },
+    },
+    "sf_resample": {
+        "label": "Resample (up/down)",
+        "category": "transform",
+        "color": "#3a7fb0",
+        "help": "Change the sample rate — up (interpolate) or down (anti-alias + decimate).",
+        "desc": ("Changes a signal's sample rate. Upsampling interpolates (more bins per period — "
+                 "Sara's 'upsample to 6/15 bins per frame' trick); downsampling first low-passes to "
+                 "the new Nyquist so it can't alias, then decimates. Polyphase FIR (scipy "
+                 "resample_poly). 'factor' scales fs (×2 up, ×0.5 down); 'rate' targets a new fs. "
+                 "The realized fs is reported on the wire."),
+        "math": ["target fs = fs·factor   (factor) |   = new_fs   (rate)",
+                 "up/down = rational approx of target/fs;  y = polyphase-FIR resample(x, up, down)",
+                 "downsample anti-aliases at the new fs/2 before decimation (no aliasing)"],
+        "inputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "outputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "params": {
+            "mode": {"type": "choice", "default": "factor", "label": "mode",
+                     "options": ["factor", "rate"]},
+            "factor": {"type": "number", "default": 2, "label": "factor (×fs)", "min": 0.05, "step": 0.5},
+            "new_fs": {"type": "number", "default": None, "label": "new fs (Hz)"},
+        },
+    },
+    "sf_smooth": {
+        "label": "Smooth",
+        "category": "transform",
+        "color": "#3a8f6f",
+        "help": "Low-pass smooth a signal: moving-average / gaussian / Savitzky-Golay (dsp.smooth_1d).",
+        "desc": ("Low-pass smoothing of a signal — the discrete, in-pathway version of the same "
+                 "tested smoother. 'moving' is MATLAB smooth(y, span) (odd span, ends shrink); "
+                 "'gaussian' weights by a bell of FWHM = span; 'savgol' fits a local polynomial "
+                 "(preserves peak height/width). Span is in samples of THIS signal."),
+        "math": ["moving:   ỹ[i] = mean(y[i−w … i+w]),  w = (span−1)/2 (shrinks at the ends)",
+                 "gaussian: ỹ = y ∗ g,  σ = span/2.3548 (FWHM)",
+                 "savgol:   local degree-p least-squares fit over `span` samples"],
+        "inputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "outputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "params": {
+            "method": {"type": "choice", "default": "moving", "label": "method",
+                       "options": ["moving", "gaussian", "savgol"]},
+            "window": {"type": "number", "default": 4, "label": "span (samples)", "min": 0, "step": 1},
+            "polyorder": {"type": "number", "default": 2, "label": "savgol order", "min": 1,
+                          "max": 6, "step": 1},
+        },
+    },
+    "sf_filter": {
+        "label": "Frequency filter",
+        "category": "transform",
+        "color": "#5a7fb0",
+        "help": "In-line zero-phase FIR low/high-pass (Hz); dsp.apply_temporal_filter.",
+        "desc": ("Applies a zero-phase FIR frequency filter to the signal, in-line in the pathway. "
+                 "Low-pass keeps slow components, high-pass removes drift/DC; cutoff in Hz (relative "
+                 "to THIS signal's fs). Types trade sharpness for ringing. The realized "
+                 "(truncated-kernel) response is what runs."),
+        "math": ["fc = cutoff_Hz / fs   (cycles/sample)",
+                 "butterworth:  |H(f)| = 1/√(1+(f/fc)^{2n});  windowed-sinc for the others",
+                 "high-pass = δ − low-pass (spectral inversion);  ỹ = y ∗ h (reflect-padded, zero phase)"],
+        "inputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "outputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "params": {
+            "fmode": {"type": "choice", "default": "lowpass", "label": "mode",
+                      "options": ["lowpass", "highpass"]},
+            "cutoff_hz": {"type": "number", "default": 30, "label": "cutoff (Hz)", "min": 0.1, "step": 1},
+            "ftype": {"type": "choice", "default": "butterworth", "label": "type",
+                      "options": ["gaussian", "butterworth", "ideal", "hamming", "hanning", "blackman"]},
+            "order": {"type": "number", "default": 2, "label": "order", "min": 1, "max": 10, "step": 1},
+            "taps": {"type": "number", "default": 33, "label": "taps", "min": 3, "max": 129, "step": 2},
+        },
+    },
+    "sf_detrend": {
+        "label": "Detrend / demean",
+        "category": "transform",
+        "color": "#7a8f3a",
+        "help": "Remove the mean or a least-squares line — do this before an FFT.",
+        "desc": ("Removes a constant ('mean') or a straight-line trend ('linear') from each epoch. "
+                 "Run it before an FFT so the DC term or a slow ramp doesn't dominate and drag the "
+                 "spectrum's low end (the power graph already drops the DC bin, but a ramp leaks)."),
+        "math": ["mean:   y ← y − ⟨y⟩",
+                 "linear: y ← y − (a·t + b),  (a,b) = least-squares fit"],
+        "inputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "outputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "params": {
+            "mode": {"type": "choice", "default": "mean", "label": "mode",
+                     "options": ["mean", "linear"]},
+        },
+    },
+    "sf_window": {
+        "label": "Window (taper)",
+        "category": "transform",
+        "color": "#8f7a3a",
+        "help": "Taper each epoch (Hann/Hamming/…) to cut FFT spectral leakage.",
+        "desc": ("Multiplies each epoch by a taper that goes to ~0 at the ends, so a finite segment "
+                 "doesn't leak a sinc skirt across the spectrum. Use before an FFT on a non-periodic "
+                 "segment. 'boxcar' = no taper (rectangular)."),
+        "math": ["y[n] ← y[n]·w[n],   w = Hann / Hamming / Blackman / Tukey / boxcar",
+                 "Hann: w[n] = 0.5(1 − cos(2πn/(N−1)))"],
+        "inputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "outputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "params": {
+            "wtype": {"type": "choice", "default": "hann", "label": "window",
+                      "options": ["hann", "hamming", "blackman", "tukey", "boxcar"]},
+        },
+    },
+    "sf_fft": {
+        "label": "FFT Power spectrum",
+        "category": "display",
+        "color": "#7d5bb0",
+        "help": "Display sink: single-sided power W = 2|X[k]|²/N² of the signal.",
+        "desc": ("A display sink — wire a pathway into it to SEE that pathway's power spectrum. "
+                 "Single-sided FFT power, the same W = 2|X[k]|²/N² formula as the validated "
+                 "spike-power graph, computed per epoch (mean removed, DC dropped). 'overlay' draws "
+                 "every epoch; 'average' interpolates them to a common grid and means them."),
+        "math": ["X[k] = rfft(y − ⟨y⟩),   W[k] = 2·|X[k]|² / N²   (single-sided, R=1Ω)",
+                 "f[k] = k·fs/N,   DC (k=0) dropped",
+                 "average: mean of the per-epoch W over the shared frequency band"],
+        "inputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "outputs": [{"name": "display", "type": PORT_DISPLAY}],
+        "params": {
+            "epoch_mode": {"type": "choice", "default": "average", "label": "epochs",
+                           "options": ["overlay", "average"]},
+            "fmax": {"type": "number", "default": None, "label": "max freq (Hz)"},
+        },
+    },
+    "sf_time": {
+        "label": "Time trace",
+        "category": "display",
+        "color": "#b0863a",
+        "help": "Display sink: the signal in the time domain (t vs value).",
+        "desc": ("A display sink showing the signal itself against time — inspect what a pathway "
+                 "actually looks like at any stage (the binned rate, after smoothing, after "
+                 "filtering). 'overlay' draws each epoch; 'average' means them on a common grid."),
+        "math": ["t[n] = t₀ + n/fs,   plot (t, y)"],
+        "inputs": [{"name": "signal", "type": PORT_SIGNAL}],
+        "outputs": [{"name": "display", "type": PORT_DISPLAY}],
+        "params": {
+            "epoch_mode": {"type": "choice", "default": "overlay", "label": "epochs",
+                           "options": ["overlay", "average"]},
+        },
+    },
+    "sf_isi": {
+        "label": "ISI histogram",
+        "category": "display",
+        "color": "#b05b7d",
+        "help": "Display sink: inter-spike-interval histogram (wire from spikes, not a bin).",
+        "desc": ("A display sink for the inter-spike-interval distribution (ms). Wire it straight "
+                 "from a spike source (Detect/Select-region), NOT from a Bin — it needs event times. "
+                 "Intervals are pooled across epochs and shown up to the 99th percentile."),
+        "math": ["ISIⱼ = 1000·(tⱼ₊₁ − tⱼ)  ms,   pooled over epochs → histogram"],
+        "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
+        "outputs": [{"name": "display", "type": PORT_DISPLAY}],
+        "params": {
+            "bin_ms": {"type": "number", "default": 2, "label": "bin (ms)", "min": 0.1, "step": 0.5},
+        },
+    },
+
     "smooth": {
         "label": "Smooth (pre-FFT)",
         "category": "processing",
