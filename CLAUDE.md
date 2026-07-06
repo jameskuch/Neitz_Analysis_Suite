@@ -69,8 +69,12 @@ wrappers just point at it. Deps: `pip install -e ".[gui,app]"` (`pywebview`; `py
   Fullscreen API in a plain browser tab). The `F` key + the ⛶ button share that one `toggle()`.
 - **Icon — one source, both platforms**: `scripts/build_icon.py` renders `assets/app_icon.svg`
   (needs `cairosvg`) → `assets/app_icon.icns` (macOS, via `iconutil`) + `assets/app_icon.ico`
-  (Windows, 16→256). The SVG is the trichromatic **cone mosaic + single-unit spike-train** icon.
-  Both rendered icons are **committed**, so `build_windows_app.py` needs no `cairosvg`/Cairo on
+  (Windows, 16→256). The SVG is the trichromatic **cone-mosaic** icon with **three thick, wide,
+  sharp-peaked action-potential spikes** overlaid — the mosaic stays visible behind them, and the
+  **middle spike is offset ~½ its width to the right** so the three aren't evenly spaced (James's
+  iterated design: down from eleven thin spikes → three fat ones with a broken rhythm). Re-render via
+  `build_icon.py` after ANY edit to the SVG. Both rendered icons are **committed**, so
+  `build_windows_app.py` needs no `cairosvg`/Cairo on
   Windows (only regenerating from the SVG does); `build_macos_app.py` falls back to the committed
   `.icns` if `cairosvg` is absent.
 - **Build** (idempotent — re-run after editing the SVG / viewer.py / neitz_app.py):
@@ -203,13 +207,30 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   selection. Callbacks: `list_view_states` (fills `#view-select` from the cell, refreshed by a
   `view-rev` bump), `save_view`, `restore_view` (writes every `_VIEW_TRACK` prop with
   `allow_duplicate`; `undo_record` then captures it as one undo step), `delete_view`. So adding a
-  control to UNDO_TRACK also makes it save/restore automatically. Known follow-up: view states don't
-  yet capture the file subset (a robust file-restore needs load_meta to yield to the restore).
+  control to UNDO_TRACK also makes it save/restore automatically. **View states NOW capture the file
+  subset too** (stored under `state["file.value"]`; `_VIEW_FILE_KEY`). Restore is TWO-PHASE to dodge
+  the load_meta clobber: `restore_view` — if the saved file set differs from the current — sets `file`
+  first and stashes the snapshot in `pending-view` (returns `no_update` for the settings); when
+  load_meta re-renders `meta.children` for the new files, `apply_pending_view` re-applies the tracked
+  settings so they win over load_meta's cell-default channel/region. If the file set matches (or the
+  view predates file-capture) the settings apply synchronously in `restore_view` (file untouched, no
+  clobber). Trade-off: a file-changing restore records as ~2 undo steps (file, then settings).
 - **Settable FFT bin** (power panel overlay `#fft-bin`, default 5 ms = 200 Hz): threaded through
   `binned_rate` + `power_w` (both MUST share the rate) via `build_figures(fft_bin=)`. Coarser bins
   low-pass the impulse train → fewer harmonics; the title shows the bin and the spectrum caps at its
   Nyquist. The **f=0 (DC) bin is dropped** in `power_w` (mean is subtracted → X[0]≈0 was a spurious
   ~−80 dB spike). Mean subtraction stays.
+- **Pre-FFT conditioning** (sidebar card "Pre-FFT conditioning (smooth · filter)", collapsed by
+  default): smoothing + a temporal filter applied to the **binned rate before the FFT** — the live
+  face of the `smooth` / `tfilter` pipeline nodes. Controls `smooth-win`/`smooth-method`/`smooth-poly`
+  and `tfilt-mode`/`tfilt-cut`/`tfilt-type`/`tfilt-order`/`tfilt-taps` → `_cond_dicts()` → `build_figures(
+  smooth=, tfilt=)` → `pre_fft(rate, …)` applied ONCE right after `binned_rate` (so the per-file
+  spectrum, the group average, and the 'view input' trace all show it; the FFT title notes active
+  conditioning). No-op by default (span 0 / mode off). All in `UNDO_TRACK` (so undo + saved views
+  cover them). Threaded into the 4K exports via `export_window_figures(smooth=, tfilt=)`; both Run
+  paths pass them, and a pipeline's OWN `smooth`/`tfilter` nodes take precedence over the live
+  controls when that pipeline/graph is the thing being run (`smooth_from_pipeline`/`tfilter_from_pipeline`
+  → falls back to live). Math lives in `neitz/analysis/dsp.py` (tested).
 - **FFT "view input" toggle** (`#fft-input`, in the power panel under `#fft-bin`): swaps the power
   spectrum for the *exact array `power_w` transforms* — spikes binned at the fft bin, mean-subtracted,
   over the region (x = time, y = rate−mean). `build_figures(fft_input=)` branches the per-file +
@@ -477,13 +498,32 @@ is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes
   `pipe-to-explorer`). `nav_route` (one callback) owns BOTH modal styles and routes all six. Escape
   closes the top-most overlay (output-modal → explorer → pipelines).
 - **Model — `neitz/pipeline.py` (tested, no GUI deps).** `COMPONENT_REGISTRY` = the palette (each
-  entry: label/category/color/help + typed `inputs`/`outputs` ports + a `params` schema of
-  number|choice|bool|text). `Pipeline` is a plain dict `{version,name,nodes[],connections[]}`; a node
-  is `{id,type,params,x,y,label}`, a connection `{from_node,from_port,to_node,to_port}`. Seed
-  pipelines: `default_flicker_pipeline` (source→align→detect→region→flicker→figures), `_sta_`,
-  `_strf_`. Storage = one JSON per pipeline under `<store_root>/pipelines/` (materialized on first
-  `list_pipelines`); **"Save as" = copy under a new name**. The terminal (analysis) node carries a
-  `terminal` stim family (`pipeline_stim_family` → sq_wave/gaussian_noise/checkerboard).
+  entry: label/category/color/help + a long `desc` + a `math` list [unicode equation lines, NOT
+  LaTeX — renders offline in WKWebView with no MathJax] + typed `inputs`/`outputs` ports + a `params`
+  schema of number|choice|bool|text; the `figures` node also carries `figures_by_stim` = which
+  figures each stimulus family produces). `Pipeline` is a plain dict `{version,name,nodes[],
+  connections[]}`; a node is `{id,type,params,x,y,label}`, a connection `{from_node,from_port,
+  to_node,to_port}`. Seed pipelines: `default_flicker_pipeline` (source→align→detect→region→flicker→
+  figures, now NAMED "Sq wave ON/OFF"), `_sta_`, `_strf_`. Storage = one JSON per pipeline under
+  `<store_root>/pipelines/` (materialized on first `list_pipelines`); **"Save as" = copy under a new
+  name**. The terminal (analysis) node carries a `terminal` stim family (`pipeline_stim_family` →
+  sq_wave/gaussian_noise/checkerboard).
+  - **The "flicker" component is LABELED "Sq wave ON/OFF"** (the node header + `desc`/`math`), but the
+    type key stays `flicker` and `terminal` stays `sq_wave` — dispatch/output-folder/`run_cell_flicker`
+    are unchanged (same rule as the "sq wave" stimulus rename). Rendering uses the SPEC label, so the
+    rename shows on every canvas incl. already-saved graphs. Stored pipelines still NAMED
+    "Flicker ON/OFF" keep that name (user data) — only the node label changed.
+  - **Two DSP nodes** (`smooth`, `tfilter`, both processing, spikes→spikes so they drop in before the
+    analysis node) back onto `neitz/analysis/dsp.py` (tested, `smooth_1d` = MATLAB `smooth(y,span)` +
+    gaussian/savgol; `apply_temporal_filter` = 1-D zero-phase FIR low/high-pass, the time-domain port
+    of `benaqTools_py/spatial_filter.py`, cutoff in Hz). `smooth_from_pipeline` / `tfilter_from_pipeline`
+    extract their params (like `detect_from_pipeline`).
+- **Node BREAKOUT panels.** Each node has a ⓘ button (`{pnode-info,node}`) → `pnode-detail` store →
+  `#pnode-detail-modal` (large overlay, `render_pnode_detail`): title + `desc` + `math` + (figures
+  node) the per-stim figure list + **settable variables** using a SEPARATE `{pmparam,node,param}` id
+  family (so the modal copy never collides with the on-canvas `{pparam}`), written back to `pipe-graph`
+  by `pipe_edit_param_modal`. Re-renders on `pipe-graph` change (edit reflects on canvas + modal).
+  Escape/✕/backdrop close it; it sits above the pipelines modal in the Escape chain.
 - **Editor — `viewer.py` + `assets/pipeline.js`.** Dash renders the NODES (so their param fields are
   real components with a `{pparam,node,param}` pattern callback) at absolute (x,y); `pipeline.js`
   draws the CONNECTION curves (SVG into `#pipe-conn`, reading node/port positions from the DOM),
