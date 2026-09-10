@@ -198,10 +198,10 @@ html, body { margin: 0; }
 .rail-rz:hover, .rail-rz:active { background: #4a4a66; }
 
 /* Item 4: inverted (dark) action buttons in the Data Explorer */
-#import-data, #exp-open-viewer, #save-meta, #backup-mirror {
+#import-data, #import-folder, #exp-open-viewer, #save-meta, #backup-mirror {
     background: #2f3142 !important; color: #e3e9ff !important; border: 1px solid #555 !important;
 }
-#import-data:hover, #exp-open-viewer:hover, #save-meta:hover, #backup-mirror:hover {
+#import-data:hover, #import-folder:hover, #exp-open-viewer:hover, #save-meta:hover, #backup-mirror:hover {
     background: #3c3f56 !important;
 }
 
@@ -209,7 +209,7 @@ html, body { margin: 0; }
 #del-files, #exp-open-viewer, #save-meta {
     height: 24px !important; box-sizing: border-box; padding-top: 0; padding-bottom: 0;
 }
-#import-data, #backup-mirror { height: 48px !important; box-sizing: border-box; }
+#import-data, #import-folder, #backup-mirror { height: 48px !important; box-sizing: border-box; }
 
 /* Item 3: pulsing glow on hover — nav switch targets + the breadcrumb back-date */
 @keyframes neitz-glow {

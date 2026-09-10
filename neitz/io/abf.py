@@ -111,8 +111,8 @@ def recorded_datetime(path):
 
     Reads ONLY the header (``loadData=False``), so it is cheap to call once per recording —
     unlike :meth:`Recording.load`, which pulls in all the sample data. Never raises: returns
-    ``None`` if the file is missing/unreadable or the field is absent. Used by the stimulus-
-    manifest timestamp cross-check in :func:`neitz.io.stim.apply_session_manifest`.
+    ``None`` if the file is missing/unreadable or the field is absent. Used to pair `.abf` files
+    to stim epochs by timestamp in :func:`neitz.io.stim.build_import_plan`.
     """
     try:
         return pyabf.ABF(str(path), loadData=False).abfDateTime

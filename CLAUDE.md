@@ -285,6 +285,34 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   `out-thumb` enlarge-modal still serves the Explorer; `gallery-trigger` is now a dead store.
 - **True full screen**: `⛶ Full screen` button (next to the readout) + the `F` key toggle the
   browser Fullscreen API (`assets/fullscreen.js`); relabels on `fullscreenchange`.
+- **Export CSV of individual traces** (TWO buttons next to Full screen; one `export_csv` callback
+  routes both by `ctx.triggered_id` → `export_traces_csv`): writes ONE CSV per checked trace into a
+  folder the user picks (`native_choose_folder`), columns `time_s · <chan> · <ttl> · spike` — the
+  analog signal + frame-sync + a 0/1 spike flag. Uses the LIVE Analysis-View channel/detection/
+  alignment (time is in aligned/display coords); restricted to the analysis region when **crop** is
+  on, else the whole recording. Result/errors → `#export-msg`. Neither is an analysis control, so
+  both are (correctly) absent from `UNDO_TRACK` / saved views.
+  - **`⤓ CSV full`** (`export-csv`) — FULL sample resolution, every sample, `<stem>_trace.csv`.
+    Exact (for Python/MATLAB), but a long recording (e.g. 600 s @ 20 kHz = 12.1 M rows) far exceeds
+    Excel's **1,048,576-row** limit, so it won't open in Excel.
+  - **`⤓ CSV ↓`** (`export-csv-ds`) — DOWNSAMPLED to the `#ds-rate` Hz box (default 1000 Hz),
+    `<stem>_trace_ds<rate>Hz.csv`, so it opens in Excel (605 k rows / ~30 MB / ~1.6 s for the 12.1 M
+    monster). Bin-reduce by `factor = round(fs/target)`: the analog channels are **bin-AVERAGED** (a
+    boxcar anti-alias — no aliasing) and the spike flag is **bin-OR'd** (1 if ANY detected spike fell
+    in the bin — timing preserved to the new rate, no spikes lost). `ds-rate` uses `PERSIST`.
+    (We deliberately chose downsample-vs-full over XLSX sheet-splitting: XLSX has the SAME 1,048,576
+    row/sheet limit, and the only installed writer `openpyxl` needs ~208 s to stream 12.1 M rows.)
+- **Import: two buttons — file(s) vs folder** (Data Explorer rail bottom panel). `📥 Import file(s)…`
+  (`native_choose_files`, macOS `choose file … with multiple selections allowed`) imports one or MORE
+  individually-chosen `.abf`/`.csv` files — this fixes the old bug where a SINGLE file couldn't be
+  imported (the folder chooser `choose folder` can't select a file). `📁 Import folder…`
+  (`native_choose_folder`) is the original bulk import (globs `**/*.abf`). Both funnel through
+  `_import_recordings(paths, folder, …)` (group by date → `stim_io.build_import_plan` → `io.importer.
+  apply_import_plan`: a cell per manifest `cell_name`, protocol-stamped recordings, abfs paired by
+  timestamp, stray/discarded handled — see *Stimulus source & reproduction*); one `import_data`
+  callback routes by `ctx.triggered_id`. `native_choose_*`
+  now `_remember_dir` so dialogs reopen where you left off. CSS: `#import-folder` shares the dark-theme
+  + 48px rules with `#import-data`/`#backup-mirror` in `assets/viewer.css`.
 - **Flicker auto-window includes the final cycle**: `detect_flicker` extends `t1` by one `period`
   (clamped to the envelope) so the last complete frame isn't clipped into the excluded block
   (regression: `test_detect_flicker_freq_and_region` asserts `t1 − last_on_edge > 0.4`).
@@ -396,11 +424,18 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
 June2026-rig stimuli (repo `June2026StageMATLAB`) are **gamma-corrected** for the LightCrafter and
 their noise is **regenerated from a seed here** — no per-frame stimulus values are shipped.
 
-- **Session manifest.** The rig writes `YYYY_MM_DD_stim_manifest.jsonl` (JSON-Lines, one trial per
-  line, in acquisition order): `{stimulus, stim_type, cone_isolation, seed, mu, sigma, checks_x/y,
-  n_updates, update_every_n_frames, refresh_rate_hz, stim_frames, gamma, noise_method, fill_order,
-  timestamp}`. `stim_type` ∈ `gaussian_noise | checkerboard | sq_wave | jitter`. Trials pair to
-  Clampex `.abf` files **by order** (day-level, sorted by NNNN); `timestamp` is the cross-check.
+- **Session manifest (nested; `.jsonl` dropped 2026-07).** The rig writes ONE
+  `YYYY_MM_DD_stim_manifest.json` per day (`format: neitz-stim-manifest/2`), a **day → cells[] →
+  blocks[] → epochs[]** tree mirroring how the session ran: each cell = a patched cell (`cell_name`);
+  each block = one PROTOCOL (`block_index, label, stim_type, cone_isolation, stim_signature, leds,
+  params`); each epoch = one presentation (`seed, timestamp, frame_sync`). A top-level `discarded[]`
+  holds epochs the operator Discarded at the rig (the skip marker — see the stimulus dialog below).
+  `stim_type` ∈ `gaussian_noise | checkerboard | sq_wave | jitter`. Epoch document order ==
+  acquisition order == Clampex `.abf` order, but a run can abort an epoch before Clampex records it
+  (a false start), discard a block, or leave a stray manual sweep — so epochs pair to `.abf` files
+  **by TIMESTAMP** (a monotonic alignment), not blind zip-by-order. The legacy flat
+  `*_stim_manifest.jsonl` dual-write was removed from `writeStimManifest.m`; both sides speak nested
+  `.json` now.
 - **Reproduce, don't store.** `stimulus/reproduce.py::reproduce_noise(seed, n_y, n_x, n_updates,
   mu, sigma)` → the exact `(n_y, n_x, n_updates)` **linear** noise, MATLAB-bit-identical: `mt19937ar`
   `rand()` == numpy `RandomState`, MATLAB `norminv` == `scipy.special.ndtri` (**inverse-CDF, NOT
@@ -408,23 +443,37 @@ their noise is **regenerated from a seed here** — no per-frame stimulus values
   MATLAB reference by `tests/test_reproduce.py` (~1e-12). STA **correlates against the linear `v`**
   (the projector is gamma-corrected, so emitted light is linear in `v`); `gamma_adjust(v) =
   v**(1/2.2056)` is the DAC code that was sent (display verification only).
-- **Reader.** `io/stim.py`: `load_session_manifest` / `find_session_manifest` (strict by date),
-  `stimulus_metadata(record) -> (stim_type, params)` for `CellManifest.set_stimulus(...,
-  source="stim-manifest")`, `pair_by_order`, `noise_from_record(record, per_frame=False)` (the STA
-  tensor; raises for sq_wave/jitter), `sent_codes_from_record`. **Complements — does not replace —**
-  the historical stimulus-CSV path (`io/csv.load_stimulus_epochs_csv`, used by 2017-era cells).
+- **Reader (`io/stim.py`).** `find_manifest` / `load_manifest` (nested `.json`, strict by date),
+  `iter_epochs(tree)` (flatten to per-epoch context dicts in acquisition order, block params merged +
+  an `aborted` hint), `align_abfs_to_epochs(abf_times, epoch_times, epoch_skippable=…)` (the monotonic
+  Needleman–Wunsch timestamp alignment — epochs may be skipped for aborted/discarded, abfs may be left
+  unmatched), `build_import_plan(source_dir, date, abf_paths)` (the whole day → cell → protocol → epoch
+  plan with abfs paired + `unmatched_abfs` / `discarded_abfs` / `warnings`), `epoch_groups` (now
+  protocol-aware), `stimulus_metadata`, `noise_from_record` (STA tensor; raises for sq_wave/jitter),
+  `sent_codes_from_record`. The old jsonl `load/find_session_manifest` / `apply_session_manifest` /
+  `pair_by_order` were REMOVED. Complements the historical stimulus-CSV path (`io/csv`, 2017-era cells).
 - **Analysis-side wiring (status).** The reproduction API is stable — wire to it, don't fork it.
-  - ✅ **Import auto-fill** — `io.stim.apply_session_manifest(cm, source_dir, date=)` finds the day's
-    manifest next to the `.abf`s, pairs rows→recordings by order, `set_stimulus(source="stim-manifest")`,
-    and copies the manifest into the cell dir. `viewer.import_data` calls it (replaces hand-entry;
-    no-ops when absent).
+  - ✅ **Import = the nested-json hierarchy** — `viewer._import_recordings` builds the plan
+    (`stim_io.build_import_plan`) and applies it (`io.importer.apply_import_plan`): one store cell per
+    manifest `cell_name` (the human name kept as `label`, folder stays `c01`/`c02`…), each block a
+    PROTOCOL stamped on every recording (`recording["protocol"] = {index, label, signature, epoch,
+    n_epochs}`), matched abfs its epochs. Stray abfs (no epoch) + non-abf files → an '(unsorted)' cell;
+    discarded-epoch abfs skipped; a cell whose epochs were all aborted false-starts is skipped. No
+    nested manifest → a single '(unsorted)' cell (no stim metadata). **Validated on 2026-07-16 rat
+    retina: 86 abf → c1(15) + (standalone)(70) + (unsorted)(1); mac-C1 = a 4-epoch false start,
+    skipped.** (`build_import_plan`/`apply_import_plan`/`align_abfs_to_epochs` are tested;
+    `test_abf_epoch_pairing.py`, `test_importer.py`.)
+  - ✅ **Re-categorize in the Data Explorer** (day → cell → PROTOCOL → epochs): check traces, then
+    **→ Set protocol** (assign a protocol label in this cell; epochs renumber by acquisition order via
+    `io.importer.renumber_protocols`) or **→ Move to cell** (re-file the raw data into another cell —
+    new or existing — `DataStore.move_recording` moves the file + updates BOTH manifests,
+    integrity-safe). One `recategorize` callback (routed by trigger). Protocol headers show the label
+    (`_epoch_group_header`), tiles show `epoch k/n`, the detail "Epochs" row summarizes protocols.
   - ✅ **Data Explorer** surfaces `stim_type · cone · seed · grid` (file tiles `_stim_brief`, detail
-    "Stimulus" row `_cell_stim_summary`, "Epochs" row `_cell_epoch_summary`). The **file browser
-    groups recordings into "N epochs" blocks** by `neitz.io.epoch_groups` (runs of the same
-    `stim_signature`): `explorer_file_options` inserts a full-width **disabled** header option before
-    each group (`_epoch_group_header`; CSS `#exp-files :has(input:disabled)` → `display:block`), so
-    headers can't be selected and the selection/delete/open callbacks are untouched. Flat fallback
-    when there's no useful grouping. (Rail-level *sorting* by stim_type is still a follow-up.)
+    "Stimulus" row `_cell_stim_summary`, "Epochs" row `_cell_epoch_summary`). `epoch_groups` groups by
+    explicit `protocol` (index+label), falling back to consecutive `stim_signature`; `explorer_file_options`
+    inserts a full-width **disabled** protocol header before each group (CSS `#exp-files :has(input:disabled)`
+    → `display:block`).
   - ✅ **Seed-based STA/STRF core** (`run.py`, tested against injected filters): `analysis_for_stim_type`
     (sq_wave→flicker, gaussian_noise→sta, checkerboard→strf), `record_from_stimulus`,
     `sta_from_records` / `strf_from_records` (per-epoch reverse correlation vs the **contrast** v−mean,
@@ -467,7 +516,8 @@ their noise is **regenerated from a seed here** — no per-frame stimulus values
 - **Data Explorer** (`#explorer-modal`, full-screen, all-dark): a **resizable** sortable/
   searchable **rail** of dates (`#exp-rail`; column widths are CSS vars `--rc1/2/3` driven by
   drag handles in `assets/rail-resize.js`, persisted; a dead spacer + fixed trash) with a
-  centered `date ← cell` **back** row on top and an **Import / Backup mirror** bottom panel ·
+  centered `date ← cell` **back** row on top and an **Import file(s) / Import folder / Backup mirror**
+  bottom panel (two import buttons — individual files vs bulk folder; see *Import: two buttons*) ·
   **middle** = cell thumbnails / file tiles over a hover-preview, with a bottom action bar
   (**delete + Open selected**, shown only when files are checked) · **right** (`#exp-rightpane`)
   = **editable cell metadata** (type / stimulus type+params / notes) + **Save metadata**, over
@@ -570,10 +620,18 @@ is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes
   Analysis-View state at run time (live state wins by design); execution dispatches to `run_cell_*`,
   not a true per-node graph interpreter; the editor has click-to-add / click-to-connect (drag-to-add
   from the palette + drag-to-connect are the next polish).
-- 6 session cells (2025-12 → 2026-02) have blank stimulus metadata pending entry (auto-fillable
-  once the stim-manifest import wiring lands — see *Stimulus source & reproduction*).
-- Checkerboard/Gaussian noise now HAVE a seed-based on-disk format (the stim manifest +
-  `reproduce.py` / `io/stim.py`); the import / Data-Explorer / `run_cell_noise` wiring is still TODO.
+- 6 session cells (2025-12 → 2026-02) have blank stimulus metadata; those days predate the nested
+  manifest, so re-importing won't help — tag them by hand or via the Explorer re-categorization tool.
+- **Stimulus-side (`June2026StageMATLAB`) — the per-block "protocol complete" dialog is untested live.**
+  `runExperiment` fires `opts.onBlockComplete(b, label, cellName)` after each block; `stimulusGUI`'s
+  `onBlockComplete` shows a Keep/Discard dialog (`local_protocolCompleteDialog`) and applies the choice
+  via `finalizeStimBlock(pwd, 'append'|'discard')` (rename the current cell / move the block's epochs to
+  `discarded[]`). The manifest logic is headless-tested (`stimulusGUI('__selftest__')` + the focused
+  matlab test), but the DIALOG + hook wiring need a real GUI run to confirm. Windows launcher parity
+  for the stimulus side is untouched.
+- Nested-json import + re-categorization + timestamp pairing are DONE and validated on 2026-07-16
+  (see *Stimulus source & reproduction*). `run_cell_noise` seed-STA still awaits a real seeded-noise
+  cell for its smoke test.
 - No CI yet.
 - `RESTRUCTURE_DESIGN.md` is a historical design record (the restructure is done) — keep
   for provenance, don't treat as current.

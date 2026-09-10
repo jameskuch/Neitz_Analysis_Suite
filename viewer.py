@@ -42,6 +42,7 @@ from dash import Dash, dcc, html, Input, Output, State, ctx, no_update, ALL
 
 from neitz.io import load_recording
 from neitz.io import stim as stim_io          # seed-based stim-manifest reader (aliased: local var `stim`)
+from neitz.io.importer import apply_import_plan, renumber_protocols  # plan → store; protocol renumber
 from neitz.spikes import detect_spikes
 from neitz.analysis import flicker as flk
 from neitz.analysis import dsp                  # 1-D smoothing + temporal filtering (pre-FFT)
@@ -148,32 +149,84 @@ def _osascript(script):
         return None
 
 
+def _remember_dir(path):
+    """Remember `path`'s folder so the next native dialog opens there."""
+    global _last_dir
+    try:
+        d = path if os.path.isdir(path) else os.path.dirname(path)
+        if d and os.path.isdir(d):
+            _last_dir = d
+    except Exception:
+        pass
+
+
 def native_choose_file():
     if platform.system() == "Darwin":
-        return _osascript(f'POSIX path of (choose file with prompt "Select an ABF or spike CSV" '
-                          f'default location (POSIX file "{_last_dir}") of type {{"abf", "csv"}})')
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk(); root.withdraw()
-        p = filedialog.askopenfilename(filetypes=[("ABF/CSV", "*.abf *.csv"), ("All", "*.*")])
-        root.destroy(); return p or None
-    except Exception:
-        return None
+        p = _osascript(f'POSIX path of (choose file with prompt "Select an ABF or spike CSV" '
+                       f'default location (POSIX file "{_last_dir}") of type {{"abf", "csv"}})')
+    else:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk(); root.withdraw()
+            p = filedialog.askopenfilename(filetypes=[("ABF/CSV", "*.abf *.csv"), ("All", "*.*")])
+            root.destroy()
+        except Exception:
+            p = None
+    if p:
+        _remember_dir(p)
+    return p or None
+
+
+def native_choose_files():
+    """Choose one or MORE .abf / spike-CSV files. Returns a list of POSIX paths (empty if
+    cancelled). This is what "📥 Import file(s)…" uses so a SINGLE file can be picked — the folder
+    chooser (`choose folder`) can only select a folder, never an individual file (the reported bug)."""
+    if platform.system() == "Darwin":
+        script = (
+            'set theFiles to choose file with prompt "Select ABF or spike-CSV file(s)" '
+            f'default location (POSIX file "{_last_dir}") of type {{"abf", "csv"}} '
+            'with multiple selections allowed\n'
+            "set AppleScript's text item delimiters to linefeed\n"
+            'set out to ""\n'
+            'repeat with f in theFiles\n'
+            '  set out to out & (POSIX path of f) & linefeed\n'
+            'end repeat\n'
+            'return out')
+        out = _osascript(script)
+        paths = [p.strip() for p in (out or "").splitlines() if p.strip()]
+    else:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk(); root.withdraw()
+            ps = filedialog.askopenfilenames(
+                filetypes=[("ABF/CSV", "*.abf *.csv"), ("All", "*.*")])
+            root.destroy()
+            paths = list(ps) if ps else []
+        except Exception:
+            paths = []
+    if paths:
+        _remember_dir(paths[0])
+    return paths
 
 
 def native_choose_folder():
     if platform.system() == "Darwin":
-        return _osascript(f'POSIX path of (choose folder with prompt "Select a folder" '
-                          f'default location (POSIX file "{_last_dir}"))')
-    try:
-        import tkinter as tk
-        from tkinter import filedialog
-        root = tk.Tk(); root.withdraw()
-        p = filedialog.askdirectory()
-        root.destroy(); return p or None
-    except Exception:
-        return None
+        p = _osascript(f'POSIX path of (choose folder with prompt "Select a folder" '
+                       f'default location (POSIX file "{_last_dir}"))')
+    else:
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+            root = tk.Tk(); root.withdraw()
+            p = filedialog.askdirectory()
+            root.destroy()
+        except Exception:
+            p = None
+    if p:
+        _remember_dir(p)
+    return p or None
 
 
 # ---- cache & helpers -------------------------------------------------------
@@ -772,24 +825,31 @@ def _cell_stim_summary(cm):
 
 
 def _cell_epoch_summary(cm):
-    """Epoch grouping from stim_signature (neitz.io.epoch_groups): consecutive identical
-    stimuli are N epochs of one. e.g. '1 stimulus · 3 epochs' or '3 stimuli · 3 + 5 + 1
-    epochs'. Returns None unless some stimulus was actually repeated (so the row only
-    appears when it adds information beyond the Recordings/Stimulus rows)."""
+    """Protocol grouping (neitz.io.epoch_groups): consecutive traces of one protocol are N
+    epochs. Prefers assigned protocol labels, else the stim_signature. e.g. '1 protocol · 3
+    epochs' or '2 protocols · 10 + 5 epochs (grey, 4hz)'. Returns None unless some protocol
+    has >1 epoch (so the row only appears when it adds information)."""
     from neitz.io import epoch_groups
     groups = epoch_groups(cm.data.get("recordings", []))
-    if not any(g["stim_signature"] is not None and g["n_epochs"] > 1 for g in groups):
+
+    def _named(g):
+        return g["stim_signature"] is not None or g.get("protocol_label")
+    if not any(_named(g) and g["n_epochs"] > 1 for g in groups):
         return None
     counts = [g["n_epochs"] for g in groups]
+    labels = [g.get("protocol_label") for g in groups]
+    tail = f" ({', '.join(labels)})" if all(labels) and len(labels) <= 6 else ""
     if len(groups) == 1:
-        return f"1 stimulus · {counts[0]} epochs"
-    return f"{len(groups)} stimuli · {' + '.join(map(str, counts))} epochs"
+        return f"1 protocol · {counts[0]} epochs" + tail
+    return f"{len(groups)} protocols · {' + '.join(map(str, counts))} epochs" + tail
 
 
 def _file_tile(p, r):
-    """One recording's tile (waveform thumb + name + stim brief) for the file browser."""
+    """One recording's tile (waveform thumb + name + stim brief + protocol epoch) for the browser."""
     spark = sparkline_datauri(p)
     brief = _stim_brief(r.get("stimulus"))
+    pr = r.get("protocol") or {}
+    ep_txt = f"epoch {pr['epoch']}/{pr['n_epochs']}" if pr.get("epoch") else None
     return html.Div([
         html.Img(src=spark, className="gprev", style=dict(_THUMB_IMG, width="220px"),
                  **{"data-ps": "wave|" + p}) if spark
@@ -798,20 +858,25 @@ def _file_tile(p, r):
                                              "color": "#e3e9ff", "fontWeight": "bold"}),
         html.Div(f"stim: {brief}" if brief else "stim: —",
                  style={"fontSize": "10px", "color": "#9aa7c0"}),
+        html.Div(ep_txt, style={"fontSize": "10px", "color": "#7fb0e0"}) if ep_txt else None,
     ], style={"display": "inline-block", "verticalAlign": "top",
               "background": "#2a2a36", "borderRadius": "4px", "padding": "2px 4px"})
 
 
 def _epoch_group_header(g):
-    """Full-width header for one epoch-group (a run of the same stimulus = N epochs). Rendered as a
-    DISABLED checklist option so it can't be selected; CSS makes disabled options full-width so each
-    group's tiles wrap beneath their header."""
+    """Full-width header for one PROTOCOL (a run of N epochs of one stimulus). Prefers the
+    protocol label (from re-categorization / the nested manifest block), else the stimulus type.
+    Rendered as a DISABLED checklist option so it can't be selected; CSS makes disabled options
+    full-width so each protocol's tiles wrap beneath their header."""
     st = {"sq_wave": "sq wave", "flicker": "sq wave"}.get(g.get("stim_type"), g.get("stim_type")) or "—"
+    plabel = g.get("protocol_label")
     cone = g.get("cone_isolation")
     n = int(g.get("n_epochs", 1))
-    label = " · ".join([st] + ([str(cone)] if cone else []))
+    title = plabel or " · ".join([st] + ([str(cone)] if cone else []))
+    sub = (" · ".join([st] + ([str(cone)] if cone else [])) if plabel else "")
     return html.Div([
-        html.Span(f"▸ {label}", style={"fontWeight": "bold", "color": "#cdd6f4"}),
+        html.Span(f"▸ {title}", style={"fontWeight": "bold", "color": "#cdd6f4"}),
+        html.Span(f"  ({sub})" if sub else "", style={"color": "#8895ad", "marginLeft": "6px"}),
         html.Span(f"   {n} epoch" + ("s" if n != 1 else ""),
                   style={"color": "#9aa7c0", "marginLeft": "6px"}),
     ], style={"fontSize": "11.5px", "borderBottom": "1px solid #3a3a48", "paddingBottom": "3px",
@@ -829,8 +894,9 @@ def explorer_file_options(date, cell):
     recs = [r for r in cm.data.get("recordings", [])
             if str(r.get("file", "")).endswith((".abf", ".csv"))]
     groups = epoch_groups(recs)
-    # only show group headers when they add structure: some stimulus repeats, or ≥2 distinct stimuli
-    show = (any(g["stim_signature"] for g in groups)
+    # show protocol headers when they add structure: an assigned protocol label or signature,
+    # AND either ≥2 groups or some group has >1 epoch
+    show = (any(g["stim_signature"] or g.get("protocol_label") for g in groups)
             and (len(groups) > 1 or any(g["n_epochs"] > 1 for g in groups)))
     opts = []
     for gi, g in enumerate(groups):
@@ -1000,6 +1066,13 @@ def explorer_breadcrumb(date, cell):
                                             "fontSize": "15px"}),
                   html.Span(cell, style={"fontWeight": "bold"})]
     return parts
+
+
+def _recat_ids(cm, checked):
+    """The rec ids of a cell whose raw-file paths are in `checked` (the exp-files selection)."""
+    checked = set(checked or [])
+    return [r["id"] for r in cm.data.get("recordings", [])
+            if str(cm.dir / r["file"]) in checked]
 
 
 def delete_files(date, cell, paths):
@@ -1691,6 +1764,30 @@ app.layout = html.Div(
                         "flex": "0 0 auto"}, children=[
             html.Div(id="readout", style={"fontWeight": "bold", "fontSize": "12px",
                                           "padding": "2px 0", "flex": "1 1 auto"}),
+            # export result message (written by export_csv; ellipsised, full text in the tooltip)
+            html.Span(id="export-msg", style={"fontSize": "11px", "color": "#2a7", "flex": "0 1 auto",
+                                              "maxWidth": "340px", "overflow": "hidden",
+                                              "textOverflow": "ellipsis", "whiteSpace": "nowrap"}),
+            # export the CHECKED traces (time · signal · frame-sync · spike flag) to CSV files — one
+            # CSV per trace, into a folder you pick (honors the live channel/detection/region/align).
+            # Two buttons: "full" = every sample (exact, but a long recording is too big for Excel);
+            # "↓" = downsampled to the Hz box so it opens in Excel (analog bin-averaged, spikes kept).
+            html.Button("⤓ CSV full", id="export-csv", n_clicks=0,
+                        title="export the checked traces at FULL sample resolution "
+                              "(time · signal · frame-sync · spikes), one CSV per trace, into a "
+                              "folder you pick. Exact, but a long trace exceeds Excel's row limit.",
+                        style={"fontSize": "11px", "padding": "2px 8px", "cursor": "pointer",
+                               "flex": "0 0 auto", "whiteSpace": "nowrap"}),
+            html.Span("↓Hz", title="downsample target rate (Hz) for the ⤓ CSV ↓ export",
+                      style={"fontSize": "10px", "color": "#777", "flex": "0 0 auto"}),
+            dcc.Input(id="ds-rate", type="number", value=1000, min=1, step=1, debounce=True,
+                      style={"width": "56px", "fontSize": "11px", "flex": "0 0 auto"}, **PERSIST),
+            html.Button("⤓ CSV ↓", id="export-csv-ds", n_clicks=0,
+                        title="export the checked traces DOWNSAMPLED to the Hz at left (analog "
+                              "bin-averaged, detected spikes kept as a per-bin flag) — small enough "
+                              "to open in Excel. One CSV per trace, into a folder you pick.",
+                        style={"fontSize": "11px", "padding": "2px 8px", "cursor": "pointer",
+                               "flex": "0 0 auto", "whiteSpace": "nowrap"}),
             # true full-screen toggle (browser Fullscreen API; wired in assets/fullscreen.js)
             html.Button("⛶ Full screen", id="fs-toggle", n_clicks=0,
                         title="enter / exit full screen (or press F)",
@@ -1946,12 +2043,18 @@ app.layout = html.Div(
                 # the rows (rebuilt by a callback)
                 html.Div(id="exp-dates", style={"flex": "1 1 0", "overflowY": "auto"}),
               ]),
-              # bottom panel (~10% height): Import + Backup mirror
+              # bottom panel (~10% height): Import file(s) / folder + Backup mirror.
+              # Two import buttons: "file(s)…" picks individual .abf/.csv files (so a SINGLE file
+              # can be imported); "folder…" bulk-imports every .abf under a chosen directory.
               html.Div([
-                  html.Button("📥 Import data…", id="import-data", n_clicks=0,
-                              style={"flex": "1", "fontWeight": "bold"}),
+                  html.Button("📥 Import file(s)…", id="import-data", n_clicks=0,
+                              title="import one or more individual .abf / spike-CSV files",
+                              style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
+                  html.Button("📁 Import folder…", id="import-folder", n_clicks=0,
+                              title="bulk-import every .abf found under a chosen folder",
+                              style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
                   html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
-                              style={"flex": "1", "fontWeight": "bold"}),
+                              style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
               ], style={"flex": "0 0 10%", "minHeight": "44px", "background": "#15151d",
                         "border": "1px solid #2a2a35", "borderRadius": "6px", "padding": "8px",
                         "display": "flex", "alignItems": "center", "gap": "8px"}),
@@ -1973,13 +2076,46 @@ app.layout = html.Div(
                                                   "borderRadius": "5px", "padding": "5px", "margin": "5px"},
                                       inputStyle={"marginRight": "5px", "marginTop": "2px"}),
                     ], style={"flex": "1 1 0", "minHeight": 0, "overflowY": "auto", "padding": "10px"}),
-                    # bottom action bar: delete (left) + Open selected (right) — shown when files chosen
+                    # bottom action bar: re-categorize (left) + delete / Open selected (right)
+                    # — shown when files are checked
                     html.Div([
-                        html.Button("", id="del-files", n_clicks=0, style={"display": "none"}),
-                        html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
-                                    style={"display": "none", "fontWeight": "bold"}),
-                    ], style={"display": "flex", "justifyContent": "flex-end", "gap": "8px",
-                              "alignItems": "center", "padding": "6px 10px",
+                        # re-categorize the checked traces: set their Protocol, or move to a cell
+                        html.Div(id="recat-panel", style={"display": "none"}, children=[
+                            html.Span("Re-categorize ▸", style={"color": "#9aa7c0", "fontSize": "11px",
+                                                                "fontWeight": "bold"}),
+                            dcc.Input(id="recat-proto", type="text", debounce=True,
+                                      placeholder="protocol name",
+                                      style={"width": "130px", "fontSize": "11px", "padding": "2px 4px",
+                                             "background": "#1c1c25", "color": "#e3e9ff",
+                                             "border": "1px solid #3a3a48", "borderRadius": "4px"}),
+                            html.Button("→ Set protocol", id="recat-assign", n_clicks=0,
+                                        title="assign the checked traces to this protocol (stimulus type); "
+                                              "epochs are numbered by acquisition order",
+                                        style={"fontSize": "11px", "padding": "2px 8px", "cursor": "pointer",
+                                               "color": "#cfe3ff", "background": "#2f3142",
+                                               "border": "1px solid #555", "borderRadius": "4px"}),
+                            html.Span("│", style={"color": "#3a3a48", "margin": "0 2px"}),
+                            dcc.Input(id="recat-cell", type="text", debounce=True,
+                                      placeholder="cell name",
+                                      style={"width": "110px", "fontSize": "11px", "padding": "2px 4px",
+                                             "background": "#1c1c25", "color": "#e3e9ff",
+                                             "border": "1px solid #3a3a48", "borderRadius": "4px"}),
+                            html.Button("→ Move to cell", id="recat-move", n_clicks=0,
+                                        title="move the checked traces to another cell (created if new); "
+                                              "the raw files are re-filed, both manifests updated",
+                                        style={"fontSize": "11px", "padding": "2px 8px", "cursor": "pointer",
+                                               "color": "#ffe0b8", "background": "#2f3142",
+                                               "border": "1px solid #555", "borderRadius": "4px"}),
+                            html.Span(id="recat-msg", style={"fontSize": "11px", "color": "#7fdc7f",
+                                                             "marginLeft": "6px"}),
+                        ]),
+                        html.Div([
+                            html.Button("", id="del-files", n_clicks=0, style={"display": "none"}),
+                            html.Button("📈 Open selected in viewer", id="exp-open-viewer", n_clicks=0,
+                                        style={"display": "none", "fontWeight": "bold"}),
+                        ], style={"display": "flex", "gap": "8px", "alignItems": "center"}),
+                    ], style={"display": "flex", "justifyContent": "space-between", "gap": "8px",
+                              "alignItems": "center", "padding": "6px 10px", "flexWrap": "wrap",
                               "borderTop": "1px solid #333"}),
                 ]),
                 # bottom 1/3 of the middle column: hover preview (any graph you hover lands here)
@@ -2529,6 +2665,89 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
              else f"{len(files)} files" if multi else "1 file")
     readout = f"{label} · region {rs:.2f}–{re_:.2f}s · {view} view{freq_txt}"
     return time_fig, fft_fig, isi_fig, readout
+
+
+# ---- CSV export of individual traces ("⤓ CSV full" / "⤓ CSV ↓") -----------------------------------
+# One CSV per checked trace, into a user-picked folder. Columns: time_s (aligned/display coords),
+# <chan> (the analog signal), <ttl> (the frame-sync, if a distinct channel is picked), and `spike`
+# (0/1 spike flag). Uses the SAME per-file channel + detection + alignment as build_figures, and
+# restricts to the analysis region when "crop" is on (else the whole recording).
+#   target_hz=None  → FULL resolution: every sample, `<stem>_trace.csv`. Faithful for Python/MATLAB,
+#                     but a long recording (e.g. 600 s @ 20 kHz = 12.1 M rows) is far past Excel's
+#                     1,048,576-row limit, so it won't open in Excel.
+#   target_hz=<Hz>  → DOWNSAMPLED: bin-reduce to ~target_hz so it fits/opens in Excel. The analog is
+#                     bin-AVERAGED (a boxcar anti-alias, no aliasing) and the spike flag is bin-OR'd
+#                     (1 if ANY detected spike fell in the bin — timing preserved to the new rate, no
+#                     spikes lost). Written as `<stem>_trace_ds<rate>Hz.csv`, so both variants coexist.
+def export_traces_csv(outdir, files, chan, ttl_name, *, polarity, method, k, absth, refr,
+                      absth_map, rstart, rend, crop, align_map, target_hz=None):
+    import pandas as pd
+    files = [f for f in (files or []) if f and loadable(f)]
+    det = dict(polarity=polarity, method=method, k=float(k),
+               abs_threshold=float(absth) if absth is not None else None,
+               refractory_s=(float(refr) / 1000.0) if refr else 0.002)
+    amap = absth_map or {}
+    written, skipped = [], []
+    os.makedirs(outdir, exist_ok=True)
+    for path in files:
+        try:
+            rec = get_recording(path)
+            fs = rec.fs
+            y = np.asarray(get_channel(path, chan), float)
+            n = len(y)
+            off = 0.0
+            if align_map:
+                try:
+                    off = float(align_map.get(path, 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    off = 0.0
+            # continuous channels (bin-AVERAGED when downsampling): signal + optional frame-sync/TTL
+            cont = {chan: y}
+            if ttl_name and ttl_name != chan:
+                try:
+                    ttl = np.asarray(get_channel(path, ttl_name), float)
+                    if len(ttl) == n:
+                        cont[ttl_name] = ttl
+                except Exception:
+                    pass
+            # per-sample spike flag (1 at each detected spike's sample), same detection as the view
+            eff_abs = amap.get(path)
+            if eff_abs is None:
+                eff_abs = float(absth) if absth is not None else None
+            det_i = dict(det, abs_threshold=(float(eff_abs) if eff_abs is not None else None))
+            st = detect_spikes(y, fs, **det_i)
+            flag = np.zeros(n, dtype=int)
+            if len(st.times):
+                si = np.clip(np.round(np.asarray(st.times) * fs).astype(int), 0, n - 1)
+                flag[si] = 1
+
+            # bin-reduce factor (1 = full resolution). target_hz ≥ ~fs → factor 1 → full res.
+            factor = 1
+            if target_hz and float(target_hz) > 0:
+                factor = max(1, int(round(fs / float(target_hz))))
+            if factor > 1:                                    # DOWNSAMPLE: bin-mean cont, bin-OR spikes
+                m = (n // factor) * factor
+                cols = {"time_s": (np.arange(m) / fs + off).reshape(-1, factor).mean(axis=1)}
+                for nm, arr in cont.items():
+                    cols[nm] = arr[:m].reshape(-1, factor).mean(axis=1)
+                cols["spike"] = flag[:m].reshape(-1, factor).max(axis=1)
+                suffix = f"_ds{fs / factor:.0f}Hz"
+            else:                                             # FULL resolution: every sample
+                cols = {"time_s": np.arange(n) / fs + off}
+                cols.update(cont)
+                cols["spike"] = flag
+                suffix = ""
+
+            df = pd.DataFrame(cols)
+            if crop and rstart is not None and rend is not None:  # restrict to the analysis region
+                df = df[(df["time_s"] >= float(rstart)) & (df["time_s"] <= float(rend))]
+            stem = os.path.splitext(os.path.basename(path))[0]
+            out = os.path.join(outdir, f"{stem}_trace{suffix}.csv")
+            df.to_csv(out, index=False)
+            written.append(out)
+        except Exception as e:
+            skipped.append(f"{os.path.basename(path)} ({e})")
+    return written, skipped
 
 
 # ---- 4K Plotly exports saved on "Run Analysis" (kaleido → PDF/SVG, 3840×2160 = 4K full-screen).
@@ -4092,16 +4311,17 @@ def exp_open_viewer(_n, sel):
 
 # ---- the 🗑 for the checked file(s) (appears at the bottom of the selection) -------
 @app.callback(Output("del-files", "style"), Output("del-files", "children"),
-              Output("exp-open-viewer", "style"),
+              Output("exp-open-viewer", "style"), Output("recat-panel", "style"),
               Input("exp-files", "value"), prevent_initial_call=False)
 def del_files_button(sel):
     sel = [s for s in (sel or []) if s]
     base = {"color": "white", "background": "#b00", "border": "none", "borderRadius": "4px",
             "padding": "4px 10px", "fontWeight": "bold", "fontSize": "12px", "cursor": "pointer"}
-    if not sel:                                          # nothing chosen → hide both action buttons
-        return {"display": "none"}, "", {"display": "none"}
+    recat = {"display": "flex", "alignItems": "center", "gap": "5px", "flexWrap": "wrap"}
+    if not sel:                                          # nothing chosen → hide the action controls
+        return {"display": "none"}, "", {"display": "none"}, {"display": "none"}
     return (dict(base, display="inline-block"), f"🗑 delete {len(sel)} selected",
-            {"display": "inline-block", "fontWeight": "bold"})
+            {"display": "inline-block", "fontWeight": "bold"}, recat)
 
 
 # ---- Data Explorer: reveal the SELECTED output figures' location(s) in the OS file browser ------
@@ -4213,54 +4433,192 @@ def confirm_delete(_n, targets, rev):
         return f"delete error: {e}", no_update, *nu
 
 
+# ---- Data Explorer: re-categorize the checked traces into day → cell → PROTOCOL → epochs ----
+# One callback owns both actions (routed by ctx.triggered_id):
+#   "→ Set protocol"  — assign the checked traces to a protocol (stimulus type) in THIS cell;
+#                       epochs re-number by acquisition order (renumber_protocols).
+#   "→ Move to cell"  — re-file the checked traces into another cell (created if the name is new),
+#                       physically moving the raw files + updating BOTH manifests (integrity-safe),
+#                       then re-numbering protocols on each end.
+@app.callback(Output("recat-msg", "children"),
+              Output("exp-files", "options", allow_duplicate=True),
+              Output("exp-files", "value", allow_duplicate=True),
+              Output("exp-detail", "children", allow_duplicate=True),
+              Output("store-rev", "data", allow_duplicate=True),
+              Output("cell-select", "options", allow_duplicate=True),
+              Input("recat-assign", "n_clicks"), Input("recat-move", "n_clicks"),
+              State("exp-files", "value"), State("recat-proto", "value"),
+              State("recat-cell", "value"), State("exp-date", "data"),
+              State("exp-cell", "data"), State("store-rev", "data"),
+              prevent_initial_call=True)
+def recategorize(_a, _m, checked, proto_label, cell_name, date, cell, rev):
+    nu = (no_update,) * 5
+    if not (ctx.triggered and ctx.triggered[0].get("value")):
+        return ("", *nu)
+    checked = [c for c in (checked or []) if c]
+    if not (date and cell and checked):
+        return ("check one or more traces first", *nu)
+    ds = DataStore()
+    cm = ds.cell(date, cell)
+    ids = _recat_ids(cm, checked)
+    if not ids:
+        return ("no matching traces in this cell", *nu)
+    try:
+        if ctx.triggered_id == "recat-assign":
+            label = (proto_label or "").strip()
+            if not label:
+                return ("type a protocol name first", *nu)
+            for r in cm.data["recordings"]:
+                if r["id"] in ids:
+                    pr = dict(r.get("protocol") or {})
+                    pr["label"] = label
+                    r["protocol"] = pr
+            renumber_protocols(cm)
+            cm.save()
+            ds.update_index()
+            return (f"✓ set protocol '{label}' on {len(ids)} trace(s)",
+                    explorer_file_options(date, cell), [],
+                    explorer_detail(date, cell), (rev or 0) + 1, store_cell_options())
+        # recat-move
+        target = (cell_name or "").strip()
+        if not target:
+            return ("type a destination cell name first", *nu)
+        dst = ds.cell_by_name(date, target) or ds.new_cell(date, label=target)
+        if dst.data["cell"] == cell:
+            return ("that's the current cell — pick a different name", *nu)
+        for rid in ids:
+            ds.move_recording(date, cell, dst.data["cell"], rid)
+        for c in (cell, dst.data["cell"]):                  # close epoch gaps on both ends
+            cc = ds.cell(date, c)
+            renumber_protocols(cc)
+            cc.save()
+        ds.update_index()
+        return (f"✓ moved {len(ids)} trace(s) → {target} ({dst.data['cell']})",
+                explorer_file_options(date, cell), [],
+                explorer_detail(date, cell), (rev or 0) + 1, store_cell_options())
+    except Exception as e:
+        return (f"re-categorize error: {e}", *nu)
+
+
 # ---- import new experiment data into the store (copies + auto-groups by date) --
-# (the Import button now lives in the Data Explorer window)
+# Two entry points share one core: "📥 Import file(s)…" picks individual .abf/.csv files (so a
+# SINGLE file can be imported — the reported bug: `choose folder` can't select a file) and
+# "📁 Import folder…" bulk-imports every .abf under a chosen directory. (These buttons live in the
+# Data Explorer's rail bottom panel.)
+def _import_recordings(paths, folder, stype, sparams, rev):
+    """Copy `paths` into the store as day → cell → PROTOCOL → epochs, driven by the day's
+    NESTED stim manifest (``<date>_stim_manifest.json``). `folder` (or None) is the bulk-import
+    root — an extra place to look for the manifest.
+
+    ABFs are paired to stim epochs by timestamp (``stim_io.build_import_plan``): each cell_name
+    in the manifest becomes a cell, each block a protocol, its matched abfs the epochs. Stray
+    abfs (no epoch) + any non-abf files land in an '(unsorted)' cell for review; abfs whose epoch
+    the operator Discarded at the rig are skipped; a cell whose epochs were all aborted
+    false-starts is skipped. A day with NO nested manifest falls back to a single '(unsorted)'
+    cell (no stimulus/protocol metadata). Returns the 4-tuple for the import callback outputs."""
+    import re
+    paths = [p for p in (paths or []) if p]
+    if not paths:
+        return no_update, no_update, no_update, no_update
+    by_date = {}
+    for f in paths:
+        m = re.match(r"(\d{4})_(\d{2})_(\d{2})", os.path.basename(f))
+        date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else "undated"
+        by_date.setdefault(date, []).append(f)
+
+    hand_stim = None                                          # only tags non-abf leftovers
+    if stype and stype != "(none)":
+        hand_stim = {"type": stype, "params": parse_params(sparams), "source": "user"}
+
+    ds = DataStore()
+    made, notes, n_imported = [], [], 0
+    for date, fs in sorted(by_date.items()):
+        abfs = sorted(p for p in fs if p.lower().endswith(".abf"))
+        others = sorted(p for p in fs if not p.lower().endswith(".abf"))
+        src_dirs = list(dict.fromkeys([os.path.dirname(fs[0])] + ([folder] if folder else [])))
+        plan = next((pl for pl in (stim_io.build_import_plan(s, date, abfs) for s in src_dirs)
+                     if pl["manifest"] is not None),
+                    stim_io.build_import_plan(src_dirs[0], date, abfs))   # else no-manifest plan
+        summ = apply_import_plan(ds, date, plan, other_paths=others, hand_stim=hand_stim)
+        n_imported += summ["n_imported"]
+        made.append(f"{date}: " + (", ".join(f"{c['cell']}={c['name']}({c['n']})"
+                                    for c in summ["cells"]) or "nothing"))
+        notes += summ["notes"]
+    msg = f"imported {n_imported} recording(s) → " + " · ".join(made)
+    if notes:
+        msg += "  ·  " + "; ".join(notes)
+    return (store_cell_options(), (rev or 0) + 1, msg, msg)   # bump store-rev → rail rebuilds
+
+
 @app.callback(Output("cell-select", "options", allow_duplicate=True),
               Output("store-rev", "data", allow_duplicate=True),
               Output("exp-msg", "children"),
               Output("store-msg", "children", allow_duplicate=True),
               Input("import-data", "n_clicks"),
+              Input("import-folder", "n_clicks"),
               State("stim-type", "value"), State("stim-params", "value"),
               State("store-rev", "data"), prevent_initial_call=True)
-def import_data(_n, stype, sparams, rev):
-    import re
-    folder = native_choose_folder()
-    if not folder:
+def import_data(_nf, _nd, stype, sparams, rev):
+    if ctx.triggered_id == "import-folder":
+        folder = native_choose_folder()
+        if not folder:
+            return no_update, no_update, no_update, no_update
+        paths = sorted(glob.glob(os.path.join(folder, "**", "*.abf"), recursive=True))
+        if not paths:
+            return no_update, no_update, f"no .abf files found in {folder}", no_update
+        return _import_recordings(paths, folder, stype, sparams, rev)
+    # "📥 Import file(s)…" — one or more individually-chosen .abf / spike-CSV files
+    paths = native_choose_files()
+    if not paths:
         return no_update, no_update, no_update, no_update
-    abfs = sorted(glob.glob(os.path.join(folder, "**", "*.abf"), recursive=True))
-    if not abfs:
-        return no_update, no_update, f"no .abf files found in {folder}", no_update
-    by_date = {}
-    for f in abfs:
-        m = re.match(r"(\d{4})_(\d{2})_(\d{2})", os.path.basename(f))
-        date = f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else "undated"
-        by_date.setdefault(date, []).append(f)
+    return _import_recordings(paths, None, stype, sparams, rev)
 
-    stim = None
-    if stype and stype != "(none)":
-        stim = {"type": stype, "params": parse_params(sparams), "source": "user"}
 
-    ds = DataStore()
-    made = []
-    tagged = 0
-    for date, fs in sorted(by_date.items()):
-        cm = ds.new_cell(date, label=os.path.basename(folder.rstrip("/")))
-        for f in fs:
-            cm.add_recording(f, label=os.path.basename(f), stimulus=stim)
-        # auto-fill each recording's stimulus from the day's seed-based stim manifest (paired by
-        # order), if one ships next to the .abf files (or in the chosen folder). This REPLACES the
-        # hand-entered stimulus above; when no manifest is found it's a no-op and hand-entry stands.
-        for src in (os.path.dirname(fs[0]), folder):
-            k = stim_io.apply_session_manifest(cm, src, date=date)
-            if k:
-                tagged += k
-                break
-        cm.save()
-        made.append(f"{date}/{cm.data['cell']} ({len(fs)})")
-    ds.update_index()
-    msg = (f"imported {len(abfs)} recordings → " + ", ".join(made)
-           + (f"  ·  {tagged} tagged from stim manifest" if tagged else ""))
-    return (store_cell_options(), (rev or 0) + 1, msg, msg)   # bump store-rev -> rail rebuilds
+# ---- export the checked traces to CSV ("⤓ CSV full" / "⤓ CSV ↓") ---------------
+# Writes one CSV per checked trace into a folder the user picks, using the LIVE Analysis-View
+# channel / detection / alignment / region (see export_traces_csv). One callback owns both buttons
+# (routed by ctx.triggered_id, like the two import buttons): "⤓ CSV full" = every sample; "⤓ CSV ↓"
+# = downsampled to the #ds-rate Hz box so it opens in Excel. Result → #export-msg.
+@app.callback(Output("export-msg", "children"),
+              Input("export-csv", "n_clicks"),
+              Input("export-csv-ds", "n_clicks"),
+              State("file", "value"), State("chan", "value"), State("ttl", "value"),
+              State("polarity", "value"), State("method", "value"), State("k", "value"),
+              State("absth", "value"), State("refr", "value"),
+              State("region-start", "value"), State("region-end", "value"),
+              State("region-mode", "value"), State("absth-map", "data"),
+              State("align-map", "data"), State("ds-rate", "value"), prevent_initial_call=True)
+def export_csv(_nf, _nds, files, chan, ttl_name, polarity, method, k, absth, refr,
+               rstart, rend, region_mode, absth_map, align_map, ds_rate):
+    downsample = ctx.triggered_id == "export-csv-ds"
+    target_hz = None
+    if downsample:
+        try:
+            target_hz = float(ds_rate) if ds_rate else None
+        except (TypeError, ValueError):
+            target_hz = None
+        if not target_hz or target_hz <= 0:
+            return "set a downsample rate (Hz) in the box first"
+    files = [f for f in (files or []) if f and loadable(f)]
+    if not files:
+        return "nothing to export — check one or more time-series files first"
+    if not chan:
+        return "pick a signal channel first"
+    outdir = native_choose_folder()
+    if not outdir:
+        return no_update                                  # cancelled — leave the last message
+    crop = "crop" in (region_mode or [])
+    written, skipped = export_traces_csv(
+        outdir, files, chan, ttl_name, polarity=polarity, method=method, k=k,
+        absth=absth, refr=refr, absth_map=absth_map, rstart=rstart, rend=rend,
+        crop=crop, align_map=align_map, target_hz=target_hz)
+    if not written:
+        return "export failed: " + ("; ".join(skipped) if skipped else "nothing written")
+    kind = f"downsampled→{target_hz:.0f}Hz" if target_hz else "full-res"
+    msg = f"✓ wrote {len(written)} {kind} CSV(s) → {outdir}"
+    if skipped:
+        msg += f"  ·  skipped {len(skipped)}"
+    return msg
 
 
 # ---- back up the whole data store to this computer's mirror -------------------

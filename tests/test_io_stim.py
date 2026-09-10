@@ -1,10 +1,11 @@
-"""neitz.io.stim — session-manifest reading + seed-based stimulus reproduction."""
+"""neitz.io.stim — nested session-manifest reading + seed-based stimulus reproduction."""
 import json
 import numpy as np
 import pytest
 from neitz.io import stim
 from neitz.stimulus import reproduce_noise
 
+# flat records (the shape stimulus_metadata / noise_from_record consume)
 CHECKER = {"stimulus": "AASeededGaussianCheckerboardSConeIsoStimFinal",
            "stim_type": "checkerboard", "cone_isolation": "S",
            "seed": 2, "mu": 0.5, "sigma": 0.3,
@@ -12,24 +13,76 @@ CHECKER = {"stimulus": "AASeededGaussianCheckerboardSConeIsoStimFinal",
            "update_every_n_frames": 8, "refresh_rate_hz": 60, "stim_frames": 40,
            "gamma": 2.2056, "noise_method": "mt19937ar+invCDF", "fill_order": "F",
            "timestamp": "2026-07-03T09:14:02"}
-FLICKER = {"stimulus": "AAGreyScaleFullFieldNoiseFinal2026", "stim_type": "sq_wave",
-           "cone_isolation": "achromatic", "flicker_hz": 4, "refresh_rate_hz": 60,
-           "stim_frames": 40, "timestamp": "2026-07-03T09:15:00"}
 
 
-def _write_manifest(tmp_path, rows, date="2026_07_03"):
-    p = tmp_path / f"{date}_stim_manifest.jsonl"
-    p.write_text("".join(json.dumps(r) + "\n" for r in rows))
+def _fs(wall=10.0, drift=-9.0):
+    return {"client_wall_s": wall, "drift_frames": drift, "n_flips": 595}
+
+
+def _tree(date="2026-07-16"):
+    """A small nested manifest: cell 'c1' with a gaussian block (2 epochs) + a sq_wave block
+    (1 epoch); cell '(standalone)' with one gaussian epoch."""
+    return {
+        "format": "neitz-stim-manifest/2", "date": date,
+        "rig": {"projector": "TI LightCrafter 4500"},
+        "cells": [
+            {"cell_name": "c1", "blocks": [
+                {"block_index": 1, "label": "grey", "stim_type": "gaussian_noise",
+                 "cone_isolation": "achromatic", "stim_signature": "AAA",
+                 "params": {"mu": 0.5, "sigma": 0.3, "checks_x": 1, "checks_y": 1,
+                            "n_updates": 600, "stim_frames": 600, "refresh_rate_hz": 60},
+                 "epochs": [
+                     {"epoch": 1, "seed": 2, "timestamp": "2026-07-16T10:00:00", "frame_sync": _fs()},
+                     {"epoch": 2, "seed": 3, "timestamp": "2026-07-16T10:00:20", "frame_sync": _fs()}]},
+                {"block_index": 1, "label": "4hz", "stim_type": "sq_wave",
+                 "cone_isolation": "achromatic", "stim_signature": "BBB",
+                 "params": {"flicker_hz": 4, "stim_frames": 600, "refresh_rate_hz": 60},
+                 "epochs": [
+                     {"epoch": 1, "timestamp": "2026-07-16T10:01:00", "frame_sync": _fs()}]}]},
+            {"cell_name": "(standalone)", "blocks": [
+                {"block_index": 1, "label": "grey", "stim_type": "gaussian_noise",
+                 "cone_isolation": "achromatic", "stim_signature": "AAA",
+                 "params": {"mu": 0.5, "sigma": 0.3, "checks_x": 1, "checks_y": 1,
+                            "n_updates": 600, "stim_frames": 600, "refresh_rate_hz": 60},
+                 "epochs": [
+                     {"epoch": 1, "seed": 2, "timestamp": "2026-07-16T10:02:00", "frame_sync": _fs()}]}]},
+        ]}
+
+
+def _write(tmp_path, tree, date="2026-07-16"):
+    p = tmp_path / f"{date.replace('-', '_')}_stim_manifest.json"
+    p.write_text(json.dumps(tree))
     return p
 
 
-def test_load_and_find(tmp_path):
-    p = _write_manifest(tmp_path, [CHECKER, FLICKER])
-    rows = stim.load_session_manifest(p)
-    assert len(rows) == 2 and rows[0]["stim_type"] == "checkerboard"
-    assert stim.find_session_manifest(tmp_path) == p
-    assert stim.find_session_manifest(tmp_path, date="2026-07-03") == p
-    assert stim.find_session_manifest(tmp_path, date="1999-01-01") is None  # strict: no wrong-date fallback
+# ---- find / load / flatten ----
+def test_find_and_load(tmp_path):
+    p = _write(tmp_path, _tree())
+    assert stim.find_manifest(tmp_path) == p
+    assert stim.find_manifest(tmp_path, date="2026-07-16") == p
+    assert stim.find_manifest(tmp_path, date="1999-01-01") is None   # strict: no wrong-date fallback
+    tree = stim.load_manifest(p)
+    assert tree["format"] == "neitz-stim-manifest/2"
+
+
+def test_iter_epochs_flattens_in_order_with_merged_params(tmp_path):
+    eps = stim.iter_epochs(_tree())
+    assert len(eps) == 4                                             # 2 + 1 + 1
+    assert [e["cell_name"] for e in eps] == ["c1", "c1", "c1", "(standalone)"]
+    assert [e["block_label"] for e in eps] == ["grey", "grey", "4hz", "grey"]
+    e0 = eps[0]
+    assert e0["stim_type"] == "gaussian_noise" and e0["seed"] == 2
+    # block params merged onto the epoch, with seed + block identity folded into `params`
+    assert e0["params"]["mu"] == 0.5 and e0["params"]["seed"] == 2
+    assert e0["params"]["stim_signature"] == "AAA"
+    assert e0["aborted"] is False
+
+
+def test_iter_epochs_flags_aborted():
+    tree = _tree()
+    tree["cells"][0]["blocks"][0]["epochs"][0]["frame_sync"] = _fs(wall=1.0, drift=-540)  # false start
+    eps = stim.iter_epochs(tree)
+    assert eps[0]["aborted"] is True and eps[1]["aborted"] is False
 
 
 def test_stimulus_metadata_split():
@@ -39,6 +92,7 @@ def test_stimulus_metadata_split():
     assert params["seed"] == 2 and params["cone_isolation"] == "S"
 
 
+# ---- seed-based reproduction (unchanged core) ----
 def test_noise_from_record_matches_reproduce():
     v = stim.noise_from_record(CHECKER)
     assert v.shape == (32, 40, 5)
@@ -47,48 +101,18 @@ def test_noise_from_record_matches_reproduce():
 
 def test_noise_per_frame_expands():
     v = stim.noise_from_record(CHECKER, per_frame=True)
-    assert v.shape == (32, 40, 40)                     # stim_frames = 40
-    assert np.array_equal(v[..., 0], v[..., 7])        # held within an update...
-    assert not np.array_equal(v[..., 7], v[..., 8])    # ...changes at the next update
+    assert v.shape == (32, 40, 40)
+    assert np.array_equal(v[..., 0], v[..., 7])
+    assert not np.array_equal(v[..., 7], v[..., 8])
 
 
-def test_noise_from_flicker_raises():
+def test_noise_from_sq_wave_raises():
     with pytest.raises(ValueError):
-        stim.noise_from_record(FLICKER)
-
-
-def test_pair_by_order():
-    pairs = stim.pair_by_order([CHECKER, FLICKER], ["2026_07_03_0001", "2026_07_03_0002"])
-    assert pairs[0][0] == "2026_07_03_0001"
-    assert pairs[0][1]["stim_type"] == "checkerboard"
+        stim.noise_from_record({"stim_type": "sq_wave", "seed": 2})
 
 
 def test_sent_codes_siso():
     codes = stim.sent_codes_from_record(CHECKER)
     assert codes.shape == (32, 40, 5, 3)
-    assert codes[..., 2].max() == 0                    # B = 0 for S-iso
+    assert codes[..., 2].max() == 0                                 # B = 0 for S-iso
     assert codes.min() >= 0 and codes.max() <= 255
-
-
-def test_apply_session_manifest_tags_recordings(tmp_path):
-    """Import wiring: manifest rows pair to recordings BY ORDER, set stimulus metadata with
-    source='stim-manifest', and the manifest is copied into the cell dir (self-contained store)."""
-    from neitz.dataio import DataStore
-    src = tmp_path / "src"; src.mkdir()
-    _write_manifest(src, [CHECKER, FLICKER], date="2026_07_03")
-
-    cm = DataStore(root=tmp_path / "store").cell("2026-07-03", "c01")
-    cm.dir.mkdir(parents=True, exist_ok=True)
-    cm.data["recordings"] = [{"id": "2026_07_03_0001"}, {"id": "2026_07_03_0002"}]
-
-    n = stim.apply_session_manifest(cm, src, date="2026-07-03")
-    assert n == 2
-    s0 = cm.get_stimulus("2026_07_03_0001")
-    assert s0["type"] == "checkerboard" and s0["source"] == "stim-manifest"
-    assert s0["params"]["seed"] == 2 and s0["params"]["cone_isolation"] == "S"
-    assert "stim_type" not in s0["params"]                       # split out into .type
-    assert cm.get_stimulus("2026_07_03_0002")["type"] == "sq_wave"
-    assert (cm.dir / "2026_07_03_stim_manifest.jsonl").exists()  # copied into the store
-
-    # no manifest for a different date → no-op (0), so the caller can fall back to hand-entry
-    assert stim.apply_session_manifest(cm, src, date="1999-01-01") == 0

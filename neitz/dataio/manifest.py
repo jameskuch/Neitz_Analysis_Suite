@@ -41,11 +41,17 @@ class CellManifest:
     # -- recordings ---------------------------------------------------------
     def add_recording(self, source, *, rec_id=None, label=None, kind="recording",
                       stimulus=None, channels=None, fs=None, duration_s=None,
-                      copy=True) -> dict:
+                      protocol=None, copy=True) -> dict:
         """Copy `source` into raw/ (proper-named, de-duped) and add to the manifest.
 
         `label` is a friendly display name (what the GUI shows); the formatted file
         name stays canonical. Defaults to the original source filename.
+
+        `protocol` (optional) is this recording's place in the day -> cell -> PROTOCOL ->
+        epoch hierarchy: ``{"index", "label", "signature", "epoch", "n_epochs"}`` (a
+        "protocol" = one run of N epochs of the same stimulus configuration). Stamped at
+        import from the nested stim manifest, and editable via the Explorer re-categorization
+        tool. Absent -> the recording is ungrouped (``epoch_groups`` falls back to signature).
         """
         source = Path(source)
         target_name = proper_name(source.name, self.data.get("date"))
@@ -62,7 +68,7 @@ class CellManifest:
                "file": f"raw/{target_name}",
                "source": str(source),
                "stimulus": stimulus, "channels": channels,
-               "fs": fs, "duration_s": duration_s}
+               "fs": fs, "duration_s": duration_s, "protocol": protocol}
         self.data["recordings"].append(rec)
         return rec
 
@@ -79,6 +85,21 @@ class CellManifest:
         r = self.recording(rec_id)
         r["stimulus"] = {"type": stim_type, "params": params, "source": source}
         return r
+
+    def set_protocol(self, rec_id, protocol) -> dict:
+        """Set (or clear, with ``None``) a recording's protocol grouping
+        ``{"index","label","signature","epoch","n_epochs"}`` — the day -> cell -> PROTOCOL ->
+        epoch place used by the Data Explorer re-categorization tool and ``epoch_groups``."""
+        r = self.recording(rec_id)
+        r["protocol"] = protocol
+        return r
+
+    def remove_recording(self, rec_id) -> dict:
+        """Drop a recording from the manifest (does NOT touch the file on disk); returns the
+        removed record. Used by cross-cell moves (see ``DataStore.move_recording``)."""
+        rec = self.recording(rec_id)
+        self.data["recordings"] = [r for r in self.data["recordings"] if r["id"] != rec_id]
+        return rec
 
     # -- outputs ------------------------------------------------------------
     def output_dir(self, analysis) -> Path:

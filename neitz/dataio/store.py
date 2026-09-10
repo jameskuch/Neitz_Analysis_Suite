@@ -10,6 +10,7 @@ DataStore — manage the ephysdataio root: date/cell hierarchy + a top-level ind
 from __future__ import annotations
 import json
 import re
+import shutil
 from pathlib import Path
 
 from .config import data_root
@@ -46,6 +47,52 @@ class DataStore:
 
     def cell(self, date, cell) -> CellManifest:
         return CellManifest.open(self._date_dir(date) / cell)
+
+    def cell_by_name(self, date, name) -> CellManifest | None:
+        """Find a date's cell by its human name (the manifest ``label``, e.g. 'mac-C1'), or
+        by its folder id ('c01'). Returns the :class:`CellManifest` or ``None``. Used by the
+        Explorer 'move to cell' so a re-file can target an existing cell by the name the user
+        sees. First match wins if two cells share a label."""
+        for d, c in self.cells():
+            if d != str(date):
+                continue
+            if c == name:
+                return self.cell(d, c)
+            cm = self.cell(d, c)
+            if (cm.data.get("label") or "") == name:
+                return cm
+        return None
+
+    def move_recording(self, date, src_cell, dst_cell, rec_id) -> dict:
+        """Move ONE recording from ``src_cell`` to ``dst_cell`` (same date), preserving the
+        data-store invariants: the raw file physically MOVES into the destination's ``raw/``
+        and BOTH manifests are updated (removed from src, added to dst) so no orphan file and
+        no dangling record are left behind. The recording keeps its stimulus + protocol
+        metadata; its id/filename stay the same (abf names are unique within a day). Existing
+        outputs already produced under the SOURCE cell stay there (they belong to the run that
+        made them); future analyses run under the destination. Returns the moved record.
+        """
+        src = self.cell(date, src_cell)
+        dst = self.cell(date, dst_cell)
+        if src.dir.resolve() == dst.dir.resolve():
+            return src.recording(rec_id)                       # no-op: same cell
+        rec = dict(src.recording(rec_id))                      # copy before we mutate src
+        rel = rec.get("file")
+        if rel:
+            old = src.dir / rel
+            (dst.dir / "raw").mkdir(parents=True, exist_ok=True)
+            target = dst.dir / rel                             # keep raw/<name>
+            if old.resolve() != target.resolve():
+                if target.exists():                            # never clobber a dst file
+                    raise FileExistsError(f"{target} already exists in {dst_cell}")
+                if old.exists():
+                    shutil.move(str(old), str(target))
+        src.remove_recording(rec_id)
+        dst.data["recordings"].append(rec)
+        src.save()
+        dst.save()
+        self.update_index()
+        return rec
 
     def cells(self) -> list:
         out = []
