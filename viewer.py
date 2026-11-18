@@ -23,6 +23,8 @@ from __future__ import annotations
 import os
 import io
 import json
+import re
+import sys
 import glob
 import base64
 import shutil
@@ -139,6 +141,208 @@ def discover_abf(root=None):
 def file_options(files):
     """Checklist options labelled by basename (value = full path)."""
     return [{"label": " " + os.path.basename(f), "value": f} for f in files]
+
+
+# ---- "group" mode of the Analysis-View files list ----------------------------------------------
+# The files checklist (#file) can show its files grouped into LIKE-STIMULUS blocks. A block starts
+# with a header rendered as a DISABLED checklist option (value GROUP_HDR + key, never checkable;
+# CSS hides its checkbox) whose label carries the group's own all / none buttons (pattern ids
+# {"type": "file-grp-all"|"file-grp-none", "grp": key}). Everything downstream keeps reading
+# `file.value` (real paths only); the few callbacks that read `file.options` go through
+# `_paths_from_options` so the headers never count as files.
+GROUP_HDR = "__grp__:"
+_MANIFEST_CACHE: dict = {}          # manifest path -> (mtime, data)
+_SQ_TYPES = ("sq_wave", "flicker")
+_STIM_NAMES = {"sq_wave": "sq wave", "flicker": "sq wave", "gaussian_noise": "gaussian noise"}
+
+
+def _manifest_data(mf):
+    """A cell manifest's dict, re-read only when its mtime changes. None if unreadable."""
+    try:
+        mt = Path(mf).stat().st_mtime
+    except OSError:
+        return None
+    hit = _MANIFEST_CACHE.get(str(mf))
+    if hit is None or hit[0] != mt:
+        try:
+            hit = (mt, json.loads(Path(mf).read_text()))
+        except Exception:
+            return None
+        _MANIFEST_CACHE[str(mf)] = hit
+    return hit[1]
+
+
+def _recording_for_path(path):
+    """The store-manifest record of a raw file (<store>/<date>/<cell>/raw/<file>), or None for a
+    file outside the store / not in its cell's manifest."""
+    try:
+        cell_dir = Path(path).parents[1]
+    except (IndexError, ValueError):
+        return None
+    data = _manifest_data(cell_dir / "manifest.json")
+    for r in (data or {}).get("recordings", []) or []:
+        if str(cell_dir / str(r.get("file", ""))) == str(path):
+            return r
+    return None
+
+
+def _twin_recording(path):
+    """The manifested TWIN of an un-manifested raw file: a recording with the same file name in
+    another cell of the same date that does carry a stimulus. An '(unsorted)' import of a whole
+    Clampex folder duplicates files that a manifest-aware import already filed with their
+    stimulus (2026-11-12: c06 holds all 88 ABFs again, c01–c05 the same files with stimuli)."""
+    try:
+        p = Path(path)
+        own, date_dir, name = p.parents[1], p.parents[2], p.name
+        if not date_dir.is_dir():
+            return None
+        for cdir in sorted(date_dir.iterdir()):
+            if cdir == own or not (cdir / "manifest.json").is_file():
+                continue
+            for r in (_manifest_data(cdir / "manifest.json") or {}).get("recordings", []) or []:
+                if Path(str(r.get("file", ""))).name == name and _stim_group_label(r.get("stimulus")):
+                    return r
+    except Exception:
+        return None
+    return None
+
+
+def _stim_group_label(stim):
+    """Human label of a recording's manifest stimulus WITHOUT the per-epoch bits (seed), so like
+    epochs share it: '1 Hz sq wave · achromatic', 'checkerboard 16×10 · achromatic',
+    'gaussian noise full field · S'. None when the record has no stimulus type."""
+    t = (stim or {}).get("type")
+    if not t:
+        return None
+    p = (stim or {}).get("params") or {}
+    name = _STIM_NAMES.get(t, t)
+    hz = p.get("flicker_hz")
+    if t in _SQ_TYPES and isinstance(hz, (int, float)) and hz > 0:
+        name = f"{hz:g} Hz {name}"
+    cx, cy = p.get("checks_x"), p.get("checks_y")
+    if cx and cy:
+        name += " full field" if (int(cx) == 1 and int(cy) == 1) else f" {int(cx)}×{int(cy)}"
+    bits = [name]
+    if p.get("cone_isolation"):
+        bits.append(str(p["cone_isolation"]))
+    return " · ".join(bits)
+
+
+def _sync_channel_name(rec):
+    names = list(getattr(rec, "channel_names", []) or [])
+    return next((n for n in names if "ttl" in n.lower()), names[-1] if names else None)
+
+
+def file_group(path):
+    """(key, label) of the like-files group `path` belongs to — `key` is a short string safe inside
+    a pattern-matching id. In order of preference:
+      1. the manifest stimulus (stim_signature → one group per distinct stimulus, across protocol
+         runs and across cells), labelled by `_stim_group_label`;
+      2. the stimulus of a same-named twin in another cell of the day (`_twin_recording`) when
+         this cell's record has none — an '(unsorted)' re-import of the day's Clampex folder;
+      3. the square-wave frequency measured on the sync channel ('~1 Hz sq wave (measured)');
+      4. the recording duration ('unlabelled · 24 s'), or just 'unlabelled' if it won't open."""
+    r = _recording_for_path(path)
+    if not _stim_group_label((r or {}).get("stimulus")):
+        r = _twin_recording(path) or r
+    stim = (r or {}).get("stimulus") or {}
+    label = _stim_group_label(stim)
+    if label:
+        sig = ((stim.get("params") or {}).get("stim_signature")
+               or ((r or {}).get("protocol") or {}).get("signature"))
+        key = f"s:{sig}" if sig else "l:" + re.sub(r"[^0-9A-Za-z]+", "_", label).strip("_").lower()
+        return key, label
+    try:
+        rec = get_recording(path)
+        chan = _sync_channel_name(rec)
+        fl = get_flicker(path, chan) if chan else None
+        freq = float(fl.freq) if fl is not None else float("nan")
+        if np.isfinite(freq) and freq > 0:
+            return f"m:{freq:.1f}", f"~{freq:.2g} Hz sq wave (measured)"
+        dur = float(getattr(rec, "duration", float("nan")))
+        if np.isfinite(dur):
+            return f"d:{int(round(dur))}", f"unlabelled · {dur:.0f} s"
+    except Exception:
+        pass
+    return "d:?", "unlabelled"
+
+
+def _group_header(key, label, n):
+    """Label component of a group-header option: title line + 'N files  all none'."""
+    return html.Div([
+        # click the title line to fold / unfold the block (assets/filegroups.js)
+        html.Div([html.Span("▾ ", className="grp-arrow"), label], className="grp-title",
+                 title=f"{label} — click to fold / unfold",
+                 style={"fontWeight": "bold", "color": "#333", "overflow": "hidden",
+                        "textOverflow": "ellipsis", "whiteSpace": "nowrap", "cursor": "pointer"}),
+        html.Div([
+            html.Span(f"{n} file{'s' if n != 1 else ''}",
+                      style={"color": "#888", "marginRight": "5px", "fontSize": "10px"}),
+            html.Button("all", id={"type": "file-grp-all", "grp": key}, n_clicks=0,
+                        title=f"select every file of: {label}", style=_MINI_BTN),
+            html.Button("none", id={"type": "file-grp-none", "grp": key}, n_clicks=0,
+                        title=f"deselect every file of: {label}",
+                        style=dict(_MINI_BTN, marginLeft="3px")),
+        ], style={"display": "flex", "alignItems": "center"}),
+    ], style={"display": "block", "borderBottom": "1px solid #bbb", "marginTop": "3px",
+              "paddingBottom": "1px"})
+
+
+def build_file_options(paths, grouped=False):
+    """Options of the Analysis-View files checklist. Flat (basename labels, acquisition order), or
+    — `grouped` — the same files regrouped into like-stimulus blocks (`file_group`), each opened
+    by a disabled header option carrying the block's all / none buttons. Blocks keep the order
+    of their first file; files keep their order inside a block."""
+    seen, flat = set(), []
+    for p in paths or []:
+        if p and p not in seen:
+            seen.add(p); flat.append(p)
+    if not grouped:
+        return file_options(flat)
+    groups, order = {}, []
+    for p in flat:
+        key, label = file_group(p)
+        if key not in groups:
+            groups[key] = {"label": label, "paths": []}
+            order.append(key)
+        groups[key]["paths"].append(p)
+    opts = []
+    for key in order:
+        g = groups[key]
+        opts.append({"label": _group_header(key, g["label"], len(g["paths"])),
+                     "value": GROUP_HDR + key, "disabled": True})
+        opts += file_options(g["paths"])
+    return opts
+
+
+def _is_header(opt):
+    return bool(opt.get("disabled")) or str(opt.get("value", "")).startswith(GROUP_HDR)
+
+
+def _paths_from_options(options):
+    """The real file paths of a files-checklist options list (group headers dropped)."""
+    return [o["value"] for o in (options or []) if not _is_header(o)]
+
+
+def _group_members(options, key):
+    """The file paths listed under the group header `key` (up to the next header)."""
+    out, inside = [], False
+    for o in options or []:
+        if _is_header(o):
+            inside = (o.get("value") == GROUP_HDR + key)
+        elif inside:
+            out.append(o["value"])
+    return out
+
+
+def _apply_group_select(options, value, key, select):
+    """New `file.value` after a group's all (select=True) / none button: the group's files are
+    added (in checklist order) or removed; every other selection is left alone."""
+    members = set(_group_members(options, key))
+    cur = set(v for v in (value or []) if v)
+    if select:
+        return [p for p in _paths_from_options(options) if p in cur or p in members]
+    return [v for v in (value or []) if v and v not in members]
 
 
 def _osascript(script):
@@ -1531,6 +1735,18 @@ app.layout = html.Div(
                 html.Label("files", style=dict(_LBL, marginBottom=0)),
                 html.Button("all", id="file-all", n_clicks=0, style=_MINI_BTN),
                 html.Button("none", id="file-none", n_clicks=0, style=_MINI_BTN),
+                # "group": regroup the list into like-stimulus blocks, each with its own all / none
+                # (build_file_options / file_group). Persisted; read as State wherever options are set.
+                html.Div(dcc.Checklist(id="file-group", value=[], inline=True,
+                                       options=[{"label": " group", "value": "stim"}],
+                                       labelStyle={"fontSize": "10px", "marginBottom": 0,
+                                                   "cursor": "pointer"},
+                                       inputStyle={"marginRight": "2px", "verticalAlign": "middle"},
+                                       **PERSIST),
+                         title="group like files: by the manifest stimulus (e.g. 1 Hz sq wave · "
+                               "achromatic), else by the sq-wave frequency measured on the sync "
+                               "channel, else by duration — each group gets its own all / none",
+                         style={"display": "inline-block"}),
                 html.Span(id="file-count", style={"fontSize": "10px", "color": "#888"}),
             ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
             # #file-box is the drag-select surface (assets/fileselect.js): drag a box over the
@@ -1545,7 +1761,7 @@ app.layout = html.Div(
                                    # across columns the way CSS multicol did)
                                    style={"display": "flex", "flexFlow": "column wrap",
                                           "alignContent": "flex-start", "maxHeight": "150px"}),
-                     id="file-box",
+                     id="file-box", className="",
                      style={"maxHeight": "158px", "overflowX": "auto", "overflowY": "hidden",
                             "border": "1px solid #ccc", "padding": "4px", "background": "white",
                             "position": "relative"}),
@@ -3242,26 +3458,57 @@ def collect_align(_vals):
 def file_select_all_none(_a, _n, options):
     if ctx.triggered_id == "file-none":
         return []
-    return [o["value"] for o in (options or [])]
+    return _paths_from_options(options)           # group headers are not files
 
 
 @app.callback(Output("file-count", "children"),
               Input("file", "value"), Input("file", "options"),
               prevent_initial_call=False)
 def file_count(value, options):
-    n = len(options or [])
+    n = len(_paths_from_options(options))
     k = len([v for v in (value or []) if v])
     return f"({k}/{n})" if n else ""
 
 
+# ---- files: "group" toggle (regroup the current list in place; the selection is untouched) ----
+@app.callback(Output("file", "options", allow_duplicate=True),
+              Input("file-group", "value"), State("file", "options"), prevent_initial_call=True)
+def regroup_files(mode, options):
+    paths = _paths_from_options(options)
+    if not paths:
+        return no_update
+    return build_file_options(paths, grouped=bool(mode))
+
+
+# ---- files: group mode lays the list out VERTICALLY (full-width sticky headers, one scroll) — the
+#      flat mode keeps its column-wrap. CSS on #file-box.grouped (assets/viewer.css) does the switch.
+@app.callback(Output("file-box", "className"), Input("file-group", "value"),
+              prevent_initial_call=False)
+def file_box_mode(mode):
+    return "grouped" if mode else ""
+
+
+# ---- files: a group header's own all / none ---------------------------------------------------
+@app.callback(Output("file", "value", allow_duplicate=True),
+              Input({"type": "file-grp-all", "grp": ALL}, "n_clicks"),
+              Input({"type": "file-grp-none", "grp": ALL}, "n_clicks"),
+              State("file", "options"), State("file", "value"), prevent_initial_call=True)
+def file_group_select(_a, _n, options, value):
+    trig = ctx.triggered_id
+    # a header that has just been rendered also "triggers" (n_clicks 0/None) — only a real click acts
+    if not isinstance(trig, dict) or not (ctx.triggered and ctx.triggered[0].get("value")):
+        return no_update
+    return _apply_group_select(options, value, trig.get("grp"), trig.get("type") == "file-grp-all")
+
+
 # ---- data store: pick a cell -> load its recordings + prefill stimulus -------
-def _cell_files(vals):
+def _cell_files(vals, grouped=False):
     """(file options, default-checked, sel-cell list, set of existing files) for date|cell value(s).
     Only files that still exist on disk are listed — so it also drops anything deleted in the
-    Explorer."""
+    Explorer. `grouped` = the files-list "group" toggle (like-stimulus blocks with headers)."""
     vals = vals if isinstance(vals, list) else ([vals] if vals else [])
     ds = DataStore()
-    opts, checked, sel_list, seen = [], [], [], set()
+    paths, checked, sel_list, seen = [], [], [], set()
     for v in vals:
         date, cell = v.split("|")
         sel_list.append({"date": date, "cell": cell})
@@ -3270,21 +3517,22 @@ def _cell_files(vals):
         for p in files:
             if p not in seen:
                 seen.add(p)
-                opts.append({"label": " " + os.path.basename(p), "value": p})
+                paths.append(p)
         checked += default
-    return opts, checked, sel_list, seen
+    return build_file_options(paths, grouped), checked, sel_list, seen
 
 
 @app.callback(Output("file", "options", allow_duplicate=True),
               Output("file", "value", allow_duplicate=True),
               Output("sel-cell", "data"), Output("recent-cells", "data"),
               Input("cell-select", "value"), State("recent-cells", "data"),
-              State("last-session", "data"), prevent_initial_call=True)
-def pick_cell(vals, recent, sess):
+              State("last-session", "data"), State("file-group", "value"),
+              prevent_initial_call=True)
+def pick_cell(vals, recent, sess, grouped=None):
     vals = vals if isinstance(vals, list) else ([vals] if vals else [])
     if not vals:
         return no_update, no_update, [], no_update
-    opts, checked, sel_list, seen = _cell_files(vals)
+    opts, checked, sel_list, seen = _cell_files(vals, bool(grouped))
     # restore the exact files last worked on, if they belong to this selection (resume on reload)
     sess_files = [f for f in ((sess or {}).get("files") or []) if f in seen]
     if sess_files:
@@ -3302,12 +3550,12 @@ def pick_cell(vals, recent, sess):
               Output("sel-cell", "data", allow_duplicate=True),
               Output("gallery-trigger", "data", allow_duplicate=True),
               Input("exp-close", "n_clicks"),
-              State("cell-select", "value"), State("file", "value"),
+              State("cell-select", "value"), State("file", "value"), State("file-group", "value"),
               prevent_initial_call=True)
-def resync_on_close(_n, vals, checked):
+def resync_on_close(_n, vals, checked, grouped=None):
     if not _n or not vals:
         return no_update, no_update, no_update, no_update
-    opts, default, sel_list, seen = _cell_files(vals)
+    opts, default, sel_list, seen = _cell_files(vals, bool(grouped))
     keep = [f for f in (checked or []) if f in seen]    # drop files deleted in the Explorer
     return opts, (keep or default), sel_list, (_n or 0) + 1
 
@@ -3348,8 +3596,8 @@ def _store_fingerprint(vals):
               Output("store-fp", "data"),
               Input("poll", "n_intervals"),
               State("cell-select", "value"), State("file", "value"), State("store-fp", "data"),
-              prevent_initial_call=True)
-def poll_refresh(_n, vals, checked, prev):
+              State("file-group", "value"), prevent_initial_call=True)
+def poll_refresh(_n, vals, checked, prev, grouped=None):
     if not vals:
         return no_update, no_update, no_update, no_update
     fp = _store_fingerprint(vals)
@@ -3359,7 +3607,7 @@ def poll_refresh(_n, vals, checked, prev):
         return no_update, no_update, no_update, no_update      # nothing changed
     gal = ((_n or 0) + 1) if prev.get("out") != fp["out"] else no_update   # outputs changed → gallery
     if prev.get("files") != fp["files"]:                # raw files changed → refresh the checklist
-        opts, default, _sel, seen = _cell_files(vals)
+        opts, default, _sel, seen = _cell_files(vals, bool(grouped))
         keep = [f for f in (checked or []) if f in seen]
         return gal, opts, (keep or default), fp
     return gal, no_update, no_update, fp
@@ -4326,12 +4574,12 @@ def render_hover(ps):
               Output("file", "value", allow_duplicate=True),
               Output("explorer-modal", "style", allow_duplicate=True),
               Input("exp-open-viewer", "n_clicks"), State("exp-files", "value"),
-              prevent_initial_call=True)
-def exp_open_viewer(_n, sel):
+              State("file-group", "value"), prevent_initial_call=True)
+def exp_open_viewer(_n, sel, grouped=None):
     sel = [s for s in (sel or []) if s]
     if not sel:
         return no_update, no_update, no_update
-    return file_options(sel), sel, {"display": "none"}
+    return build_file_options(sel, bool(grouped)), sel, {"display": "none"}
 
 
 # ---- the 🗑 for the checked file(s) (appears at the bottom of the selection) -------
@@ -4901,4 +5149,6 @@ if __name__ == "__main__":
               f"cells in index: {len(_ds.index())}", flush=True)
     except Exception as _e:
         print(f"[neitz] data store error: {_e}", flush=True)
-    app.run(debug=False, port=8050)
+    # `python viewer.py --port 8051` runs a second instance beside one already on 8050
+    _port = int(sys.argv[sys.argv.index("--port") + 1]) if "--port" in sys.argv[:-1] else 8050
+    app.run(debug=False, port=_port)

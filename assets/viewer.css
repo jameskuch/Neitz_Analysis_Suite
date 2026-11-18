@@ -285,3 +285,19 @@ html, body { margin: 0; }
 .pnode input { border: 1px solid #363b47; border-radius: 3px; }
 .pparam-dd .dash-dropdown { min-height: 17px; }
 .pipe-conn-path { fill: none; stroke-width: 2; }
+
+/* Analysis-View files list in GROUP mode (viewer.build_file_options): a like-stimulus block opens with
+   a header that is a DISABLED checklist option carrying the block's own all / none buttons. Hide its
+   unusable checkbox; the header label wraps onto two lines (title, then "N files  all none"). */
+#file-box label:has(input:disabled) { cursor: default; }
+#file-box label:has(input:disabled) input { display: none !important; }
+/* GROUP mode layout: one vertical, scrollable list (the column-wrap of flat mode would push the later
+   blocks off to the right behind a horizontal scroll). Headers span the width and stick to the top of
+   the box while their block scrolls; a folded block's rows carry .grp-hidden (assets/filegroups.js). */
+#file-box.grouped { max-height: 300px !important; overflow-y: auto !important; overflow-x: hidden !important; }
+#file-box.grouped > div { display: block !important; max-height: none !important; }
+#file-box.grouped label { width: 100% !important; }
+#file-box.grouped label:has(input:disabled) {
+    position: sticky; top: 0; z-index: 1; background: #fff; padding-top: 2px;
+}
+#file-box.grouped label.grp-hidden { display: none !important; }

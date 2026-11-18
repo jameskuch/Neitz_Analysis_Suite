@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (151 tests as of 2026-11-17; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (159 tests as of 2026-11-17; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -342,6 +342,25 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
 - **Files panel** (Analysis View): `all` / `none` buttons + a live `(k/n)` count next to the label;
   **drag a box over the rows to TOGGLE** them (`assets/fileselect.js`, on `#file-box`) — selected↔
   deselected; a plain click still toggles one row.
+- **Files panel "group" toggle** (`#file-group`, persisted): `build_file_options(paths, grouped)`
+  regroups the SAME checklist into like-stimulus blocks. `file_group(path)` picks the block: the
+  store-manifest stimulus first (`stim_signature` → one block per distinct stimulus, across protocol
+  runs AND across cells; label from `_stim_group_label`, e.g. `1 Hz sq wave · achromatic`,
+  `checkerboard 16×10 · achromatic`), else the stimulus of a SAME-NAMED twin in another cell of
+  the day (`_twin_recording` — an "(unsorted)" re-import of the whole Clampex folder, like c06 on
+  2026-11-12, gets its checkerboard / gaussian / S-cone blocks from c01–c05), else the sq-wave
+  frequency measured on the sync channel (`~1 Hz sq wave (measured)`), else the duration.
+  A block header is a DISABLED checklist option (value `GROUP_HDR + key`, checkbox hidden by CSS)
+  whose label carries the block's own `all` / `none` buttons (pattern ids `file-grp-all` /
+  `file-grp-none`, callback `file_group_select` → `_apply_group_select`). `file.value` still holds
+  real paths only; anything reading `file.options` must go through `_paths_from_options` (the
+  global all/none and the count do). Every callback that sets `file.options` takes
+  `State("file-group","value")` and builds through `build_file_options` — keep it that way.
+  Layout: `file_box_mode` puts class `grouped` on `#file-box`; CSS then turns the column-wrap into
+  ONE vertical scrolling list (300 px) with full-width STICKY headers (the column-wrap hid later
+  blocks behind a horizontal scroll — James "only saw 1 Hz sq wave"). Clicking a header's title
+  line folds / unfolds its block (`assets/filegroups.js` toggles `.grp-hidden` on the rows; the
+  rows stay in the checklist, so all / none and `file.value` are unaffected).
 - **Compact readout** (top of graphs): a ONE-LINER (count · region · view · stim-freq range). The
   old per-file spike-count dump blew up to many lines with 40+ files — don't reintroduce it there.
 - **Outputs are NOT shown in the Analysis View** (the old "Cell outputs" gallery was removed) — view
