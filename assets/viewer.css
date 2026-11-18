@@ -247,9 +247,14 @@ html, body { margin: 0; }
    hit-path an inline `cursor: move`; the lines only move horizontally, so show an ↔ resize cursor
    instead (clearer "drag me left/right" cue). Falls back to `move` if the selector ever misses. */
 #time .shapelayer path[style*="cursor: move"] { cursor: ew-resize !important;
-    stroke-width: 24px !important; }   /* 24 px grab zone (Plotly's 10 was easy to miss, esp. in
+    stroke-width: 24px !important;     /* 24 px grab zone (Plotly's 10 was easy to miss, esp. in
                                           the gap between the graphs — which also has the thick
                                           handles, shapes[2]/[3] of add_region_shapes) */
+    stroke: #e4604e; stroke-opacity: 0 !important; pointer-events: stroke !important; }
+    /* ^ WebKit (the .app's WKWebView) does NOT hit-test the perimeter of a path whose `stroke` is
+       unset, even under pointer-events:all — Plotly's hit-path has no stroke, only a width — so in
+       the app the line was never grabbable and only the endpoint circles were (hence every drag
+       re-angled the line). A real stroke at opacity 0 makes the 24 px zone hit in both engines. */
 /* The excluded-region shading (gray vrects, drawn AFTER the lines) must never take the pointer:
    edits.shapePosition makes every shape draggable (a shape's own editable=False is ignored) and
    gives each one an inline `pointer-events: all`, so a grab at a boundary line landed on the vrect

@@ -29,6 +29,9 @@ productive immediately. Keep it current when the architecture changes.
   (flags: `--no-reinstall`, `--no-restart`, `--quiet`). Use it when you want a guaranteed-fresh
   server (no stale process / port / cache).
   (With the desktop app open, a restart auto-reloads its window — see below.)
+- **Testing the app's engine (WKWebView) without the app**: `python scripts/webkit_probe.py '<last-session json>'`
+  opens a pywebview window on the 8052 test server and runs JavaScript probes in it (hit-testing,
+  synthesized drags) — the browser pane is Chromium and lies about WebKit. Never point it at 8050.
 
 ## Desktop app — native window (macOS + Windows 11)
 
@@ -365,7 +368,15 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   (`circle[data-line-point]`); Plotly's `updateDragMode` turns a grab on one into
   `resize-over-start/end-point`, which RE-ANGLES the line ("the connector goes diagonal") — and a
   short gap handle is nearly all endpoint. viewer.css hides the circles on `#time`, so every grab
-  lands on the hit-path = "move" (a boundary only ever slides sideways). The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the
+  lands on the hit-path = "move" (a boundary only ever slides sideways). TRAP 4 (the one that made
+  the handle "not selectable" in the .app once the circles were gone): **WebKit hit-tests a path's
+  perimeter only when the path HAS a `stroke`** — Plotly's hit-path has a width but no stroke, so
+  in WKWebView it was never grabbable (the circles, which have a fill, were the only thing the app
+  ever dragged — hence every drag re-angled). viewer.css gives the hit-path `stroke: #e4604e;
+  stroke-opacity: 0; pointer-events: stroke`. Verified in both engines with
+  `scripts/webkit_probe.py` (a pywebview window on the 8052 test server + evaluate_js: without the
+  stroke `elementFromPoint` at the handle returns the svg-container div, with it the hit-path, and
+  a synthesized drag moves the start box). Chrome never needed the stroke. The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the
   live drag isn't redrawn with the stale region and snapped back. Editing the region reverts the view
   to the full window (region-start/end are in the `uirevision` hash) — a zoom-preserving drag would
   need a separate zoom-tracking store (known follow-up).
