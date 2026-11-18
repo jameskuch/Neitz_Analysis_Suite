@@ -86,3 +86,26 @@ def test_block_figure_renders_every_kind():
         assert fig.layout.height == 200 and len(fig.data) >= 1
     assert viewer._block_figure(hm).layout.yaxis.autorange == "reversed"
     assert viewer._block_figure(tr, title="override").layout.title.text == "override"
+
+
+def test_reveal_in_file_manager_per_platform(monkeypatch):
+    calls = []
+    monkeypatch.setattr(viewer.subprocess, "run", lambda cmd, *a, **k: calls.append(list(cmd)))
+    monkeypatch.setattr(viewer.platform, "system", lambda: "Darwin")
+    assert viewer.reveal_in_file_manager(["/s/p/a.py", "/s/p/b.py"]) == "✓ revealed 2 item(s) in Finder"
+    assert calls[-1] == ["open", "-R", "/s/p/a.py", "/s/p/b.py"]
+    monkeypatch.setattr(viewer.platform, "system", lambda: "Windows")
+    assert viewer.reveal_in_file_manager("/s/p/a.py") == "✓ revealed in Explorer"
+    assert calls[-1] == ["explorer", "/select,", "/s/p/a.py"]
+    assert viewer.reveal_in_file_manager(["/s/p/a.py", "/s/q/b.py"]) == "✓ opened 2 folder(s) in Explorer"
+    assert calls[-2:] == [["explorer", "/s/p"], ["explorer", "/s/q"]]
+    monkeypatch.setattr(viewer.platform, "system", lambda: "Linux")
+    assert viewer.reveal_in_file_manager(["/s/p/a.py"]) == "✓ opened 1 folder(s)"
+    assert calls[-1] == ["xdg-open", "/s/p"]
+    assert viewer.reveal_in_file_manager([]) == "nothing to reveal"
+    def boom(cmd, *a, **k):
+        raise OSError("no gui")
+    monkeypatch.setattr(viewer.subprocess, "run", boom)
+    assert viewer.reveal_in_file_manager("/s/p/a.py").startswith("open failed")
+    # the saved-listing path follows the pipeline name
+    assert viewer._pipeline_code_path({"name": "Gaussian-noise STA"}).name == "Gaussian-noise_STA_code.py"

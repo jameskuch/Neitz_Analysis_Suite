@@ -417,6 +417,38 @@ def native_choose_files():
     return paths
 
 
+# the OS file browser's name for button labels: Finder (macOS) / Explorer (Windows) / file manager
+_FILE_MANAGER = {"Darwin": "Finder", "Windows": "Explorer"}.get(platform.system(), "file manager")
+_REVEAL_LABEL = f"📂 Open in {_FILE_MANAGER}"
+
+
+def reveal_in_file_manager(paths):
+    """Reveal file(s) in the OS file browser and return a one-line message. macOS: Finder opens
+    the folder with the files SELECTED (`open -R`); Windows: Explorer selects a single file
+    (`explorer /select,`), else opens each folder; elsewhere `xdg-open` opens each folder."""
+    paths = [str(x) for x in (paths if isinstance(paths, (list, tuple, set)) else [paths]) if x]
+    if not paths:
+        return "nothing to reveal"
+    folders = sorted({os.path.dirname(x) for x in paths})
+    try:
+        sysname = platform.system()
+        if sysname == "Darwin":
+            subprocess.run(["open", "-R", *paths])
+            return f"✓ revealed {len(paths)} item(s) in Finder"
+        if sysname == "Windows":
+            if len(paths) == 1:
+                subprocess.run(["explorer", "/select,", paths[0]])
+                return "✓ revealed in Explorer"
+            for d in folders:
+                subprocess.run(["explorer", d])
+            return f"✓ opened {len(folders)} folder(s) in Explorer"
+        for d in folders:
+            subprocess.run(["xdg-open", d])
+        return f"✓ opened {len(folders)} folder(s)"
+    except Exception as e:
+        return f"open failed: {e}"
+
+
 def native_choose_folder(prompt="Select a folder"):
     if platform.system() == "Darwin":
         p = _osascript(f'POSIX path of (choose folder with prompt "{prompt}" '
@@ -1271,8 +1303,8 @@ def explorer_detail(date, cell):
         html.Div([
             html.Span("Outputs — grouped by analysis (drag to select · ☑ + button or 🗑 to delete)",
                       style={"fontWeight": "bold", "fontSize": "13px", "color": "#555"}),
-            html.Button("📂 Open in Finder", id="open-outputs-finder", n_clicks=0,
-                        title="reveal the selected figures' location(s) in Finder",
+            html.Button(_REVEAL_LABEL, id="open-outputs-finder", n_clicks=0,
+                        title=f"reveal the selected figures' location(s) in {_FILE_MANAGER}",
                         style={"marginLeft": "10px", "fontSize": "11px", "padding": "1px 8px",
                                "color": "#cfe3ff", "background": "#2f3142",
                                "border": "1px solid #555", "borderRadius": "4px", "cursor": "pointer"})
@@ -2441,6 +2473,8 @@ app.layout = html.Div(
                          style={"flex": "1"}),
                 html.Button("⤓ Save .py", id="pipe-code-save", n_clicks=0, className="pipe-btn",
                             title="write this script into the store's pipelines/ folder"),
+                html.Button(_REVEAL_LABEL, id="pipe-code-reveal", n_clicks=0, className="pipe-btn",
+                            title=f"save the script (if needed) and show it in {_FILE_MANAGER}"),
                 html.Button("✕ close", id="pipe-code-close", n_clicks=0, className="pipe-btn"),
             ], style={"display": "flex", "alignItems": "flex-start", "gap": "8px",
                       "padding": "14px 18px 8px", "borderBottom": "1px solid #23262f",
@@ -4900,19 +4934,44 @@ def pipe_code_toggle(_open, _close, _back, graph, sel, files, chan, ttl, polarit
     return (_PCODE_OPEN, _numbered_code(text), f"— {graph.get('name') or 'untitled'}", sub, text, "")
 
 
+def _pipeline_code_path(graph):
+    """Where ⤓ Save .py puts the listing: <store>/pipelines/<slug>_code.py."""
+    name = (graph or {}).get("name") or "untitled"
+    return pipe.pipelines_dir() / f"{pipe._slug(name)}_code.py"
+
+
+def _write_pipeline_code(text, graph):
+    """Write the listing; returns (path, error-or-None)."""
+    out = _pipeline_code_path(graph)
+    try:
+        out.write_text(text)
+    except Exception as e:
+        return out, f"⚠ could not write: {e}"
+    return out, None
+
+
 @app.callback(Output("pipe-code-msg", "children", allow_duplicate=True),
               Input("pipe-code-save", "n_clicks"), State("pipe-code-text", "data"),
               State("pipe-graph", "data"), prevent_initial_call=True)
 def pipe_code_save(n, text, graph):
     if not n or not text:
         return no_update
-    name = (graph or {}).get("name") or "untitled"
-    out = pipe.pipelines_dir() / f"{pipe._slug(name)}_code.py"
-    try:
-        out.write_text(text)
-    except Exception as e:
-        return f"⚠ could not write: {e}"
-    return f"✓ saved {out}"
+    out, err = _write_pipeline_code(text, graph)
+    return err or f"✓ saved {out}"
+
+
+# 📂 Open in Finder / Explorer: (re)write the listing so the file on disk is what's on screen, then
+# reveal it — Finder selects the file; Explorer selects it; other OSes open the folder.
+@app.callback(Output("pipe-code-msg", "children", allow_duplicate=True),
+              Input("pipe-code-reveal", "n_clicks"), State("pipe-code-text", "data"),
+              State("pipe-graph", "data"), prevent_initial_call=True)
+def pipe_code_reveal(n, text, graph):
+    if not n or not text:
+        return no_update
+    out, err = _write_pipeline_code(text, graph)
+    if err:
+        return err
+    return f"{reveal_in_file_manager(out)} — {out}"
 
 
 # ---- LIVE evaluation strip. With a node selected: that component's step-through output. Else: the
@@ -5121,18 +5180,7 @@ def open_outputs_in_finder(_n, out_checks):
     checked = [v[0] for v in (out_checks or []) if v]
     if not checked:
         return "select figure(s) first"
-    folders = sorted({os.path.dirname(p) for p in checked})
-    try:
-        sysname = platform.system()
-        if sysname == "Darwin":
-            subprocess.run(["open", "-R", *checked])          # reveal + select all in Finder
-            return f"✓ revealed {len(checked)} figure(s) in Finder"
-        opener = ["explorer"] if sysname == "Windows" else ["xdg-open"]
-        for d in folders:
-            subprocess.run(opener + [d])
-        return f"✓ opened {len(folders)} location(s)"
-    except Exception as e:
-        return f"open failed: {e}"
+    return reveal_in_file_manager(checked)
 
 
 # ---- delete: open the (warning-only) confirmation modal -------------------------

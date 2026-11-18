@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (183 tests as of 2026-11-18; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (184 tests as of 2026-11-18; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -747,7 +747,11 @@ is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes
   epochs / detection / filter_s filled in), then every function per component — each ONCE, at the
   first component that calls it (later uses are a `→ already listed under component k` pointer).
   `⤓ Save .py` writes `<store>/pipelines/<slug>_code.py` (`pipe-code-text` store holds the text);
-  Escape closes it first in the overlay chain. Tests: `test_pipeline_script_…`, `test_ordered_nodes_…`.
+  `📂 Open in Finder` (label = `_REVEAL_LABEL`: Finder / Explorer / file manager by
+  `platform.system()`) rewrites the file and reveals it through the shared `reveal_in_file_manager`
+  (`open -R` selects on macOS, `explorer /select,` on Windows, `xdg-open` the folder elsewhere —
+  the Data Explorer's outputs button uses the same helper). Escape closes it first in the overlay
+  chain. Tests: `test_pipeline_script_…`, `test_ordered_nodes_…`, `test_reveal_in_file_manager_…`.
 - **Follow-ups:** the pipeline's own detect/region node params are the editable representation but do
   NOT yet override the live Analysis-View state at run time (live state wins by design); ▶ Run still
   dispatches to `run_cell_*` (the step-through evaluates per node, the run does not); drag-to-add-
