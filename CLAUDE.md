@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (146 tests as of 2026-11-17; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (151 tests as of 2026-11-17; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -212,6 +212,12 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   The old single-stream `reproduce_noise(epoch_seed, …)` reproduces ONLY the 1x1 full field —
   for any grid it is silently wrong (sum 95883.76 vs the rig's 95938.30 on the pinned fixture
   `tests/data/2026_11_12_140021_cell3_b1_e1_check16x10_grey.json`).
+- The Data Explorer's import panel has an optional **"stim JSON" folder** (`#import-stim-dir`,
+  persisted; 📁 picks, ✕ clears): the folder holding `<date>_stim_manifest.json` + `noise_seeds/`
+  when the rig wrote them somewhere other than next to the .abf files (2026-11-12: `pCLAMP/` vs
+  `docs.ephys_data/`). `_import_recordings(..., stim_dir=)` searches it FIRST for the manifest;
+  blank = next to the abfs / under the import folder, as before. The import message names the
+  manifest it used (`[manifest: …]` / `[no manifest]`). Tests: `tests/test_import_dialog.py`.
 - Import (`build_import_plan` → `_resolve_seed_files`) loads the file relative to the manifest,
   embeds `check_seeds`/`seed_scheme`/`noise_checksum` in the stored stimulus params, verifies the
   checksum (a mismatch is a plan warning), and `apply_import_plan` copies the file into

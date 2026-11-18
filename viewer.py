@@ -211,9 +211,9 @@ def native_choose_files():
     return paths
 
 
-def native_choose_folder():
+def native_choose_folder(prompt="Select a folder"):
     if platform.system() == "Darwin":
-        p = _osascript(f'POSIX path of (choose folder with prompt "Select a folder" '
+        p = _osascript(f'POSIX path of (choose folder with prompt "{prompt}" '
                        f'default location (POSIX file "{_last_dir}"))')
     else:
         try:
@@ -2046,18 +2046,43 @@ app.layout = html.Div(
               # bottom panel (~10% height): Import file(s) / folder + Backup mirror.
               # Two import buttons: "file(s)…" picks individual .abf/.csv files (so a SINGLE file
               # can be imported); "folder…" bulk-imports every .abf under a chosen directory.
+              # Second row: an OPTIONAL "stimulus JSON folder" — where the day's
+              # <date>_stim_manifest.json + noise_seeds/ live when the rig dropped them in a
+              # different folder than the Clampex .abf files (2026-11-12: pCLAMP/ vs
+              # docs.ephys_data/). Searched FIRST for the manifest; blank = look next to the abfs
+              # (and under the import folder) as before. Persists across reloads.
               html.Div([
-                  html.Button("📥 Import file(s)…", id="import-data", n_clicks=0,
-                              title="import one or more individual .abf / spike-CSV files",
-                              style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
-                  html.Button("📁 Import folder…", id="import-folder", n_clicks=0,
-                              title="bulk-import every .abf found under a chosen folder",
-                              style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
-                  html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
-                              style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
-              ], style={"flex": "0 0 10%", "minHeight": "44px", "background": "#15151d",
+                  html.Div([
+                      html.Button("📥 Import file(s)…", id="import-data", n_clicks=0,
+                                  title="import one or more individual .abf / spike-CSV files",
+                                  style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
+                      html.Button("📁 Import folder…", id="import-folder", n_clicks=0,
+                                  title="bulk-import every .abf found under a chosen folder",
+                                  style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
+                      html.Button("⤓ Backup mirror", id="backup-mirror", n_clicks=0,
+                                  style={"flex": "1", "fontWeight": "bold", "fontSize": "11px"}),
+                  ], style={"display": "flex", "alignItems": "center", "gap": "8px"}),
+                  html.Div([
+                      html.Span("stim JSON", title="optional: the folder holding the day's "
+                                "<date>_stim_manifest.json and noise_seeds/ when it is NOT next to "
+                                "the .abf files; searched first for the manifest",
+                                style={"fontSize": "10px", "color": "#9a9ab0", "whiteSpace": "nowrap"}),
+                      dcc.Input(id="import-stim-dir", type="text", debounce=True, **PERSIST,
+                                placeholder="manifest + noise_seeds folder (blank = next to the abfs)",
+                                style={"flex": "1", "minWidth": 0, "fontSize": "10px",
+                                       "background": "#23232c", "color": "#e6e6ee",
+                                       "border": "1px solid #2a2a35", "borderRadius": "4px",
+                                       "padding": "2px 6px"}),
+                      html.Button("📁", id="pick-stim-dir", n_clicks=0,
+                                  title="choose the stimulus JSON folder",
+                                  style={"fontSize": "11px", "padding": "2px 6px"}),
+                      html.Button("✕", id="clear-stim-dir", n_clicks=0,
+                                  title="clear — look for the manifest next to the abfs again",
+                                  style={"fontSize": "11px", "padding": "2px 6px"}),
+                  ], style={"display": "flex", "alignItems": "center", "gap": "6px"}),
+              ], style={"flex": "0 0 auto", "minHeight": "44px", "background": "#15151d",
                         "border": "1px solid #2a2a35", "borderRadius": "6px", "padding": "8px",
-                        "display": "flex", "alignItems": "center", "gap": "8px"}),
+                        "display": "flex", "flexDirection": "column", "gap": "6px"}),
             ]),
             # middle column: browser (top 2/3) over the hover preview (bottom 1/3)
             html.Div(style={"flex": "1 1 0", "minWidth": 0, "display": "flex",
@@ -4505,10 +4530,13 @@ def recategorize(_a, _m, checked, proto_label, cell_name, date, cell, rev):
 # SINGLE file can be imported — the reported bug: `choose folder` can't select a file) and
 # "📁 Import folder…" bulk-imports every .abf under a chosen directory. (These buttons live in the
 # Data Explorer's rail bottom panel.)
-def _import_recordings(paths, folder, stype, sparams, rev):
+def _import_recordings(paths, folder, stype, sparams, rev, stim_dir=None):
     """Copy `paths` into the store as day → cell → PROTOCOL → epochs, driven by the day's
     NESTED stim manifest (``<date>_stim_manifest.json``). `folder` (or None) is the bulk-import
-    root — an extra place to look for the manifest.
+    root — an extra place to look for the manifest. `stim_dir` (or None) is the OPTIONAL
+    "stimulus JSON folder" from the dialog: where the manifest + ``noise_seeds/`` live when the
+    rig wrote them somewhere other than next to the abfs; it is searched FIRST, and the per-check
+    seed files are resolved relative to whichever folder the manifest is found in.
 
     ABFs are paired to stim epochs by timestamp (``stim_io.build_import_plan``): each cell_name
     in the manifest becomes a cell, each block a protocol, its matched abfs the epochs. Stray
@@ -4520,6 +4548,10 @@ def _import_recordings(paths, folder, stype, sparams, rev):
     paths = [p for p in (paths or []) if p]
     if not paths:
         return no_update, no_update, no_update, no_update
+    stim_dir = os.path.expanduser(str(stim_dir).strip()) if stim_dir and str(stim_dir).strip() else None
+    if stim_dir and not os.path.isdir(stim_dir):
+        msg = f"stimulus JSON folder not found: {stim_dir} — clear it or pick an existing folder"
+        return no_update, no_update, msg, msg
     by_date = {}
     for f in paths:
         m = re.match(r"(\d{4})_(\d{2})_(\d{2})", os.path.basename(f))
@@ -4535,14 +4567,16 @@ def _import_recordings(paths, folder, stype, sparams, rev):
     for date, fs in sorted(by_date.items()):
         abfs = sorted(p for p in fs if p.lower().endswith(".abf"))
         others = sorted(p for p in fs if not p.lower().endswith(".abf"))
-        src_dirs = list(dict.fromkeys([os.path.dirname(fs[0])] + ([folder] if folder else [])))
+        src_dirs = list(dict.fromkeys(([stim_dir] if stim_dir else [])
+                                      + [os.path.dirname(fs[0])] + ([folder] if folder else [])))
         plan = next((pl for pl in (stim_io.build_import_plan(s, date, abfs) for s in src_dirs)
                      if pl["manifest"] is not None),
                     stim_io.build_import_plan(src_dirs[0], date, abfs))   # else no-manifest plan
         summ = apply_import_plan(ds, date, plan, other_paths=others, hand_stim=hand_stim)
         n_imported += summ["n_imported"]
         made.append(f"{date}: " + (", ".join(f"{c['cell']}={c['name']}({c['n']})"
-                                    for c in summ["cells"]) or "nothing"))
+                                    for c in summ["cells"]) or "nothing")
+                    + (f" [manifest: {plan['manifest']}]" if plan["manifest"] else " [no manifest]"))
         notes += summ["notes"]
     msg = f"imported {n_imported} recording(s) → " + " · ".join(made)
     if notes:
@@ -4557,21 +4591,33 @@ def _import_recordings(paths, folder, stype, sparams, rev):
               Input("import-data", "n_clicks"),
               Input("import-folder", "n_clicks"),
               State("stim-type", "value"), State("stim-params", "value"),
-              State("store-rev", "data"), prevent_initial_call=True)
-def import_data(_nf, _nd, stype, sparams, rev):
+              State("store-rev", "data"), State("import-stim-dir", "value"),
+              prevent_initial_call=True)
+def import_data(_nf, _nd, stype, sparams, rev, stim_dir):
     if ctx.triggered_id == "import-folder":
-        folder = native_choose_folder()
+        folder = native_choose_folder("Select the folder with the .abf files")
         if not folder:
             return no_update, no_update, no_update, no_update
         paths = sorted(glob.glob(os.path.join(folder, "**", "*.abf"), recursive=True))
         if not paths:
             return no_update, no_update, f"no .abf files found in {folder}", no_update
-        return _import_recordings(paths, folder, stype, sparams, rev)
+        return _import_recordings(paths, folder, stype, sparams, rev, stim_dir=stim_dir)
     # "📥 Import file(s)…" — one or more individually-chosen .abf / spike-CSV files
     paths = native_choose_files()
     if not paths:
         return no_update, no_update, no_update, no_update
-    return _import_recordings(paths, None, stype, sparams, rev)
+    return _import_recordings(paths, None, stype, sparams, rev, stim_dir=stim_dir)
+
+
+@app.callback(Output("import-stim-dir", "value"),
+              Input("pick-stim-dir", "n_clicks"), Input("clear-stim-dir", "n_clicks"),
+              prevent_initial_call=True)
+def pick_stim_dir(_np, _nc):
+    """Fill / clear the optional stimulus-JSON folder (manifest + noise_seeds) for imports."""
+    if ctx.triggered_id == "clear-stim-dir":
+        return ""
+    folder = native_choose_folder("Select the stimulus JSON folder (stim manifest + noise_seeds)")
+    return folder if folder else no_update
 
 
 # ---- export the checked traces to CSV ("⤓ CSV full" / "⤓ CSV ↓") ---------------
