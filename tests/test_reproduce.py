@@ -5,6 +5,7 @@ scripts use (mt19937ar + norminv(rand), column-major), so these pin the Python
 reproduction to MATLAB bit-for-bit.
 """
 import numpy as np
+import pytest
 from neitz.stimulus import reproduce_noise, gamma_adjust, expand_to_frames
 
 # MATLAB: rand(RandStream('mt19937ar','Seed',2), 1, 6) — the uniform stream that
@@ -65,3 +66,35 @@ def test_expand_to_frames_holds_updates():
     assert np.array_equal(frames[..., 0], upd[..., 0])     # held...
     assert np.array_equal(frames[..., 7], upd[..., 0])
     assert np.array_equal(frames[..., 8], upd[..., 1])     # ...then next update
+
+
+# ---------------- per-check seeds (rig seed_scheme gaussCheckSeeds/1, 2026-10 onward) ----------------
+import json
+import os
+from neitz.stimulus import reproduce_noise_per_check
+
+RIG_SEED_FILE = os.path.join(os.path.dirname(__file__), "data",
+                             "2026_11_12_140021_cell3_b1_e1_check16x10_grey.json")
+
+
+def test_per_check_matches_rig_checksum():
+    """Ground truth from the rig: the seed file's checksum (sum of every value drawn + the first
+    five values of check [0][0]) is reproduced exactly by one mt19937ar stream PER CHECK — and NOT
+    by the legacy single-stream fill from the epoch seed (which was never how the rig drew it)."""
+    d = json.load(open(RIG_SEED_FILE))
+    nz = d["noise"]
+    v = reproduce_noise_per_check(d["check_seeds"], nz["n_updates"], nz["mu"], nz["sigma"])
+    assert v.shape == (d["grid"]["checks_y"], d["grid"]["checks_x"], nz["n_updates"]) == (10, 16, 1199)
+    assert abs(v.sum() - d["noise_checksum"]["sum"]) < 1e-6
+    assert np.allclose(v[0, 0, :5], d["noise_checksum"]["first_check_first5"], atol=1e-9)
+    legacy = reproduce_noise(d["epoch_seed"], 10, 16, nz["n_updates"], nz["mu"], nz["sigma"])
+    assert abs(legacy.sum() - d["noise_checksum"]["sum"]) > 1.0
+
+
+def test_per_check_1x1_equals_legacy_and_is_prefix_consistent():
+    assert np.array_equal(reproduce_noise_per_check([[129366]], 50), reproduce_noise(129366, 1, 1, 50))
+    full = reproduce_noise_per_check([[1, 2], [3, 4]], 100)
+    assert np.array_equal(full[..., :30], reproduce_noise_per_check([[1, 2], [3, 4]], 30))
+    assert full.min() >= 0.0 and full.max() <= 1.0
+    with pytest.raises(ValueError):
+        reproduce_noise_per_check(np.zeros((2, 2, 2)), 5)

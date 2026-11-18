@@ -52,10 +52,19 @@ def flicker_cycle_grid(per_file, ncol=5):
     return fig
 
 
-def noise_sta_figure(arrays, label=""):
+def _iso_label(cone_isolation):
+    """'S' -> 'S-iso', 'achromatic' -> 'achromatic', None/'' -> ''."""
+    iso = str(cone_isolation or "").strip()
+    if not iso:
+        return ""
+    return iso if iso.lower() == "achromatic" else f"{iso}-iso"
+
+
+def noise_sta_figure(arrays, label="", cone_isolation=None):
     """Gaussian-noise reverse correlation: the temporal STA (linear filter) + its
     tuning. `arrays` = the dict from run_noise (average, time_ms, freqs, tuning,
-    per_epoch). Used to validate against Sara's MATLAB STA (peak ~22 ms)."""
+    per_epoch). Used to validate against Sara's MATLAB STA (peak ~22 ms).
+    `cone_isolation` ('S', 'L', 'achromatic', …) only labels the panel."""
     avg = np.asarray(arrays["average"], float)
     t = np.asarray(arrays["time_ms"], float)
     freqs = np.asarray(arrays["freqs"], float)
@@ -72,7 +81,8 @@ def noise_sta_figure(arrays, label=""):
     ax1.plot(t, avg, color="tab:blue", lw=1.8, label="average STA")
     ax1.axhline(0, color="k", lw=0.6)
     ax1.axvline(t[pk], color="tab:red", ls="--", lw=1.0)
-    ax1.set_title(f"S-iso STA (linear filter) — peak {t[pk]:.1f} ms "
+    iso = _iso_label(cone_isolation)
+    ax1.set_title(f"{iso + ' ' if iso else ''}STA (linear filter) — peak {t[pk]:.1f} ms "
                   f"[{'OFF' if avg[pk] < 0 else 'ON'}]", fontsize=9)
     ax1.set_xlabel("time (ms)"); ax1.set_ylabel("filter (÷max)")
     ax1.legend(fontsize=7)

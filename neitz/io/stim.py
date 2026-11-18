@@ -24,6 +24,15 @@ surface whatever is left over instead of mislabeling it. The seed is the source 
 :func:`noise_from_record` regenerates the exact linear stimulus via
 :mod:`neitz.stimulus.reproduce`.
 
+Since 2026-10 (``seed_scheme: gaussCheckSeeds/1``) every seeded epoch also gets a
+``noise_seeds/<date>_<time>_<cell>_b<block>_e<epoch>_<geometry>.json`` next to the manifest
+(``format: neitz-noise-seeds/1``) holding ONE SEED PER CHECK (``check_seeds[row][col]``), the
+grid geometry, the noise parameters and a checksum of the values the rig actually drew. The
+epoch's ``noise_seed_file`` names it. A checkerboard can only be regenerated from those
+per-check seeds — the epoch ``seed`` alone reproduces just the 1x1 full field — so the import
+resolves the file, embeds ``check_seeds`` in the stored params, copies the file into the cell,
+and verifies the checksum (:func:`resolve_noise_seed_file`, :func:`verify_noise_checksum`).
+
 The legacy flat ``*_stim_manifest.jsonl`` per-trial log is no longer written by the rig
 (``writeStimManifest.m`` now writes only the nested ``.json``) nor read here.
 """
@@ -34,10 +43,13 @@ from pathlib import Path
 
 import numpy as np
 
-from ..stimulus.reproduce import reproduce_noise, gamma_adjust, expand_to_frames
+from ..stimulus.reproduce import (reproduce_noise, reproduce_noise_per_check, gamma_adjust,
+                                  expand_to_frames)
 
 MANIFEST_GLOB = "*_stim_manifest.json"                 # nested (neitz-stim-manifest/2)
 NOISE_TYPES = ("gaussian_noise", "checkerboard")       # records that carry reproducible noise
+SEED_FILE_FORMAT = "neitz-noise-seeds/1"               # noise_seeds/*.json (one per seeded epoch)
+PER_CHECK_SCHEME = "gaussCheckSeeds"                   # seed_scheme prefix: one mt19937ar stream per check
 
 
 # ======================= find / load the nested manifest =======================
@@ -120,6 +132,9 @@ def iter_epochs(tree) -> list[dict]:
                 params = dict(bparams)
                 if ep.get("seed") is not None:
                     params["seed"] = ep["seed"]
+                for k in ("noise_seed_file", "noise_checksum"):     # per-epoch seed-file refs
+                    if ep.get(k) is not None:
+                        params[k] = ep[k]
                 if block.get("cone_isolation") is not None:
                     params.setdefault("cone_isolation", block["cone_isolation"])
                 if block.get("stim_signature") is not None:
@@ -281,6 +296,7 @@ def build_import_plan(source_dir, date, abf_paths, *, abf_datetimes=None):
 
     tree = load_manifest(mf)
     epochs = iter_epochs(tree)
+    plan["warnings"].extend(_resolve_seed_files(epochs, mf.parent))
     discarded_dts = [_parse_dt(d.get("timestamp")) for d in _as_list(tree.get("discarded"))]
     skippable = [e["aborted"] for e in epochs]
     abf_epoch, epoch_abf = align_abfs_to_epochs(
@@ -376,6 +392,99 @@ def epoch_groups(recordings) -> list[dict]:
     return groups
 
 
+# ============================ noise seed files ============================
+def load_noise_seed_file(path) -> dict:
+    """Read a ``noise_seeds/*.json`` (``neitz-noise-seeds/1``) -> dict. Raises ``ValueError``
+    on a foreign format or a missing ``check_seeds`` grid."""
+    d = json.loads(Path(path).read_text())
+    fmt = str(d.get("format", ""))
+    if not fmt.startswith("neitz-noise-seeds"):
+        raise ValueError(f"{path}: not a noise-seed file (format={fmt!r})")
+    if d.get("check_seeds") is None:
+        raise ValueError(f"{path}: no check_seeds grid")
+    return d
+
+
+def seed_params_from_file(seedfile) -> dict:
+    """The record fields a seed file contributes: ``check_seeds`` (as nested lists),
+    ``seed_scheme``, and ``noise_checksum`` / ``epoch_seed`` when present."""
+    out = {"check_seeds": [list(map(int, row)) for row in np.atleast_2d(seedfile["check_seeds"])],
+           "seed_scheme": seedfile.get("seed_scheme") or f"{PER_CHECK_SCHEME}/1"}
+    if seedfile.get("noise_checksum") is not None:
+        out["noise_checksum"] = seedfile["noise_checksum"]
+    if seedfile.get("epoch_seed") is not None:
+        out.setdefault("seed", seedfile["epoch_seed"])
+    return out
+
+
+def resolve_noise_seed_file(record, base_dir):
+    """Locate a record's ``noise_seed_file`` under `base_dir` (the manifest's folder, or the
+    stored cell's). Returns the :class:`~pathlib.Path` or ``None``."""
+    name = record.get("noise_seed_file")
+    if not name:
+        return None
+    p = Path(base_dir) / name
+    if p.exists():
+        return p
+    alt = Path(base_dir) / "noise_seeds" / Path(name).name     # tolerate a bare file name
+    return alt if alt.exists() else None
+
+
+def verify_noise_checksum(record, v=None, *, atol=1e-6):
+    """Compare the regenerated noise against the rig's ``noise_checksum`` (``sum`` of every
+    value drawn + ``first_check_first5``). Returns ``True`` / ``False``, or ``None`` when the
+    record carries no checksum. `v` may be passed to avoid regenerating."""
+    cs = record.get("noise_checksum")
+    if not cs:
+        return None
+    if v is None:
+        v = noise_from_record(record)
+    v = np.asarray(v, dtype=float)
+    ok = True
+    if cs.get("sum") is not None:
+        ok &= bool(abs(float(v.sum()) - float(cs["sum"])) <= atol * max(1.0, abs(float(cs["sum"]))))
+    if cs.get("first_check_first5") is not None:
+        first = v.reshape(-1, v.shape[-1])[0][:5]
+        ok &= bool(np.allclose(first, np.asarray(cs["first_check_first5"], dtype=float)[:len(first)],
+                               atol=1e-9))
+    return ok
+
+
+def _resolve_seed_files(epochs, base_dir) -> list:
+    """Import-time pass over :func:`iter_epochs` entries: for each seeded-noise epoch that
+    names a ``noise_seed_file``, load it from `base_dir`, merge its per-check seeds into
+    ``params`` (``check_seeds``, ``seed_scheme``, ``noise_checksum``) and remember the file
+    (``epoch['seed_file_path']``) so the importer can copy it into the cell. Verifies the
+    checksum. Returns a list of warning strings (missing file, bad checksum)."""
+    warnings = []
+    for e in epochs:
+        params = e.get("params") or {}
+        if e.get("stim_type") not in NOISE_TYPES or not params.get("noise_seed_file"):
+            continue
+        p = resolve_noise_seed_file(params, base_dir)
+        if p is None:
+            if int(params.get("checks_x", 1)) * int(params.get("checks_y", 1)) > 1:
+                warnings.append(
+                    f"{e.get('cell_name')} '{e.get('block_label')}' epoch {e.get('epoch')} "
+                    f"@ {e.get('timestamp')}: seed file {params['noise_seed_file']} not found — "
+                    f"this checkerboard CANNOT be regenerated from the epoch seed alone.")
+            continue
+        try:
+            sf = load_noise_seed_file(p)
+        except Exception as ex:
+            warnings.append(f"{p.name}: unreadable seed file ({ex})")
+            continue
+        params.update(seed_params_from_file(sf))
+        e["params"] = params
+        e["seed_file_path"] = str(p)
+        try:
+            if verify_noise_checksum(dict(params, stim_type=e.get("stim_type"))) is False:
+                warnings.append(f"{p.name}: regenerated noise does NOT match the rig's checksum")
+        except Exception as ex:
+            warnings.append(f"{p.name}: checksum check failed ({ex})")
+    return warnings
+
+
 # ============================ stimulus reproduction ============================
 def noise_from_record(record, *, per_frame=False) -> np.ndarray:
     """Regenerate the exact LINEAR noise tensor `v` in [0, 1] for a manifest record.
@@ -386,7 +495,9 @@ def noise_from_record(record, *, per_frame=False) -> np.ndarray:
     each update. Raises ``ValueError`` for ``sq_wave`` / ``jitter`` records (no noise field).
 
     `record` is a flat dict (an :func:`iter_epochs` entry's ``params`` with ``stim_type``,
-    or any dict carrying ``stim_type`` + seed/checks/n_updates).
+    or any dict carrying ``stim_type`` + seed/checks/n_updates). With ``check_seeds`` present
+    (the rig's ``gaussCheckSeeds/1`` scheme, embedded at import from the ``noise_seed_file``)
+    every check runs its own stream; otherwise the legacy single-stream fill from ``seed``.
     """
     stype = record.get("stim_type")
     if stype is None and "type" in record:                 # tolerate {"type": ...} shape too
@@ -394,8 +505,20 @@ def noise_from_record(record, *, per_frame=False) -> np.ndarray:
     if stype not in NOISE_TYPES:
         raise ValueError(
             f"stim_type={stype!r} has no noise to reproduce (only {NOISE_TYPES} do)")
-    v = reproduce_noise(record["seed"], record["checks_y"], record["checks_x"],
-                        record["n_updates"], record.get("mu", 0.5), record.get("sigma", 0.3))
+    mu, sigma = record.get("mu", 0.5), record.get("sigma", 0.3)
+    n_y, n_x = int(record["checks_y"]), int(record["checks_x"])
+    scheme = str(record.get("seed_scheme") or "")
+    if record.get("check_seeds") is not None:                 # per-check seeds (gaussCheckSeeds/1)
+        v = reproduce_noise_per_check(record["check_seeds"], record["n_updates"], mu, sigma)
+        if v.shape[:2] != (n_y, n_x):
+            raise ValueError(f"check_seeds grid {v.shape[:2]} != checks_y x checks_x ({n_y}, {n_x})")
+    elif scheme.startswith(PER_CHECK_SCHEME) and n_y * n_x > 1:
+        raise ValueError(
+            f"seed_scheme={scheme!r} needs the per-check seeds (noise_seed_file="
+            f"{record.get('noise_seed_file')!r}) — a {n_y}x{n_x} checkerboard cannot be "
+            f"regenerated from the epoch seed alone")
+    else:                                                     # legacy: one stream, column-major fill
+        v = reproduce_noise(record["seed"], n_y, n_x, record["n_updates"], mu, sigma)
     if per_frame:
         v = expand_to_frames(v, record["update_every_n_frames"], record.get("stim_frames"))
     return v

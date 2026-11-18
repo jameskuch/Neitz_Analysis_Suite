@@ -47,6 +47,37 @@ def reproduce_noise(seed, n_y, n_x, n_updates, mu=0.5, sigma=0.3):
     return np.clip(v, 0.0, 1.0)
 
 
+def reproduce_noise_per_check(check_seeds, n_updates, mu=0.5, sigma=0.3):
+    """Regenerate the ``(n_y, n_x, n_updates)`` linear noise tensor from ONE SEED PER CHECK
+    (the rig's ``seed_scheme: gaussCheckSeeds/1``, written to ``noise_seeds/*.json`` since
+    2026-10; see generateStimScript.m / gaussNoiseValues.m).
+
+    Each check ``[row][col]`` draws its own ``mt19937ar`` stream::
+
+        u = RandomState(check_seeds[row][col]).random_sample(n_updates)
+        v = clip(mu + sigma * ndtri(u), 0, 1)
+
+    ``row 0`` is the top of the canvas, ``col 0`` its left (the seed file's ``grid`` block).
+    The first ``k`` draws of a stream never depend on ``n_updates``, so a truncated recording
+    can be matched by slicing the result. A ``1x1`` grid reproduces :func:`reproduce_noise`
+    exactly (the epoch seed IS the one check's seed); for any larger grid the two recipes
+    DIFFER — the legacy single stream filled the whole grid column-major from the epoch seed.
+    """
+    seeds = np.asarray(check_seeds)
+    if seeds.ndim == 1:                                  # tolerate a flat row (1 x n_x)
+        seeds = seeds[None, :]
+    if seeds.ndim != 2:
+        raise ValueError(f"check_seeds must be [row][col], got shape {seeds.shape}")
+    n_y, n_x = seeds.shape
+    n_updates = int(n_updates)
+    v = np.empty((n_y, n_x, n_updates), dtype=float)
+    for r in range(n_y):
+        for c in range(n_x):
+            u = np.random.RandomState(int(seeds[r, c])).random_sample(n_updates)
+            v[r, c] = mu + sigma * ndtri(u)
+    return np.clip(v, 0.0, 1.0)
+
+
 def gamma_adjust(v, gamma=GAMMA):
     """DAC fraction actually sent to the projector: ``v ** (1/gamma)``, in [0, 1].
 

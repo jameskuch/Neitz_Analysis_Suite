@@ -354,7 +354,8 @@ def run_cell_noise(store, date, cell, *, name="sta", save=True, run_label=None,
     if save:
         out = cm.output_dir(name)
         label = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
-        figpaths = save_figure(plots.noise_sta_figure(res.arrays, label=label), out, "sta",
+        figpaths = save_figure(plots.noise_sta_figure(res.arrays, label=label, cone_isolation="S"),
+                               out, "sta",
                                formats=formats)
         res.save(out / "result")
         import matplotlib.pyplot as _plt
@@ -417,7 +418,9 @@ def _run_cell_noise_seed(store, cm, date, cell, *, name, save, run_label, format
     if save:
         label = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
         _save_seed_run(cm, store, name, run_label, formats,
-                       plots.noise_sta_figure(res.arrays, label=label), res, info,
+                       plots.noise_sta_figure(res.arrays, label=label,
+                                              cone_isolation=records[0].get("cone_isolation")),
+                       res, info,
                        {"bins_per_update": bins_per_update})
     return res
 
@@ -520,6 +523,29 @@ def epoch_response(spike_times, t0, n_bins, bin_dt) -> np.ndarray:
     return counts.astype(float) / float(bin_dt)
 
 
+def epoch_response_edges(spike_times, edges, bins_per_update=1) -> np.ndarray:
+    """Bin spike times (s) onto a MEASURED update grid: `edges` (length ``n_updates + 1``) are the
+    update start times from the sync bar (:func:`neitz.analysis.sync.update_clock`), each update
+    subdivided into `bins_per_update` equal bins. Returns the rate (spikes/s) per bin, length
+    ``n_updates * bins_per_update`` — the same layout :func:`epoch_response` produces for a
+    uniform grid, so the reverse-correlation code does not care which one it gets."""
+    edges = np.asarray(edges, dtype=float)
+    bpu = max(1, int(bins_per_update))
+    if bpu > 1:
+        frac = np.arange(bpu) / bpu
+        fine = (edges[:-1, None] + np.diff(edges)[:, None] * frac[None, :]).reshape(-1)
+        edges = np.concatenate([fine, edges[-1:]])
+    counts, _ = np.histogram(np.asarray(spike_times, dtype=float), bins=edges)
+    return counts.astype(float) / np.diff(edges)
+
+
+def _recorded(rec, v):
+    """Slice a regenerated stimulus to the updates the recording actually covers (a truncated
+    sweep sets ``rec['recorded_updates']`` in :func:`load_seed_epochs`)."""
+    n = rec.get("recorded_updates")
+    return v if not n else v[..., :int(n)]
+
+
 def sta_from_records(records, responses, *, bins_per_update=6, filter_s=1.0, paradigm=None) -> dict:
     """Full-field Gaussian-noise STA from seed-based epochs (per-epoch reverse correlation, averaged).
 
@@ -532,7 +558,7 @@ def sta_from_records(records, responses, *, bins_per_update=6, filter_s=1.0, par
     for rec in records:
         # noise_from_record gives linear light v∈[0,1] (mean≈mu); reverse-correlate against the
         # CONTRAST (v − mean) so the STA has no spurious DC baseline (mean²·<r> term).
-        s = np.asarray(noise_from_record(rec), dtype=float).reshape(-1)
+        s = np.asarray(_recorded(rec, noise_from_record(rec)), dtype=float).reshape(-1)
         stimuli.append(np.repeat(s - s.mean(), int(bins_per_update)))
         up_rate = _update_rate(rec) if up_rate is None else up_rate
     bin_rate = int(round(up_rate * bins_per_update))
@@ -549,7 +575,7 @@ def strf_from_records(records, responses, *, bins_per_update=1, filter_len=30, p
     """
     stim_parts, resp_parts, n_y, n_x = [], [], None, None
     for rec, resp in zip(records, responses):
-        v = np.asarray(noise_from_record(rec), dtype=float)     # (n_y,n_x,n_updates), linear light
+        v = np.asarray(_recorded(rec, noise_from_record(rec)), dtype=float)   # (n_y,n_x,n_rec), linear
         n_y, n_x = v.shape[0], v.shape[1]
         v = v - v.mean()                                        # contrast (drop mean luminance)
         up = np.repeat(v, int(bins_per_update), axis=-1)        # hold each update across bins
@@ -571,13 +597,20 @@ def load_seed_epochs(cm, *, chan="Im_prime", ttl="TTL", detect=None, abs_map=Non
     (:func:`record_from_stimulus` → ``noise_from_record``), and bin the response to the update grid
     (:func:`epoch_response`). Returns ``(records, responses, info)``.
 
-    June2026 noise trials run no adapting carrier (per James), so the frame clock's first sustained
-    run is the stimulus onset — what :func:`frame_clock_onset` returns. ``t0`` falls back to 0.0 when
-    no frame clock is found (a smoke-test on the first real seeded-noise cell confirms the TTL is a
-    per-frame clock as expected).
+    STIMULUS TIMING (2026-11-12 rig convention, see :mod:`neitz.analysis.sync`): the sync bar's
+    middle segment toggles once per noise update, so the update grid is MEASURED from the
+    photodiode (:func:`~neitz.analysis.sync.update_clock`) — first on the `ttl` channel, then on
+    every other analog channel — and the response is binned onto it with
+    :func:`epoch_response_edges`. That absorbs duplicated frames (a 300 s gaussian ran ~1.6 s long on
+    2026-11-12) and a sweep that stopped before the stimulus did (``recorded_updates`` is then set on
+    the record so the regenerated stimulus is sliced to match). If no channel carries the update
+    clock, ``t0`` = the envelope onset (:func:`~neitz.analysis.sync.stimulus_window`, else the legacy
+    :func:`frame_clock_onset`, else 0.0) and the grid is uniform at ``update_every_n_frames /
+    refresh_rate_hz``. ``info[i]['clock']`` says which (``'measured:<channel>'`` / ``'uniform'``).
     """
     from .spikes import detect_spikes
     from .analysis.flicker import frame_clock_onset
+    from .analysis.sync import stimulus_window, update_clock
     records, responses, info = [], [], []
     for r in cm.data.get("recordings", []):
         f = str(r.get("file", ""))
@@ -595,18 +628,51 @@ def load_seed_epochs(cm, *, chan="Im_prime", ttl="TTL", detect=None, abs_map=Non
         if eff_abs is not None:
             det["abs_threshold"] = float(eff_abs)
         st = detect_spikes(rec.channel(chan), rec.fs, **det)
-        try:
-            t0 = frame_clock_onset(rec.channel(ttl), rec.fs)
-        except Exception:
-            t0 = None
-        t0 = 0.0 if t0 is None else float(t0)
         v = noise_from_record(rec_dict)
         n_updates = v.shape[-1]
-        update_dt = (float(rec_dict.get("update_every_n_frames", 1))
-                     / float(rec_dict.get("refresh_rate_hz", 60)))
-        resp = epoch_response(st.times, t0, n_updates * bins_per_update, update_dt / bins_per_update)
+        upd_frames = float(rec_dict.get("update_every_n_frames", 1))
+        refresh = float(rec_dict.get("refresh_rate_hz", 60))
+        update_dt = upd_frames / refresh
+        ttl_sig = rec.channel(ttl)
+        # -- measured update grid from the sync bar's middle segment (ttl first, then any other channel)
+        edges, clock, sync_info = None, "uniform", {}
+        names = [n for n in (getattr(rec, "channel_names", None) or []) if n != ttl
+                 and str(n).lower() != str(chan).lower()]
+        for cname in [ttl] + names:
+            try:
+                sig = ttl_sig if cname == ttl else rec.channel(cname)
+                e, si = update_clock(sig, rec.fs, n_updates, upd_frames, refresh)
+            except Exception:
+                e, si = None, {}
+            if e is not None and len(e) >= 2:
+                edges, clock, sync_info = np.asarray(e, dtype=float), f"measured:{cname}", si
+                break
+        if edges is not None:
+            t0 = float(edges[0])
+        else:                                              # uniform grid from the envelope onset
+            win = None
+            try:
+                win = stimulus_window(ttl_sig, rec.fs)
+            except Exception:
+                win = None
+            if win is not None:
+                t0 = float(win[0])
+            else:
+                try:
+                    t0 = frame_clock_onset(ttl_sig, rec.fs)
+                except Exception:
+                    t0 = None
+                t0 = 0.0 if t0 is None else float(t0)
+            n_rec = int(min(n_updates, max(0, np.floor((len(ttl_sig) / rec.fs - t0) / update_dt))))
+            edges = t0 + np.arange(n_rec + 1) * update_dt
+        n_rec = len(edges) - 1
+        if n_rec < n_updates:
+            rec_dict["recorded_updates"] = int(n_rec)      # sweep ended before the stimulus did
+        resp = epoch_response_edges(st.times, edges, bins_per_update)
         records.append(rec_dict)
         responses.append(resp)
         info.append(dict(file=os.path.basename(path), t0=round(t0, 4),
-                         n_spikes=int(len(st.times)), stim_type=rec_dict["stim_type"]))
+                         n_spikes=int(len(st.times)), stim_type=rec_dict["stim_type"],
+                         clock=clock, n_updates=int(n_updates), n_updates_recorded=int(n_rec),
+                         frame_dups=int(sync_info.get("frame_dups", 0) or 0)))
     return records, responses, info

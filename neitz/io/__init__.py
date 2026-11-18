@@ -2,7 +2,8 @@ from .abf import Recording
 from .csv import CsvSpikeRecording
 from .stim import (find_manifest, load_manifest, iter_epochs, stimulus_metadata,
                    align_abfs_to_epochs, build_import_plan, epoch_groups,
-                   noise_from_record, sent_codes_from_record)
+                   noise_from_record, sent_codes_from_record,
+                   load_noise_seed_file, resolve_noise_seed_file, verify_noise_checksum)
 
 
 def load_recording(path):
@@ -15,4 +16,5 @@ def load_recording(path):
 __all__ = ["Recording", "CsvSpikeRecording", "load_recording",
            "find_manifest", "load_manifest", "iter_epochs", "stimulus_metadata",
            "align_abfs_to_epochs", "build_import_plan", "epoch_groups",
-           "noise_from_record", "sent_codes_from_record"]
+           "noise_from_record", "sent_codes_from_record",
+           "load_noise_seed_file", "resolve_noise_seed_file", "verify_noise_checksum"]

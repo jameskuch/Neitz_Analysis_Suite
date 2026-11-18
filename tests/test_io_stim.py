@@ -116,3 +116,96 @@ def test_sent_codes_siso():
     assert codes.shape == (32, 40, 5, 3)
     assert codes[..., 2].max() == 0                                 # B = 0 for S-iso
     assert codes.min() >= 0 and codes.max() <= 255
+
+
+# ---------------- noise seed files (per-check seeds, gaussCheckSeeds/1) ----------------
+import os
+import shutil
+from neitz.stimulus import reproduce_noise_per_check
+
+RIG_SEED_FILE = os.path.join(os.path.dirname(__file__), "data",
+                             "2026_11_12_140021_cell3_b1_e1_check16x10_grey.json")
+
+
+def _per_check_record(check_seeds, n_updates=5, **over):
+    rec = {"stim_type": "checkerboard", "seed": 2, "mu": 0.5, "sigma": 0.3,
+           "checks_y": len(check_seeds), "checks_x": len(check_seeds[0]), "n_updates": n_updates,
+           "update_every_n_frames": 1, "refresh_rate_hz": 60, "stim_frames": n_updates,
+           "seed_scheme": "gaussCheckSeeds/1", "check_seeds": check_seeds}
+    rec.update(over)
+    return rec
+
+
+def test_noise_from_record_uses_check_seeds():
+    seeds = [[11, 12, 13], [21, 22, 23]]
+    v = stim.noise_from_record(_per_check_record(seeds))
+    assert v.shape == (2, 3, 5)
+    assert np.array_equal(v, reproduce_noise_per_check(seeds, 5, 0.5, 0.3))
+    assert not np.array_equal(v, reproduce_noise(2, 2, 3, 5))        # NOT the legacy epoch-seed fill
+    with pytest.raises(ValueError):                                   # grid must match checks_y/x
+        stim.noise_from_record(_per_check_record(seeds, checks_x=4))
+
+
+def test_noise_from_record_refuses_per_check_checkerboard_without_seeds():
+    rec = _per_check_record([[1, 2], [3, 4]]); rec.pop("check_seeds")
+    with pytest.raises(ValueError, match="per-check seeds"):
+        stim.noise_from_record(rec)
+    ff = _per_check_record([[7]]); ff.pop("check_seeds"); ff["seed"] = 7   # 1x1: epoch seed suffices
+    assert np.array_equal(stim.noise_from_record(ff), reproduce_noise(7, 1, 1, 5))
+
+
+def test_seed_file_resolve_params_and_checksum(tmp_path):
+    (tmp_path / "noise_seeds").mkdir()
+    shutil.copy(RIG_SEED_FILE, tmp_path / "noise_seeds" / "x.json")
+    rec = {"stim_type": "checkerboard", "seed": 228464, "mu": 0.5, "sigma": 0.3, "checks_y": 10,
+           "checks_x": 16, "n_updates": 1199, "seed_scheme": "gaussCheckSeeds/1",
+           "noise_seed_file": "noise_seeds/x.json"}
+    p = stim.resolve_noise_seed_file(rec, tmp_path)
+    assert p == tmp_path / "noise_seeds" / "x.json"
+    assert stim.resolve_noise_seed_file({"noise_seed_file": "x.json"}, tmp_path) == p   # bare name ok
+    assert stim.resolve_noise_seed_file({"noise_seed_file": "nope.json"}, tmp_path) is None
+    assert stim.resolve_noise_seed_file({}, tmp_path) is None
+    sf = stim.load_noise_seed_file(p)
+    params = stim.seed_params_from_file(sf)
+    assert np.asarray(params["check_seeds"]).shape == (10, 16) and params["seed_scheme"] == "gaussCheckSeeds/1"
+    rec.update(params)
+    assert stim.verify_noise_checksum(rec) is True                    # the rig's own checksum
+    bad = dict(rec, noise_checksum={"sum": rec["noise_checksum"]["sum"] + 1.0})
+    assert stim.verify_noise_checksum(bad) is False
+    assert stim.verify_noise_checksum({k: v for k, v in rec.items() if k != "noise_checksum"}) is None
+    with pytest.raises(ValueError):
+        (tmp_path / "bad.json").write_text(json.dumps({"format": "other"}))
+        stim.load_noise_seed_file(tmp_path / "bad.json")
+
+
+def test_build_import_plan_embeds_check_seeds_and_warns_on_missing(tmp_path):
+    """Import-time resolution: an epoch's noise_seed_file (relative to the manifest) is loaded, its
+    per-check seeds embedded in the epoch params + the checksum verified; a missing file for a
+    checkerboard is a warning (that epoch can't be regenerated)."""
+    date = "2026-11-12"
+    src = tmp_path / "docs"; (src / "noise_seeds").mkdir(parents=True)
+    shutil.copy(RIG_SEED_FILE, src / "noise_seeds" / "e1.json")
+    params = {"mu": 0.5, "sigma": 0.3, "checks_x": 16, "checks_y": 10, "n_updates": 1199,
+              "update_every_n_frames": 1, "refresh_rate_hz": 59.9435, "stim_frames": 1199,
+              "seed_scheme": "gaussCheckSeeds/1"}
+    tree = {"format": "neitz-stim-manifest/2", "date": date, "cells": [
+        {"cell_name": "cell3", "blocks": [
+            {"block_index": 1, "label": "block 1", "stim_type": "checkerboard", "cone_isolation": "achromatic",
+             "stim_signature": "S", "params": params, "epochs": [
+                 {"epoch": 1, "seed": 228464, "timestamp": f"{date}T14:00:21", "frame_sync": _fs(24.1, -0.5),
+                  "noise_seed_file": "noise_seeds/e1.json", "noise_checksum": {"sum": 95938.29989430605}},
+                 {"epoch": 2, "seed": 996841, "timestamp": f"{date}T14:00:51", "frame_sync": _fs(24.1, -0.5),
+                  "noise_seed_file": "noise_seeds/missing.json"}]}]}]}
+    (src / f"{date.replace('-', '_')}_stim_manifest.json").write_text(json.dumps(tree))
+    abfs = [str(src / f"2026_11_12_00{i}.abf") for i in (42, 43)]
+    plan = stim.build_import_plan(src, date, abfs, abf_datetimes=[f"{date}T14:00:22", f"{date}T14:00:52"])
+    eps = plan["cells"][0]["protocols"][0]["epochs"]
+    assert np.asarray(eps[0]["params"]["check_seeds"]).shape == (10, 16)
+    assert eps[0]["seed_file_path"] == str(src / "noise_seeds" / "e1.json")
+    assert eps[0]["params"]["noise_checksum"]["sum"] == 95938.29989430605
+    assert "check_seeds" not in eps[1]["params"] and "seed_file_path" not in eps[1]
+    assert any("missing.json" in w and "CANNOT" in w for w in plan["warnings"])
+    assert not any("does NOT match" in w for w in plan["warnings"])
+    # the resolved record regenerates the rig's exact noise
+    rec = dict(eps[0]["params"], stim_type="checkerboard")
+    assert stim.verify_noise_checksum(rec) is True

@@ -13,8 +13,8 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (≈43 tests; synthetic tests run
-  anywhere, real-`.abf` tests skip if store data is absent).
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (146 tests as of 2026-11-17; synthetic
+  tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
 - **Restart the GUI backend** (do this after editing `viewer.py`, and whenever the user asks):
@@ -94,13 +94,19 @@ wrappers just point at it. Deps: `pip install -e ".[gui,app]"` (`pywebview`; `py
 ```
 neitz/                         tested core (no GUI deps)
   io/      abf.py (Recording), csv.py (CsvSpikeRecording + siso loaders), figures.py (save PNG/PDF/SVG)
+           stim.py (nested stim manifest, abf↔epoch timestamp alignment, noise_seeds/*.json
+                    per-check seed files + checksum verification, noise_from_record)
            io/__init__.py: load_recording(path) dispatches .abf vs .csv
   spikes.py                    detect_spikes(signal, fs, polarity, method='mad'|'abs'|'mad_floor'|'matlab', k, abs_threshold, refractory_s)
                                'matlab' = detect_spikes_matlab = Sara's spikeDetectorOnline.m (500 Hz HP, max/3 threshold, 4σ noise gate; respects polarity)
   analysis/  revcorr.py (reverse_correlation, average_filter, normalize_filter 'max'|'std'),
              flicker.py (detect_flicker, cycle/transition PSTH, vector_strength, shift_test),
-             strf.py (spatiotemporal reverse correlation)
+             strf.py (spatiotemporal reverse correlation),
+             sync.py (stimulus_window + update_clock: per-update timing MEASURED from the sync-bar
+                      photodiode — see "Sync bar" below)
   stimulus/  base.py + NoiseParadigm / FlickerParadigm / CheckerboardParadigm
+             reproduce.py: reproduce_noise (legacy one-stream fill) + reproduce_noise_per_check
+                      (rig seed_scheme gaussCheckSeeds/1: one mt19937ar stream PER CHECK)
   dataio/    DataStore, CellManifest, config (mirror), mirror_store  (the managed store)
   run.py     headless orchestration -> Result; run_cell_flicker(...name=,include=), run_cell_noise(...) (STA)
   pipeline.py  analysis-pipeline model: COMPONENT_REGISTRY (palette), Pipeline dicts, default_*_pipeline,
@@ -176,6 +182,15 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   ON 1.29× p=0.56 / OFF 1.23× p=0.66, 2931 spk; notipRGC ON 1.35× p=0.42 / OFF 1.26× p=0.67,
   722 spk). Earlier per-trial ON/OFF labels were noise. The ipRGC recording is somewhat unstable
   (action-current amplitude drifted ±30→±200 pA across trials).
+- **2026-11-12/c04 (cell3)** — the first per-check-seeded checkerboard dataset. 40 epochs of
+  16x10 checks (mu .5, sigma .3, a new frame every projector frame, 1199 updates, 24 s abfs) +
+  two 300 s full-field gaussians (4 Hz base, update every 7 frames; 0039 truncated at 195 s).
+  Spikes = negative action currents on `Im_prime` (6×MAD), ~15 Hz. **STRF: compact ON centre at
+  check (y=5, x=7)** spilling into (6,7) .84, (6,6) .37, (5,6) .27; biphasic filter peaking at
+  **50 ms** with an undershoot ~85 ms; peak check 9× the median check. **Full-field STA: ON, peak
+  20–39 ms**, per-epoch filter correlation .92, raw peak 21× the late-lag noise. Both saved under
+  the cell as `strf` and `sta`. Discarded-epoch abfs (23) were skipped at import; `0037` (no
+  manifest epoch, an aborted gaussian) sits in the day's `(unsorted)` cell.
 - **Rig caveat**: across otherwise-identical flicker trials the pre-flicker adapting block is
   driven inconsistently — e.g. 0040's frame sync is flat (0 Hz carrier) where 0041 runs the
   ~240 Hz carrier. Flag this if frame-sync timing matters for an analysis.
@@ -183,6 +198,46 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   so its p-value has a floor (~latency-window/period) and low power. The default null is
   `'jitter'` (per-spike), which actually detects locked responses; `'shift'` is kept for
   reference only.
+
+## Seeded noise since 2026-10: per-check seed files (NON-NEGOTIABLE for checkerboards)
+
+- The rig (generateStimScript/3, `seed_scheme: gaussCheckSeeds/1`) draws EVERY CHECK from its
+  own `mt19937ar` stream: `RandomState(check_seeds[row][col]).random_sample(n_updates)` →
+  `clip(mu + sigma*ndtri(u), 0, 1)`. The seeds live in `noise_seeds/<date>_<HHMMSS>_<cell>_b<b>_e<e>_
+  <geometry>.json` (`neitz-noise-seeds/1`) next to the day manifest; the epoch's `noise_seed_file`
+  names it and `noise_checksum` (sum of every value + first 5 of check [0][0]) pins what was shown.
+  The old single-stream `reproduce_noise(epoch_seed, …)` reproduces ONLY the 1x1 full field —
+  for any grid it is silently wrong (sum 95883.76 vs the rig's 95938.30 on the pinned fixture
+  `tests/data/2026_11_12_140021_cell3_b1_e1_check16x10_grey.json`).
+- Import (`build_import_plan` → `_resolve_seed_files`) loads the file relative to the manifest,
+  embeds `check_seeds`/`seed_scheme`/`noise_checksum` in the stored stimulus params, verifies the
+  checksum (a mismatch is a plan warning), and `apply_import_plan` copies the file into
+  `<cell>/noise_seeds/`. `noise_from_record` dispatches on `check_seeds`; a per-check-scheme
+  checkerboard WITHOUT them raises rather than regenerating garbage.
+- Analysis binning: `load_seed_epochs(bins_per_update=…)` and `sta_from_records` /
+  `strf_from_records(bins_per_update=…)` MUST agree (the `run_cell_*` entry points pass one value
+  through). A mismatch silently truncates the response and yields a noise STRF — it bit once.
+
+## Sync bar → stimulus timing (2026-11-12 rig convention)
+
+- Three photodiode segments on the rightmost W/8 (bar spec `triple/4`): top/bottom = stimulus
+  ENVELOPE (lit exactly while stimulus frames are up), middle = BASE FREQUENCY (lit one noise
+  update, dark the next). Clampex records the diodes INVERTED (dark ≈ +4.9 V `TTL` / +5030
+  `I_MTest 3`, light ≈ 0); a lit frame is 2–5 short bit-plane pulses. On 2026-11-12 `I_MTest 3`
+  carries the middle segment and `TTL` an envelope segment (+ field scatter). `sync.py` is
+  polarity-agnostic (idle = the first 0.5 s).
+- `load_seed_epochs` tries `update_clock` on the `ttl` channel then every other analog channel and
+  bins the response on the MEASURED update grid (`epoch_response_edges`); `info[i]['clock']` says
+  `measured:<chan>` or `uniform`. Why it matters: the 300 s full-field gaussian (0041) ran 1.6 s
+  long from duplicated frames the client-side `frame_sync` never reported (~80 lit half-cycles of
+  15 frames instead of 14) — a uniform grid drifts ~7 updates by the end. Checkerboard epochs
+  (update every frame) are clean: exactly 600 bursts, every period 2 frames.
+- Full-field gaussian caveat: bright field updates scatter onto the middle-segment diode, so some
+  dark phases read lit and lit phases merge (burst widths of 21/35/49 frames, never 14).
+  `update_clock` snaps onsets to the known period, drops fragments, interpolates hidden onsets,
+  extends through a merged final burst and reports `n_interpolated` (≈18 % on 0041).
+- A sweep that stops before the stimulus (0039: 195 s of a 304 s stimulus) gets
+  `recorded_updates` on its record and the regenerated stimulus is sliced to match.
 
 ## Conventions & decisions (don't relearn these)
 

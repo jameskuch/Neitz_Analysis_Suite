@@ -44,6 +44,20 @@ def _copy_manifest_into(cm, mf):
         pass
 
 
+def _copy_seed_file_into(cm, src) -> str:
+    """Copy an epoch's ``noise_seeds/*.json`` into ``<cell>/noise_seeds/`` (the cell stays
+    self-contained, like the copied day manifest). Returns the cell-relative path."""
+    src = Path(src)
+    dst_dir = Path(cm.dir) / "noise_seeds"
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if not (dst_dir / src.name).exists():
+            shutil.copy2(src, dst_dir / src.name)
+    except Exception:
+        pass
+    return f"noise_seeds/{src.name}"
+
+
 def apply_import_plan(ds, date, plan, *, other_paths=(), hand_stim=None) -> dict:
     """Create a day's cells from an import `plan`. Returns a summary dict::
 
@@ -67,7 +81,10 @@ def apply_import_plan(ds, date, plan, *, other_paths=(), hand_stim=None) -> dict
             for k, e in enumerate(eps, start=1):
                 pr = {"index": proto["index"], "label": proto["label"],
                       "signature": proto["stim_signature"], "epoch": k, "n_epochs": len(eps)}
-                stim = ({"type": e["stim_type"], "params": e["params"], "source": "stim-manifest"}
+                params = dict(e["params"] or {})
+                if e.get("seed_file_path"):                  # per-check seed file -> into the cell
+                    params["noise_seed_file"] = _copy_seed_file_into(cm, e["seed_file_path"])
+                stim = ({"type": e["stim_type"], "params": params, "source": "stim-manifest"}
                         if e["stim_type"] else None)
                 cm.add_recording(e["abf"], label=os.path.basename(e["abf"]),
                                  stimulus=stim, protocol=pr)

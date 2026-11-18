@@ -1,6 +1,7 @@
 """neitz.io.importer.apply_import_plan + DataStore.move_recording — the day → cell →
 protocol → epoch store-writing path, and integrity-safe cross-cell moves."""
 import json
+import numpy as np
 from neitz.io import stim
 from neitz.io.importer import apply_import_plan, renumber_protocols
 from neitz.dataio import DataStore
@@ -129,3 +130,37 @@ def test_move_recording_same_cell_is_noop(tmp_path):
     n_before = len(c1.data["recordings"])
     ds.move_recording("2026-07-16", c1.data["cell"], c1.data["cell"], rid)
     assert len(ds.cell("2026-07-16", c1.data["cell"]).data["recordings"]) == n_before
+
+
+def test_apply_import_plan_copies_seed_files(tmp_path):
+    """A seeded epoch's noise_seeds/*.json travels with the recording into <cell>/noise_seeds/ and
+    the stored params point at the copy (cell-relative), with check_seeds already embedded."""
+    import os
+    import shutil
+    date = "2026-11-12"
+    src = tmp_path / "docs"; (src / "noise_seeds").mkdir(parents=True)
+    fixture = os.path.join(os.path.dirname(__file__), "data",
+                           "2026_11_12_140021_cell3_b1_e1_check16x10_grey.json")
+    shutil.copy(fixture, src / "noise_seeds" / "e1.json")
+    params = {"mu": 0.5, "sigma": 0.3, "checks_x": 16, "checks_y": 10, "n_updates": 1199,
+              "update_every_n_frames": 1, "refresh_rate_hz": 59.9435, "stim_frames": 1199,
+              "seed_scheme": "gaussCheckSeeds/1"}
+    tree = {"format": "neitz-stim-manifest/2", "date": date, "cells": [
+        {"cell_name": "cell3", "blocks": [
+            {"block_index": 1, "label": "block 1", "stim_type": "checkerboard", "cone_isolation": "achromatic",
+             "stim_signature": "S", "params": params, "epochs": [
+                 {"epoch": 1, "seed": 228464, "timestamp": f"{date}T14:00:21", "frame_sync": _fs(24.1, -0.5),
+                  "noise_seed_file": "noise_seeds/e1.json"}]}]}]}
+    (src / f"{date.replace('-', '_')}_stim_manifest.json").write_text(json.dumps(tree))
+    abf = src / "2026_11_12_0042.abf"; abf.write_bytes(b"ABF\x00 dummy")
+    plan = stim.build_import_plan(src, date, [str(abf)], abf_datetimes=[f"{date}T14:00:22"])
+    ds = DataStore(root=tmp_path / "store")
+    apply_import_plan(ds, date, plan)
+    cm = ds.cell_by_name(date, "cell3")
+    rec = cm.data["recordings"][0]
+    assert rec["stimulus"]["params"]["noise_seed_file"] == "noise_seeds/e1.json"
+    assert (cm.dir / "noise_seeds" / "e1.json").exists()
+    assert np.asarray(rec["stimulus"]["params"]["check_seeds"]).shape == (10, 16)
+    # the stored record regenerates the rig's exact noise, from the manifest alone
+    from neitz.run import record_from_stimulus
+    assert stim.verify_noise_checksum(record_from_stimulus(rec["stimulus"])) is True
