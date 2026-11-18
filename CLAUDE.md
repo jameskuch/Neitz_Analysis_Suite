@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (159 tests as of 2026-11-17; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (160 tests as of 2026-11-17; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -226,6 +226,9 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
 - Analysis binning: `load_seed_epochs(bins_per_update=…)` and `sta_from_records` /
   `strf_from_records(bins_per_update=…)` MUST agree (the `run_cell_*` entry points pass one value
   through). A mismatch silently truncates the response and yields a noise STRF — it bit once.
+  `strf_from_records` also sets the paradigm's `bin_rate` (the `time_ms` / `peak_time_ms` lag axis)
+  from the record: update rate (59.94 Hz on the rig) × `bins_per_update`, one tap per response bin —
+  it used to sit at a fixed 60 Hz, which was 0.1 % off at one bin per update and 2× off at two.
 
 ## Sync bar → stimulus timing (2026-11-12 rig convention)
 

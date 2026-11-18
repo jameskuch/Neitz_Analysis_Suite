@@ -64,6 +64,28 @@ def test_strf_recovers_injected_check_and_lag():
     assert abs(res.peak_time_ms - 1000.0 * L / 60.0) < 1000.0 / 60.0 + 1e-6   # correct lag (±1 frame)
 
 
+def test_strf_time_axis_follows_refresh_rate_and_bins_per_update():
+    """The lag axis is one RESPONSE bin per tap: the record's update rate (59.94 Hz on the rig, not a
+    fixed 60) times bins_per_update. With two bins per update an injected lag of L updates comes back
+    at tap 2L and the SAME milliseconds as at one bin per update."""
+    L, bpu, hz = 3, 2, 59.94
+    records = [{"stim_type": "checkerboard", "cone_isolation": "achromatic", "seed": 11,
+                "checks_y": 2, "checks_x": 2, "n_updates": 4000,
+                "update_every_n_frames": 1, "refresh_rate_hz": hz, "mu": 0.5, "sigma": 0.3}]
+    v = noise_from_record(records[0])
+    drive = np.repeat(v[0, 1, :], bpu)                             # check (0,1) on the 2-bin grid
+    h = np.zeros(20); h[L * bpu] = 1.0
+    resp = np.convolve(drive, h)[:drive.size]
+    res = strf_from_records(records, [resp], bins_per_update=bpu, filter_len=20)
+    assert np.allclose(res.time_ms, np.arange(20) * 1000.0 / (hz * bpu))
+    assert res.peak_yx == (0, 1)
+    assert abs(res.peak_time_ms - 1000.0 * L / hz) < 1e-9          # 50.05 ms, not 50.00
+    # one bin per update at the rig rate: tap k sits at k / 59.94 s
+    res1 = strf_from_records(records, [resp[::bpu]], bins_per_update=1, filter_len=20)
+    assert abs(res1.time_ms[1] - 1000.0 / hz) < 1e-9
+    assert abs(res1.peak_time_ms - 1000.0 * L / hz) < 1e-9
+
+
 def test_strf_figure_renders():
     """The STRF plotter produces a 2-panel figure (spatial RF + temporal) from an STRFResult."""
     import matplotlib

@@ -580,12 +580,16 @@ def strf_from_records(records, responses, *, bins_per_update=1, filter_len=30, p
     time and reverse-correlate (pools all frame↔spike pairs across epochs).
 
     `records` → `noise_from_record` → `(n_y, n_x, n_updates)`; `responses`: per-epoch binned rate
-    aligned to the upsampled stimulus. Returns an :class:`STRFResult`.
+    aligned to the upsampled stimulus. Returns an :class:`STRFResult` whose lag axis (``time_ms``,
+    ``peak_time_ms``) is one RESPONSE bin per tap: the record's update rate (``refresh_rate_hz /
+    update_every_n_frames``, 59.94 Hz on the rig) times `bins_per_update` — not a fixed 60 Hz.
     """
-    stim_parts, resp_parts, n_y, n_x = [], [], None, None
+    stim_parts, resp_parts, n_y, n_x, bin_rate = [], [], None, None, None
     for rec, resp in zip(records, responses):
         v = np.asarray(_recorded(rec, noise_from_record(rec)), dtype=float)   # (n_y,n_x,n_rec), linear
         n_y, n_x = v.shape[0], v.shape[1]
+        if bin_rate is None:
+            bin_rate = _update_rate(rec) * max(1, int(bins_per_update))
         v = v - v.mean()                                        # contrast (drop mean luminance)
         up = np.repeat(v, int(bins_per_update), axis=-1)        # hold each update across bins
         m = min(up.shape[-1], len(resp))
@@ -593,7 +597,8 @@ def strf_from_records(records, responses, *, bins_per_update=1, filter_len=30, p
         resp_parts.append(np.asarray(resp, dtype=float)[:m])
     stim = np.concatenate(stim_parts, axis=-1)                  # (n_y,n_x,T)
     response = np.concatenate(resp_parts)                       # (T,)
-    paradigm = paradigm or CheckerboardParadigm(n_y=n_y, n_x=n_x, filter_len=filter_len)
+    paradigm = paradigm or CheckerboardParadigm(n_y=n_y, n_x=n_x, filter_len=filter_len,
+                                                bin_rate=float(bin_rate or 60.0))
     return paradigm.analyze(stim, response)
 
 

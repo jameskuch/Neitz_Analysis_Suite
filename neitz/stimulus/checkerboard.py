@@ -28,8 +28,8 @@ class STRFResult:
 class CheckerboardParadigm:
     n_y: int
     n_x: int
-    bin_rate: int = 60        # stimulus frame rate (Hz)
-    filter_len: int = 30      # STRF taps (0.5 s at 60 Hz)
+    bin_rate: float = 60.0    # response bin rate (Hz) = update rate x bins_per_update; sets the lag axis
+    filter_len: int = 30      # STRF taps, one per response bin (0.5 s at one bin per 60 Hz frame)
     zero_pad: int = 60
     normalize: str = "max"    # 'max' | 'std' | None
     meta: StimulusMeta = field(default_factory=lambda: StimulusMeta(kind="checkerboard"))
