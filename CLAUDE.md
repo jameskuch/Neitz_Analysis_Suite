@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (160 tests as of 2026-11-17; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (165 tests as of 2026-11-17; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -329,7 +329,16 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   so the line indices stay 0 & 1. The `#time` config carries a static `edits: {shapePosition: True}`.
   Plotly gives each line a transparent 10 px hit-path with inline `cursor: move`; a CSS rule
   (`#time .shapelayer path[style*="cursor: move"] { cursor: ew-resize !important }`) refines that to
-  an ↔ cursor. On drag-release Plotly fires a `shapes[i].x` relayout; the `drag_region` callback
+  an ↔ cursor. TWO traps, both hit on 2026-11-17: (1) `edits.shapePosition` makes EVERY shape
+  draggable — a shape's own `editable=False` is ignored in that mode — and the excluded-region vrects
+  are drawn ABOVE the lines with an edge exactly on each line and carry an inline `pointer-events:
+  all`, so a grab at the line resized / slid the gray block; `viewer.css` strips pointer events from
+  them (`#time .shapelayer path[style*="pointer-events: all"] { pointer-events: none !important }`).
+  `layer="below"` does NOT help — Plotly's DOM order is bglayer → draglayer → layer-below →
+  cartesianlayer → layer-above, so a below shape still sits on top of the drag layer. (2) Plotly's x-axis drag strips (`.ewdrag` pan, `.wdrag`/`.edrag`
+  zoom, 20 px under each subplot) show the same ↔ cursor right where a line ends, and a grab a few
+  px low panned the whole view; `viewer.css` hides them on `#time` (zoom = plot-area drag box, wheel,
+  double-click reset). On drag-release Plotly fires a `shapes[i].x` relayout; the `drag_region` callback
   (Input `#time.relayoutData`, no mode gating) averages `shapes[i].x0`/`x1` back into
   `region-start` / `region-end` so the analysis window follows (converges, no loop; region boxes are
   in `UNDO_TRACK`). The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the

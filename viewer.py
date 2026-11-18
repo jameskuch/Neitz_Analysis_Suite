@@ -2584,6 +2584,32 @@ app.clientside_callback(
     prevent_initial_call=True)
 
 
+def add_region_shapes(fig, rs, re_, t0_full, t1_full, crop=False):
+    """The analysis-region overlay of the time graph: ALWAYS-draggable boundary lines = shapes[0]
+    (start) and shapes[1] (end) — a drag repositions one and on release `drag_region` writes its new
+    x back to the start / end box — then, unless cropping, the gray excluded-region shading.
+
+    The lines are added FIRST so their indices stay 0 & 1. The graph config's `edits.shapePosition`
+    makes EVERY shape draggable (a shape's own `editable=False` has no effect in that mode) and
+    gives each vrect an inline `pointer-events: all`; drawn after the lines, a vrect's edge sat
+    exactly on its boundary line and ABOVE it, so a grab at the line resized / slid the gray block
+    instead of moving the boundary (2026-11-17). `assets/viewer.css` strips pointer events from the
+    shading paths, which is what makes the line's hit-path reachable — `layer="below"` does NOT
+    help: Plotly's drag layer sits UNDER every shape layer, so a below shape still takes the pointer."""
+    for xb in (rs, re_):
+        fig.add_shape(type="line", xref="x", yref="paper", x0=xb, x1=xb, y0=0, y1=1,
+                      line=dict(color="#e4604e", width=2.5), editable=True)
+    if crop:
+        return fig
+    for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
+                             (re_, t1_full, "excluded", "bottom right")]:
+        if b > a + 1e-6:
+            fig.add_vrect(x0=a, x1=b, fillcolor="gray", opacity=0.4, line_width=0,
+                          editable=False, annotation_text=lbl, annotation_position=pos,
+                          annotation=dict(font_size=10), row="all", col=1)
+    return fig
+
+
 def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
                   disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
                   fft_bin=5.0, align_map=None, group=None, fft_input=None,
@@ -2804,19 +2830,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
                                             line=dict(width=1, color="#444"),
                                             name="TTL average"), row=2, col=1)
 
-    # ALWAYS-draggable region boundary lines = shapes[0] (start), shapes[1] (end). editable=True so
-    # hovering shows a resize cursor and a drag repositions them; on release drag_region writes the
-    # new x back to the start/end boxes. Added BEFORE the shading vrects so their indices stay 0 & 1.
-    for xb in (rs, re_):
-        time_fig.add_shape(type="line", xref="x", yref="paper", x0=xb, x1=xb, y0=0, y1=1,
-                           line=dict(color="#e4604e", width=2.5), editable=True)
-    if not crop:                                   # shade excluded region (non-draggable, editable=False)
-        for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
-                                 (re_, t1_full, "excluded", "bottom right")]:
-            if b > a + 1e-6:
-                time_fig.add_vrect(x0=a, x1=b, fillcolor="gray", opacity=0.4, line_width=0,
-                                   editable=False, annotation_text=lbl, annotation_position=pos,
-                                   annotation=dict(font_size=10), row="all", col=1)
+    add_region_shapes(time_fig, rs, re_, t0_full, t1_full, crop)
 
     ttl_ylab = (f"{ttl_name} (staggered)" if (stagger and multi) else (ttl_name or "TTL"))
     # fixedrange on both y-axes makes the drag-box zoom X-ONLY: Plotly can't axis-lock a thin box

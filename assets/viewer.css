@@ -247,6 +247,18 @@ html, body { margin: 0; }
    hit-path an inline `cursor: move`; the lines only move horizontally, so show an ↔ resize cursor
    instead (clearer "drag me left/right" cue). Falls back to `move` if the selector ever misses. */
 #time .shapelayer path[style*="cursor: move"] { cursor: ew-resize !important; }
+/* The excluded-region shading (gray vrects, drawn AFTER the lines) must never take the pointer:
+   edits.shapePosition makes every shape draggable (a shape's own editable=False is ignored) and
+   gives each one an inline `pointer-events: all`, so a grab at a boundary line landed on the vrect
+   edge that sits exactly there — resizing / sliding the gray block instead of moving the line.
+   Only the vrects carry that inline text (the lines' hit-paths don't), so this selector is exact.
+   Note layer="below" would NOT help: Plotly's drag layer is under every shape layer. */
+#time .shapelayer path[style*="pointer-events: all"] { pointer-events: none !important; }
+/* Plotly's x-axis drag strips (20 px under each #time subplot: .ewdrag pans, .wdrag/.edrag zoom
+   one end) show the SAME ↔ cursor as the boundary lines, right where a line ends — a grab a few px
+   below the line panned the whole view instead of moving the boundary. Hide them: zooming stays on
+   the plot area (drag box, wheel) + double-click reset; the y strips are no-ops (fixedrange). */
+#time .draglayer .ewdrag, #time .draglayer .wdrag, #time .draglayer .edrag { display: none !important; }
 
 /* ============ Analysis Pipelines editor ============ */
 .pipe-btn { font-size: 12px; padding: 3px 9px; cursor: pointer; border: 1px solid #3a3f4c;
