@@ -107,3 +107,38 @@ def test_smooth_and_tfilter_extraction():
     tf = pl.tfilter_from_pipeline(p)
     assert tf["cutoff_hz"] == 25.0 and tf["mode"] == "highpass" and tf["taps"] == 41
     assert pl.pipeline_stim_family(p) == "sq_wave"    # new processing nodes don't change dispatch
+
+
+def test_component_code_is_the_live_source_of_what_runs():
+    """Every component lists the functions that run for it; each resolves to real source read from
+    the live module (a `viewer:` reference needs the GUI module passed in `extra`)."""
+    import viewer
+    for ctype in pl.COMPONENT_REGISTRY:
+        refs = pl.CODE_REFS.get(ctype, [])
+        assert refs, f"{ctype} lists no code"
+        code = pl.component_code(ctype, extra={"viewer": viewer})
+        assert [c["ref"] for c in code] == refs
+        for c in code:
+            assert c["file"] and c["line"] > 0, f"{c['ref']} did not resolve"
+            assert c["source"].lstrip().startswith(("def ", "class ", "@")), c["ref"]
+    # the STA chain really ends in the FFT cross-correlation
+    names = [c["name"] for c in pl.component_code("sta")]
+    assert names[:3] == ["run_cell_noise", "_run_cell_noise_seed", "load_seed_epochs"]
+    assert "reverse_correlation" in names
+    # an unresolvable reference is reported inline, never raised
+    pl.CODE_REFS["__probe"] = ["nosuch.module:fn"]
+    try:
+        bad = pl.component_code("__probe")
+        assert bad[0]["file"] == "" and bad[0]["source"].startswith("# source unavailable")
+    finally:
+        del pl.CODE_REFS["__probe"]
+
+
+def test_run_kwargs_carries_the_sta_filter_length():
+    p = pl.default_sta_pipeline()
+    assert pl.run_kwargs(p)["filter_s"] == 1.0
+    pl.node_of_type(p, "sta")["params"]["filter_s"] = 0.5
+    assert pl.run_kwargs(p)["filter_s"] == 0.5
+    pl.node_of_type(p, "sta")["params"]["filter_s"] = "junk"
+    assert pl.run_kwargs(p)["filter_s"] == 1.0
+    assert pl.run_kwargs(pl.default_flicker_pipeline())["filter_s"] == 1.0

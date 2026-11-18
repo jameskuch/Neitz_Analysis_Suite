@@ -19,7 +19,10 @@ new name.
 """
 from __future__ import annotations
 
+import importlib
+import inspect
 import json
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -108,10 +111,16 @@ COMPONENT_REGISTRY: dict = {
         "help": "Restrict the analysis to the [start, end] window (drops the adapting block).",
         "desc": ("Restricts the analysis to a [start, end] time window — typically to drop the "
                  "pre-stimulus adapting block and keep only the steady-state response. Blank "
-                 "start/end use the auto-detected stimulus window. 'crop' hard-trims; otherwise "
-                 "the window is a mask."),
+                 "start/end use the auto-detected stimulus window: the sync-bar envelope for a "
+                 "seeded noise / checkerboard file (exactly the stimulus frames — the 2 s "
+                 "pre-stimulus gray is excluded), the flicker detector's steady region for a square "
+                 "wave. 'crop' hard-trims; otherwise the window is a mask. The square-wave analysis "
+                 "and the signal-flow blocks consume only the spikes inside it; the STA / STRF do "
+                 "NOT use it — each seeded epoch is binned on the update grid measured from its "
+                 "own sync bar, so the window is implicit there."),
         "math": ["keep spikes with  t_start ≤ tⱼ ≤ t_end",
-                 "blank ⇒ auto window from the flicker envelope (t₀, t₁)"],
+                 "blank ⇒ auto window: envelope (t_on, t_off) of the sync bar for seeded noise,",
+                 "        flicker steady region (t₀, t₁) for a square wave"],
         "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "outputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "params": {
@@ -386,12 +395,20 @@ COMPONENT_REGISTRY: dict = {
         "color": "#b0392f",
         "help": "Temporal spike-triggered average from the seed-regenerated Gaussian noise.",
         "desc": ("Temporal spike-triggered average: the mean stimulus contrast in the window "
-                 "preceding each spike — the cell's linear temporal filter. The Gaussian-noise "
-                 "stimulus is regenerated from its seed (bit-identical to MATLAB), and the STA's "
-                 "FFT gives the temporal modulation-transfer function (tuning)."),
-        "math": ["STA(τ) = (1/N) Σⱼ v(tⱼ − τ),   v = linear stimulus contrast (mean-subtracted)",
-                 "τ ∈ [0, filter_s];  peak lag = the cell's response latency",
-                 "temporal MTF:  |FFT{ STA(τ) }|   (low-pass tuning peaking ~18–20 Hz)"],
+                 "preceding each spike — the cell's linear temporal filter. Per epoch: the "
+                 "Gaussian-noise stimulus is regenerated from its seed (bit-identical to MATLAB) "
+                 "as linear light v, the contrast v − mean is held across 6 response bins per "
+                 "update, the spikes are binned on the update grid MEASURED from the sync bar's "
+                 "middle segment (so spikes and frames are aligned automatically — no region or "
+                 "nudge involved), and the filter is the FFT cross-correlation of response and "
+                 "stimulus, both zero-padded by 60 bins (no circular wrap-around for lags up to "
+                 "60 bins). Epochs are averaged and the average divided by max|·|. The STA's FFT "
+                 "gives the temporal modulation-transfer function (tuning)."),
+        "math": ["per epoch:  r[n] = spikes in update bin n (6 bins per update, measured edges)",
+                 "            s[n] = v[n] − ⟨v⟩   (linear light, held across the 6 bins)",
+                 "            STAᵢ = Re IFFT( FFT([r, 0₆₀]) · conj FFT([s, 0₆₀]) )[0 : filter_len]",
+                 "STA = ⟨STAᵢ⟩ᵢ / max|⟨STAᵢ⟩ᵢ|,   filter_len = filter_s × (6 × update rate)",
+                 "peak lag = the cell's response latency;  temporal MTF = |FFT{ STA(τ) }|"],
         "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "outputs": [{"name": "result", "type": PORT_RESULT}],
         "terminal": "gaussian_noise",
@@ -407,7 +424,9 @@ COMPONENT_REGISTRY: dict = {
         "desc": ("Spatiotemporal receptive field: reverse-correlation of the spikes against the "
                  "seed-regenerated checkerboard, giving response as a function of space (x, y) and "
                  "time lag τ. The spatial slice at the peak lag is the receptive-field map."),
-        "math": ["STRF(x, y, τ) = (1/N) Σⱼ S(x, y, tⱼ − τ),   S = checkerboard contrast",
+        "math": ["STRF(x, y, τ) = (1/N) Σⱼ S(x, y, tⱼ − τ),   S = checkerboard contrast (v − ⟨v⟩)",
+                 "epochs concatenated in time; spikes binned on the MEASURED update clock (1 bin/update)",
+                 "one FFT cross-correlation per check, zero-padded by 60 bins, 30 taps (0.5 s)",
                  "spatial RF = STRF(·, ·, τ_peak);   temporal kernel = STRF(x₀, y₀, ·)"],
         "inputs": [{"name": "spikes", "type": PORT_SPIKES}],
         "outputs": [{"name": "result", "type": PORT_RESULT}],
@@ -452,6 +471,84 @@ COMPONENT_REGISTRY: dict = {
 
 # terminal component type -> stimulus family it runs under (mirrors run.analysis_for_stim_type)
 _TERMINALS = {t: c["terminal"] for t, c in COMPONENT_REGISTRY.items() if c.get("terminal")}
+
+# ---------------------------------------------------------------------------------------------
+# The code behind each component: the functions that ACTUALLY run for it, in call order, as
+# "module:qualname" references. The GUI shows their live source (inspect.getsource) next to the
+# node — never a hand-copied listing that could drift from what runs. A "viewer:" reference names
+# the Dash GUI module, which this package never imports; the GUI passes itself via `extra`.
+# ---------------------------------------------------------------------------------------------
+CODE_REFS = {
+    "source": ["neitz.io:load_recording", "neitz.io.abf:Recording.load", "neitz.io.abf:Recording.channel"],
+    "align": ["viewer:set_align_seed", "viewer:fine_align_offset",
+              "neitz.analysis.flicker:detect_flicker"],
+    "detect": ["neitz.spikes:detect_spikes", "neitz.spikes:detect_spikes_matlab"],
+    "region": ["neitz.spikes:in_region", "viewer:stim_window", "neitz.analysis.sync:stimulus_window",
+               "neitz.analysis.flicker:detect_flicker"],
+    "sf_bin": ["neitz.signal_flow:bin_spikes"],
+    "sf_resample": ["neitz.signal_flow:resample"],
+    "sf_smooth": ["neitz.signal_flow:smooth", "neitz.analysis.dsp:smooth_1d"],
+    "sf_filter": ["neitz.signal_flow:freq_filter", "neitz.analysis.dsp:apply_temporal_filter"],
+    "sf_detrend": ["neitz.signal_flow:detrend"],
+    "sf_window": ["neitz.signal_flow:window"],
+    "sf_fft": ["neitz.signal_flow:fft_power", "neitz.signal_flow:_power_1d"],
+    "sf_time": ["neitz.signal_flow:time_trace"],
+    "sf_isi": ["neitz.signal_flow:isi_hist"],
+    "smooth": ["viewer:pre_fft", "neitz.analysis.dsp:smooth_1d"],
+    "tfilter": ["viewer:pre_fft", "neitz.analysis.dsp:apply_temporal_filter"],
+    "flicker": ["neitz.run:run_cell_flicker", "neitz.stimulus.flicker:FlickerParadigm.analyze_recording",
+                "neitz.analysis.flicker:detect_flicker", "neitz.analysis.flicker:vector_strength",
+                "neitz.analysis.flicker:cycle_psth", "neitz.stimulus.flicker:FlickerParadigm.group_from_trials",
+                "neitz.analysis.flicker:shift_test"],
+    "sta": ["neitz.run:run_cell_noise", "neitz.run:_run_cell_noise_seed", "neitz.run:load_seed_epochs",
+            "neitz.analysis.sync:update_clock", "neitz.run:epoch_response_edges",
+            "neitz.io.stim:noise_from_record", "neitz.run:sta_from_records",
+            "neitz.stimulus.noise:NoiseParadigm.analyze", "neitz.analysis.revcorr:average_filter",
+            "neitz.analysis.revcorr:reverse_correlation", "neitz.analysis.revcorr:normalize_filter",
+            "neitz.analysis.revcorr:temporal_tuning"],
+    "strf": ["neitz.run:run_cell_checkerboard", "neitz.run:load_seed_epochs",
+             "neitz.analysis.sync:update_clock", "neitz.run:epoch_response_edges",
+             "neitz.io.stim:noise_from_record", "neitz.run:strf_from_records",
+             "neitz.stimulus.checkerboard:CheckerboardParadigm.analyze",
+             "neitz.analysis.strf:spatiotemporal_revcorr", "neitz.analysis.strf:spatial_rf"],
+    "figures": ["neitz.run:_save_seed_run", "neitz.plots:noise_sta_figure", "neitz.plots:strf_figure",
+                "neitz.plots:strf_grid_figure", "neitz.plots:flicker_onoff_figure",
+                "neitz.plots:flicker_cycle_grid", "viewer:export_window_figures",
+                "neitz.io.figures:save_figure"],
+}
+
+
+def _resolve_ref(ref, extra=None):
+    mod_name, _, qual = ref.partition(":")
+    mod = (extra or {}).get(mod_name)
+    if mod is None:
+        mod = importlib.import_module(mod_name)
+    obj = mod
+    for part in qual.split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
+def component_code(ctype, extra=None) -> list:
+    """``[{ref, name, file, line, source}]`` for the functions that run for component `ctype`, in
+    call order, read with `inspect` from the live modules — so it is the code that actually runs.
+    `extra` maps a pseudo-module name (e.g. ``"viewer"``) to a module object this package cannot
+    import. A reference that cannot be resolved yields a one-line ``source`` saying why."""
+    out = []
+    for ref in CODE_REFS.get(ctype, []):
+        name = ref.partition(":")[2]
+        try:
+            obj = _resolve_ref(ref, extra)
+            src = inspect.getsource(obj)
+            file = inspect.getsourcefile(obj) or ""
+            line = inspect.getsourcelines(obj)[1]
+        except Exception as e:                                    # a missing GUI module, say
+            out.append({"ref": ref, "name": name, "file": "", "line": 0,
+                        "source": f"# source unavailable here: {e}"})
+            continue
+        out.append({"ref": ref, "name": name, "file": os.path.basename(file), "line": int(line),
+                    "source": src})
+    return out
 
 
 def component_defaults(ctype) -> dict:
@@ -676,14 +773,20 @@ def region_from_pipeline(pipe) -> dict:
 
 
 def run_kwargs(pipe) -> dict:
-    """Assorted run knobs read off the graph (n_shuffle, 4K export flag, align mode)."""
+    """Assorted run knobs read off the graph (n_shuffle, 4K export flag, align mode, STA filter_s)."""
     fl = node_of_type(pipe, "flicker")
     fig = node_of_type(pipe, "figures")
     align = node_of_type(pipe, "align")
+    sta = node_of_type(pipe, "sta")
+    try:
+        filter_s = float(sta["params"].get("filter_s") or 1.0) if sta else 1.0
+    except (TypeError, ValueError):
+        filter_s = 1.0
     return {
         "n_shuffle": int(fl["params"].get("n_shuffle", 500)) if fl else 500,
         "export_4k": bool(fig["params"].get("export_4k", True)) if fig else True,
         "align_mode": align["params"].get("mode", "auto") if align else "off",
+        "filter_s": filter_s,                          # the STA node's filter length (s)
     }
 
 

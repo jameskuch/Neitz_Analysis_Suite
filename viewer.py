@@ -45,13 +45,15 @@ from dash import Dash, dcc, html, Input, Output, State, ctx, no_update, ALL
 from neitz.io import load_recording
 from neitz.io import stim as stim_io          # seed-based stim-manifest reader (aliased: local var `stim`)
 from neitz.io.importer import apply_import_plan, renumber_protocols  # plan → store; protocol renumber
-from neitz.spikes import detect_spikes
+from neitz.spikes import detect_spikes, in_region
 from neitz.analysis import flicker as flk
 from neitz.analysis import dsp                  # 1-D smoothing + temporal filtering (pre-FFT)
 from neitz.dataio import DataStore
 from neitz.run import run_cell_flicker, run_cell_noise, run_cell_checkerboard
 from neitz import pipeline as pipe            # analysis-pipeline model / storage / run mapping
 from neitz import signal_flow as sf           # discrete DSP block engine (evaluate signal pathways)
+from neitz import stepwise as sw              # per-node step-through evaluation (pipelines view)
+from neitz.analysis.sync import stimulus_window as _sync_window   # sync-bar envelope (noise window)
 
 # default browse location is the managed data store (~/Documents/ephysdataio)
 EPHYS_ROOT = os.path.expanduser(os.environ.get("EPHYSDATAIO_ROOT", "~/Documents/ephysdataio"))
@@ -465,6 +467,38 @@ def get_flicker(path, ttl_name):
     return fc[ttl_name]
 
 
+def stim_window(path, ttl_name):
+    """``(t0, t1, how)`` — the window a file's analysis region opens with (the 'Select region' node's
+    blank = auto). A seeded noise / checkerboard recording (store-manifest stimulus type) uses the
+    sync-bar ENVELOPE on the sync channel — `analysis.sync.stimulus_window`: first → last light =
+    exactly the stimulus frames, so the pre-/post-stimulus gray is excluded (2.69–195.0 s on
+    2026-11-12 0039). The manifest's `pre_stim_s` (2.0 s) is stimulus-relative and the Clampex →
+    first-frame latency differs per sweep (0.43–0.69 s that day), so the onset in recording time
+    has to be MEASURED, not read from the JSON. Everything else keeps the flicker detector's steady
+    region (`detect_flicker` — which on a noise file latches onto bit-plane pulses ~150 ms late:
+    that was the old 2.83 s default). `how` names the source for the meta line. Cached."""
+    rec = get_recording(path)
+    wc = _CACHE[path].setdefault("window", {})
+    if ttl_name not in wc:
+        win = None
+        stim = (_recording_for_path(path) or {}).get("stimulus") or {}
+        if stim.get("type") in sw.SEED_FAMILIES and getattr(rec, "protocol", "") != "csv-spikes":
+            try:
+                w = _sync_window(get_channel(path, ttl_name), rec.fs)
+                if w is not None:
+                    win = (round(float(w[0]), 2), round(float(w[1]), 2), "sync-bar envelope")
+            except Exception:
+                win = None
+        if win is None:
+            fl = get_flicker(path, ttl_name)
+            if fl:
+                win = (round(float(fl.t0), 2), round(float(fl.t1), 2), "flicker steady region")
+            else:
+                win = (0.0, round(float(rec.duration), 2), "whole recording")
+        wc[ttl_name] = win
+    return wc[ttl_name]
+
+
 def fine_align_offset(ref_ttl, ttl, fs, coarse_s, *, start_s=0.0, seg_s=4.0, search_s=0.25):
     """Refine a trial-alignment offset to SAMPLE precision by FFT cross-correlating the two TTL
     frame-sync waveforms (the flicker onset detector is only ~10 ms-block accurate). Returns the
@@ -755,6 +789,12 @@ _OV_H = "16px"   # shared overlay-box height: start / end+crop / show-spikes / s
 _START_OV = ov(top="34px", left="78px", height=_OV_H)
 _END_OV = ov(top="34px", right="20px", height=_OV_H, justifyContent="flex-end")
 _END_FIELDS = {"display": "flex", "alignItems": "center", "gap": "3px"}   # end (s) label+input
+# lower-panel overlays (FFT bin · 'view input' · ISI bin) — hidden when the lower panels show an
+# STA / STRF instead of the spike-power spectrum + ISI (see `render` / `lower_family`)
+_FFT_OV_BIN = ov(top="34px", left="62px")
+_FFT_OV_INPUT = ov(top="4px", left="6px")
+_ISI_OV_BIN = ov(top="34px", right="8px")
+_HIDDEN = {"display": "none"}
 
 
 # ============================================================
@@ -1410,8 +1450,10 @@ def render_pipe_node(node):
     min_body = _PPORT_Y0 + max(0, body_rows - 1) * _PPORT_DY
     body = html.Div(prows or [html.Div(spec.get("help", ""), style={"fontSize": "9px",
                                        "color": "#8a90a0", "fontStyle": "italic"})],
+                    title="click to step through: this component's output shows below the canvas",
                     style={"padding": "7px 9px", "minHeight": f"{max(14, min_body - _PHDR_H)}px"})
-    return html.Div([header, body] + port_dots,
+    # n_clicks: a click anywhere on the node SELECTS it for the step-through strip (pipe_select_node)
+    return html.Div([header, body] + port_dots, n_clicks=0,
                     id={"type": "pnode", "node": nid}, className="pnode",
                     **{"data-node": nid, "data-x": node.get("x", 40), "data-y": node.get("y", 40)},
                     style={"position": "absolute", "left": f"{node.get('x', 40)}px",
@@ -1483,6 +1525,22 @@ def render_pnode_detail(node):
                    "fontSize": "12.5px", "lineHeight": "1.5", "color": "#d7dbe6",
                    "background": "#12141a", "border": "1px solid #23262f", "borderRadius": "6px",
                    "padding": "10px 12px", "whiteSpace": "pre-wrap", "overflowX": "auto"}))
+
+    code = pipe.component_code(node["type"], extra={"viewer": sys.modules[__name__]})
+    if code:
+        blocks.append(section(f"Code that runs — {len(code)} function{'s' if len(code) != 1 else ''}, "
+                              "in call order"))
+        blocks.append(html.Div("Read live from the source files (inspect.getsource): this is the code "
+                               "▶ Run executes for this component, not a copy.",
+                               style={"fontSize": "11px", "color": "#8a90a0", "marginBottom": "6px"}))
+        blocks.append(html.Div([
+            html.Details([
+                html.Summary([html.Code(c["name"]),
+                              html.Span(f"   {c['file']}:{c['line']}" if c["file"] else "",
+                                        style={"color": "#8a90a0", "fontSize": "11px"})]),
+                html.Pre(c["source"], className="pcode"),
+            ], open=(i == 0), className="pcode-item")
+            for i, c in enumerate(code)]))
 
     fbs = spec.get("figures_by_stim")
     if fbs:
@@ -1558,7 +1616,7 @@ def _pipeline_spikes(files, chan, detect, abs_map, rstart, rend, align_map):
             continue
         rs = float(rstart) if rstart is not None else (float(at.min()) if at.size else 0.0)
         re_ = float(rend) if rend is not None else (float(at.max()) if at.size else 1.0)
-        spikes.append(at[(at >= rs) & (at <= re_)])
+        spikes.append(in_region(at, rs, re_))
         t0s.append(rs); t1s.append(re_)
     if not spikes:
         return [], 0.0, 1.0
@@ -1588,6 +1646,162 @@ def _sink_figure(spec, label):
                       font=dict(size=9, color="#aab2c5"),
                       legend=dict(font=dict(size=8), orientation="h", y=-0.28))
     return fig
+
+
+def _block_figure(block, title=None, dark=False, height=None):
+    """A plotly figure for one step-through block (`neitz.stepwise` kinds traces / bars / heatmap /
+    raster). `dark` styles it for the pipelines strip; the Analysis View uses the light default."""
+    kind = block.get("kind")
+    fig = go.Figure()
+    if kind in ("traces", "bars"):
+        trs = block.get("traces", []) or []
+        for tr in trs:
+            if kind == "bars":
+                fig.add_trace(go.Bar(x=np.asarray(tr["x"]), y=np.asarray(tr["y"]),
+                                     name=tr.get("name", ""), marker_color=tr.get("color", "#8a63c0")))
+                continue
+            line = dict(width=tr.get("width", 1.2))
+            if tr.get("color"):
+                line["color"] = tr["color"]
+            if tr.get("dash"):
+                line["dash"] = tr["dash"]
+            fig.add_trace(go.Scattergl(x=np.asarray(tr["x"]), y=np.asarray(tr["y"]), mode="lines",
+                                       name=tr.get("name", ""), line=line))
+        for x in block.get("vlines") or []:
+            fig.add_vline(x=x, line_dash="dash", line_color="#d9534f", line_width=1)
+        if kind == "traces":
+            fig.add_hline(y=0, line_color="#888", line_width=0.6)
+        fig.update_layout(xaxis_title=block.get("x_title", ""), yaxis_title=block.get("y_title", ""),
+                          showlegend=1 < len(trs) <= 6)
+        if block.get("xrange"):
+            fig.update_xaxes(range=list(block["xrange"]))
+    elif kind == "heatmap":
+        z = np.asarray(block["z"], float)
+        vmax = float(np.max(np.abs(z))) if z.size else 1.0
+        fig.add_trace(go.Heatmap(z=z, colorscale="RdBu", reversescale=True, zmin=-(vmax or 1.0),
+                                 zmax=(vmax or 1.0), colorbar=dict(thickness=10)))
+        if block.get("mark"):
+            py, px = block["mark"]
+            fig.add_trace(go.Scatter(x=[px], y=[py], mode="markers", showlegend=False,
+                                     marker=dict(symbol="x", size=13, color="black",
+                                                 line=dict(width=2, color="black"))))
+        fig.update_yaxes(autorange="reversed", title_text="y check", scaleanchor="x")
+        fig.update_xaxes(title_text="x check")
+        fig.update_layout(showlegend=False)
+    elif kind == "raster":
+        for i, (ep, nm) in enumerate(zip(block.get("epochs", []), block.get("names", []))):
+            ep = np.asarray(ep, float)
+            fig.add_trace(go.Scattergl(x=ep, y=np.full(ep.size, i + 1), mode="markers", name=nm,
+                                       marker=dict(symbol="line-ns-open", size=7,
+                                                   color=PALETTE[i % len(PALETTE)]),
+                                       showlegend=False))
+        if block.get("window"):
+            w = block["window"]
+            fig.add_vrect(x0=w[0], x1=w[1], fillcolor="#7fdc9f", opacity=0.12, line_width=0)
+        fig.update_layout(xaxis_title="time (s)", yaxis_title="epoch", showlegend=False)
+        fig.update_yaxes(dtick=1)
+    t = title if title is not None else block.get("title", "")
+    fig.update_layout(title=dict(text=t, x=0.5, xanchor="center", font=dict(size=11)),
+                      margin=dict(l=48, r=12, t=30, b=34), height=height, font=dict(size=9),
+                      legend=dict(font=dict(size=8)))
+    if dark:
+        fig.update_layout(template="plotly_dark", paper_bgcolor="#12141a", plot_bgcolor="#12141a",
+                          font=dict(color="#aab2c5"), title_font_color="#d7dbe6")
+    return fig
+
+
+def _step_table(block):
+    return html.Table([
+        html.Thead(html.Tr([html.Th(c) for c in block.get("columns", [])])),
+        html.Tbody([html.Tr([html.Td(str(v)) for v in row]) for row in block.get("rows", [])]),
+    ], className="pstep-table")
+
+
+_SEED_CACHE: dict = {}       # live STA / STRF of a selection — see live_family_output
+
+
+def live_family_output(fam, files, chan, ttl_name, detect, abs_map, filter_s=1.0):
+    """`stepwise.family_output` (the STA / STRF node's step-through result — the SAME engine as
+    ▶ Run: measured update clock per epoch, the run's bins per update) for a selection, cached on
+    everything it depends on: family, files, channels, detection, per-trace thresholds and the
+    filter length. A zoom, a region edit or a nudge never recomputes it."""
+    key = json.dumps([fam, sorted(files), chan, ttl_name, detect, abs_map or {}, filter_s],
+                     sort_keys=True, default=str)
+    hit = _SEED_CACHE.get(key)
+    if hit is None:
+        if len(_SEED_CACHE) >= 12:
+            _SEED_CACHE.clear()
+        ctx_ = dict(files=list(files), chan=chan, ttl=ttl_name, detect=detect, abs_map=abs_map or {},
+                    filter_s=filter_s, load=get_recording)
+        hit = _SEED_CACHE[key] = sw.family_output(ctx_, fam, filter_s=filter_s)
+    return hit
+
+
+def _step_ctx(files, chan, ttl, detect, absth_map, rstart, rend, region_mode, align_map, fft_bin):
+    """The live Analysis-View state as a `neitz.stepwise` context."""
+    return dict(files=[f for f in (files or []) if f and loadable(f)], chan=chan, ttl=ttl,
+                detect=detect, abs_map=absth_map or {},
+                region={"start": rstart, "end": rend, "crop": "crop" in (region_mode or [])},
+                align_map=align_map or {}, load=get_recording,
+                fft_bin_ms=float(fft_bin) if fft_bin else 5.0, n_shuffle=100,
+                stim_of=lambda p: (_recording_for_path(p) or {}).get("stimulus"))
+
+
+def _step_panel(graph, nid, ctx_):
+    """The step-through strip for ONE selected node: header (title · summary · ⓘ math & code ·
+    ✕), then its notes / tables / text on the left and its figures beside."""
+    node = next((n for n in graph.get("nodes", []) if n["id"] == nid), None)
+    if node is None:
+        return None
+    if node["type"] in ("sta", "strf"):                 # the cached live result (shared with the
+        fam = pipe._TERMINALS[node["type"]]             # Analysis View's lower panels)
+        try:
+            fs_ = float(node.get("params", {}).get("filter_s") or 1.0)
+        except (TypeError, ValueError):
+            fs_ = 1.0
+        out = live_family_output(fam, ctx_["files"], ctx_["chan"], ctx_["ttl"], ctx_["detect"],
+                                 ctx_["abs_map"], fs_)
+    else:
+        out = sw.node_output(graph, nid, ctx_)
+    hdr = html.Div([
+        html.Span("step-through", style={"fontSize": "10px", "letterSpacing": "0.06em",
+                                         "textTransform": "uppercase", "color": "#8a90a0"}),
+        html.Span(out["title"], style={"fontSize": "13px", "fontWeight": "700", "color": "#f0f2f7",
+                                       "margin": "0 6px"}),
+        html.Span(out.get("summary", ""), style={"fontSize": "11px", "color": "#c8ccd6", "flex": "1",
+                                                 "overflow": "hidden", "textOverflow": "ellipsis"}),
+        html.Button("ⓘ math & code", id="pipe-step-info", n_clicks=0, className="pipe-btn",
+                    title="open this component's breakout panel: description, math, the code that runs"),
+        html.Button("✕", id="pipe-unselect", n_clicks=0, className="pipe-btn",
+                    title="back to the display sinks"),
+    ], style={"display": "flex", "alignItems": "center", "gap": "6px", "padding": "4px 8px",
+              "borderBottom": "1px solid #23262f", "flex": "0 0 auto"})
+    info, cards = [], []
+    for n in out.get("notes", []):
+        info.append(html.Div("• " + str(n), style={"fontSize": "10.5px", "color": "#aab2c5",
+                                                  "margin": "1px 0", "lineHeight": "1.35"}))
+    for b in out.get("blocks", []):
+        k = b.get("kind")
+        if k == "table":
+            info.append(html.Div(_step_table(b), style={"marginTop": "5px", "overflowX": "auto"}))
+        elif k == "text":
+            info += [html.Div(str(ln), style={"fontSize": "11px", "color": "#d7dbe6",
+                                              "whiteSpace": "pre-wrap"}) for ln in b.get("lines", [])]
+        elif k == "error":
+            info.append(html.Div("⚠ " + str(b.get("error", "")),
+                                 style={"fontSize": "11px", "color": "#e6a3a3", "marginTop": "4px"}))
+        else:
+            cards.append(html.Div(
+                dcc.Graph(figure=_block_figure(b, dark=True, height=240),
+                          config={"displayModeBar": False}, style={"height": "240px"}),
+                style={"flex": "0 0 380px", "minWidth": "380px", "border": "1px solid #23262f",
+                       "borderRadius": "6px"}))
+    left = html.Div(info or [html.Div("—", style=_PIPE_HINT)],
+                    style={"flex": "0 0 440px", "minWidth": "440px", "overflow": "auto",
+                           "padding": "6px 8px", "maxHeight": "250px"})
+    return [hdr, html.Div([left] + cards, style={"display": "flex", "gap": "8px",
+                                                "alignItems": "flex-start", "overflowX": "auto",
+                                                "padding": "4px"})]
 
 
 # ============================================================
@@ -2062,14 +2276,14 @@ app.layout = html.Div(
                       html.Div([html.Span("fft bin (ms)", style=_OVL),
                                 dcc.Input(id="fft-bin", type="number", value=5, min=1, step=1,
                                           debounce=True, style=dict(_OVI, width="42px"), **PERSIST)],
-                               style=ov(top="34px", left="62px")),
+                               id="fft-ovl-bin", style=_FFT_OV_BIN),
                       # view input: swap the power spectrum for the exact array fed to power_w
                       # (spikes binned at the fft bin, mean-subtracted, over the region)
                       html.Div([dcc.Checklist(id="fft-input", className="cb-right",
                                               options=[{"label": " view input", "value": "on"}],
                                               value=[], inline=True,
                                               labelStyle={"fontSize": "10px"}, **PERSIST)],
-                               style=ov(top="4px", left="6px"))],   # above the spectrum, not over it
+                               id="fft-ovl-input", style=_FFT_OV_INPUT)],   # above the spectrum
                      style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}),
             # ISI histogram with the spike-train bin control floated inside, below the toolbar
             html.Div([dcc.Graph(id="isi", style={"height": "100%"}, config={"responsive": True},
@@ -2078,7 +2292,7 @@ app.layout = html.Div(
                                           title="ISI bin width in ms — 0 = auto (~60 bins)"),
                                 dcc.Input(id="train-bin", type="number", value=0, min=0,
                                           debounce=True, style=dict(_OVI, width="48px"), **PERSIST)],
-                               style=ov(top="34px", right="8px"))],
+                               id="isi-ovl-bin", style=_ISI_OV_BIN)],
                      style={"flex": "1 1 0", "minWidth": 0, "position": "relative"}),
         ]),
     ]),
@@ -2099,6 +2313,8 @@ app.layout = html.Div(
     dcc.Store(id="pipe-rev", data=0),                     # bumped on save/delete → refresh #pipe-select
     dcc.Store(id="pipe-armed"),                           # {node,port} of a "clicked output" awaiting a target
     dcc.Store(id="pnode-detail"),                         # node id whose breakout panel is open (None = closed)
+    dcc.Store(id="pipe-selected"),                        # node id being stepped through (None = show sinks)
+    dcc.Store(id="pipe-sel-tick"),                        # clientside selected-node highlight sink
     dcc.Input(id="pipe-drag-sink", value="", style={"display": "none"}),     # JS: "node|x|y" on drag-end
     dcc.Input(id="pipe-connect-sink", value="", style={"display": "none"}),  # JS: "fromN|fromP|toN|toP" on connect
     dcc.Store(id="pipe-draw-tick"),                       # clientside connection-redraw sink
@@ -2181,10 +2397,13 @@ app.layout = html.Div(
         ]),
         # results strip — the live output of each display sink (FFT Power / Time trace / ISI) in the
         # graph renders here (pipe_eval), recomputed as you edit the pathway or the cell selection.
+        # … or, with a node SELECTED (click its body), that one component's output: its summary,
+        # notes and tables on the left, its figures beside — the step-through (`_step_panel`).
         html.Div(id="pipe-results",
-                 style={"flex": "0 0 auto", "maxHeight": "240px", "overflowX": "auto",
-                        "overflowY": "hidden", "display": "flex", "gap": "8px",
-                        "marginTop": "8px", "alignItems": "stretch"}),
+                 style={"flex": "0 0 auto", "maxHeight": "330px", "overflow": "auto",
+                        "display": "flex", "flexDirection": "column", "gap": "4px",
+                        "marginTop": "8px", "background": "#12141a",
+                        "border": "1px solid #23262f", "borderRadius": "6px"}),
     ]),
 
     # ===== node BREAKOUT PANEL (large detail: description + math + settable variables) =====
@@ -2473,16 +2692,18 @@ def load_meta(files):
         return [], None, [], None, msg, None, None
     opts = [{"label": n, "value": n} for n in rec.channel_names]
     ttl_default = next((n for n in rec.channel_names if "ttl" in n.lower()), rec.channel_names[-1])
-    fl = get_flicker(used, ttl_default)
-    rstart = round(fl.t0, 2) if fl else 0.0
-    rend = round(fl.t1, 2) if fl else round(rec.duration, 2)
+    rstart, rend, how = stim_window(used, ttl_default)
     md = rec.metadata()
     fields = "  ·  ".join(str(md[k]) for k in
                           ["file", "protocol", "sample rate", "duration", "channels",
                            "recorded", "creator"] if k in md)
     n = len(files)
-    txt = (f"{n} file{'s' if n != 1 else ''} selected (region from {os.path.basename(used)})"
-           f"   ·   {fields}")
+    stim_p = ((_recording_for_path(used) or {}).get("stimulus") or {}).get("params") or {}
+    pre, post = stim_p.get("pre_stim_s"), stim_p.get("post_stim_s")
+    pp = (f"; manifest pre-stim {float(pre):.2f} s / post {float(post):.2f} s are stimulus-relative"
+          if isinstance(pre, (int, float)) and isinstance(post, (int, float)) else "")
+    txt = (f"{n} file{'s' if n != 1 else ''} selected (region {rstart:g}–{rend:g} s = {how} of "
+           f"{os.path.basename(used)}{pp})   ·   {fields}")
     return opts, rec.channel_names[0], opts, ttl_default, txt, rstart, rend
 
 
@@ -2504,9 +2725,55 @@ def toggle_disp_show(binned):
     return {"display": "inline-block"}
 
 
+def lower_family(run_pipeline, files):
+    """Which analysis the Analysis View's lower panels show: the chosen pipeline's terminal family,
+    else the checked files' manifest stimulus type (the first seeded file wins), else square wave
+    (the spike-power spectrum + ISI histogram)."""
+    if run_pipeline:
+        try:
+            fam = pipe.pipeline_stim_family(pipe.load_pipeline(run_pipeline) or {})
+            if fam:
+                return fam
+        except Exception:
+            pass
+    for p_ in files or []:
+        t = ((_recording_for_path(p_) or {}).get("stimulus") or {}).get("type")
+        if t in sw.SEED_FAMILIES:
+            return t
+    return "sq_wave"
+
+
+def seed_panels(fam, files, chan, ttl_name, detect, abs_map, run_pipeline=None):
+    """The Analysis View's lower panels for an STA / STRF pipeline: the LIVE result of the checked
+    files (what ▶ Run would save) — STA: the linear filter (per-epoch faint, average bold) | its
+    temporal tuning; STRF: the spatial RF at the peak lag | the temporal filter at the peak check.
+    The second title carries the spikes↔frames evidence (how many epochs sit on a measured clock)."""
+    if not files:
+        return blank_fig("check seeded files"), blank_fig("")
+    filter_s = 1.0
+    if run_pipeline:
+        try:
+            filter_s = pipe.run_kwargs(pipe.load_pipeline(run_pipeline) or {}).get("filter_s", 1.0)
+        except Exception:
+            pass
+    out = live_family_output(fam, files, chan, ttl_name, detect, abs_map, filter_s)
+    figs = [b for b in out["blocks"] if b.get("kind") in ("traces", "heatmap")]
+    if not figs:
+        err = next((b.get("error") for b in out["blocks"] if b.get("kind") == "error"), "no result")
+        return blank_fig(f"{out['title']}: {err}"), blank_fig("")
+    label = {"gaussian_noise": "STA", "checkerboard": "STRF"}.get(fam, fam)
+    clock = out.get("clock", "")
+    f1 = _block_figure(figs[0], title=f"live {label} · {out.get('summary', '')}")
+    f2 = (_block_figure(figs[1], title=figs[1].get("title", "") + (f"  ·  {clock}" if clock else ""))
+          if len(figs) > 1 else blank_fig(""))
+    return f1, f2
+
+
 # ---- render time + fft -----------------------------------------------------
 @app.callback(Output("time", "figure"), Output("fft", "figure"), Output("isi", "figure"),
               Output("readout", "children"),
+              Output("fft-ovl-bin", "style"), Output("fft-ovl-input", "style"),
+              Output("isi-ovl-bin", "style"),
               Input("file", "value"), Input("chan", "value"), Input("ttl", "value"),
               Input("polarity", "value"), Input("method", "value"), Input("k", "value"),
               Input("absth", "value"), Input("refr", "value"),
@@ -2520,24 +2787,44 @@ def toggle_disp_show(binned):
               Input("smooth-poly", "value"), Input("tfilt-mode", "value"),
               Input("tfilt-cut", "value"), Input("tfilt-type", "value"),
               Input("tfilt-order", "value"), Input("tfilt-taps", "value"),
-              Input("time", "relayoutData"), prevent_initial_call=True)
+              Input("time", "relayoutData"), Input("run-pipeline", "value"),
+              prevent_initial_call=True)
 def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
            disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map, fft_bin,
            align_map, group, fft_input, smooth_win, smooth_method, smooth_poly,
-           tfilt_mode, tfilt_cut, tfilt_type, tfilt_order, tfilt_taps, relayout):
+           tfilt_mode, tfilt_cut, tfilt_type, tfilt_order, tfilt_taps, relayout, run_pipeline):
+    """The time graph + the LOWER PANELS. The lower pair follows the pipeline (`lower_family`): a
+    square-wave family shows the spike-power spectrum + ISI histogram (the overlays' boxes apply);
+    an STA / STRF family shows that analysis' live result (`seed_panels`) and hides the FFT / ISI
+    overlays. A zoom (trig 'time') redraws only the time graph; a pipeline change only the lower
+    pair."""
+    NOPE = (no_update,) * 7
     # a boundary-line DRAG fires this relayout too; let the (clientside) drag_region update
     # region-start/end (which re-renders cleanly) instead of redrawing here with the OLD region —
     # that redraw is what snaps the dragged line back. Match BOTH relayout shapes: individual
     # "shapes[0].x0" keys AND a full "shapes" array (WKWebView / some Plotly builds emit the latter).
     if (ctx.triggered_id == "time" and relayout
             and any(str(kk).startswith("shapes") for kk in relayout)):
-        return no_update, no_update, no_update, no_update
+        return NOPE
     smooth, tfilt = _cond_dicts(smooth_win, smooth_method, smooth_poly,
                                 tfilt_mode, tfilt_cut, tfilt_type, tfilt_order, tfilt_taps)
-    return build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
-                         disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
-                         fft_bin=fft_bin, align_map=align_map, group=group, fft_input=fft_input,
-                         relayout=relayout, trig=ctx.triggered_id, smooth=smooth, tfilt=tfilt)
+    time_fig, fft_fig, isi_fig, readout = build_figures(
+        files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend,
+        disp_show, disp_binned, stagger_pct, region_mode, train_bin, absth_map,
+        fft_bin=fft_bin, align_map=align_map, group=group, fft_input=fft_input,
+        relayout=relayout, trig=ctx.triggered_id, smooth=smooth, tfilt=tfilt)
+    if time_fig is no_update:
+        return NOPE
+    if ctx.triggered_id == "time":                      # zoom / pan: only the time graph changes
+        return time_fig, no_update, no_update, readout, no_update, no_update, no_update
+    fam = lower_family(run_pipeline, files)
+    if fam in sw.SEED_FAMILIES:                         # STA / STRF: the live result, not FFT + ISI
+        left, right = seed_panels(fam, [f for f in (files or []) if f and loadable(f)], chan,
+                                  ttl_name, _live_detect(polarity, method, k, absth, refr),
+                                  absth_map, run_pipeline)
+        tf = no_update if ctx.triggered_id == "run-pipeline" else time_fig
+        return tf, left, right, readout, _HIDDEN, _HIDDEN, _HIDDEN
+    return time_fig, fft_fig, isi_fig, readout, _FFT_OV_BIN, _FFT_OV_INPUT, _ISI_OV_BIN
 
 
 # Dragging a start/end boundary line (shapes[0]=start, shapes[1]=end, both editable) writes the new x
@@ -2561,19 +2848,30 @@ app.clientside_callback(
             var s = 0; v.forEach(function(z){ s += z; });
             return Math.round((s / v.length) * 1000) / 1000;
         }
-        // format A: individual dotted keys  shapes[0].x0, shapes[0].x1, shapes[1].x0, ...
+        // format A: individual dotted keys  shapes[i].x0 / .x1. shapes[0] = the start line and
+        // shapes[2] its grab handle in the gap between the graphs; shapes[1] / [3] = end + handle.
         var a0, a1, b0, b1;
         for(var k in rl){
-            if(k === 'shapes[0].x0') a0 = rl[k];
-            else if(k === 'shapes[0].x1') a1 = rl[k];
-            else if(k === 'shapes[1].x0') b0 = rl[k];
-            else if(k === 'shapes[1].x1') b1 = rl[k];
+            if(k === 'shapes[0].x0' || k === 'shapes[2].x0') a0 = rl[k];
+            else if(k === 'shapes[0].x1' || k === 'shapes[2].x1') a1 = rl[k];
+            else if(k === 'shapes[1].x0' || k === 'shapes[3].x0') b0 = rl[k];
+            else if(k === 'shapes[1].x1' || k === 'shapes[3].x1') b1 = rl[k];
         }
         var start = mid(a0, a1), end = mid(b0, b1);
-        // format B: a full shapes[] array (only override if format A didn't supply the value)
+        // format B: a full shapes[] array (only if format A didn't supply the value). Line and
+        // handle are twins, so the one that differs from the box's current value is the one moved.
         if(rl.shapes && rl.shapes.length){
-            if(start === NO && rl.shapes[0]) start = mid(rl.shapes[0].x0, rl.shapes[0].x1);
-            if(end   === NO && rl.shapes[1]) end   = mid(rl.shapes[1].x0, rl.shapes[1].x1);
+            var cur = function(id){ var el = document.getElementById(id); return el ? +el.value : NaN; };
+            var moved = function(i, j, now){
+                var vs = [];
+                [i, j].forEach(function(q){ var sh = rl.shapes[q];
+                    if(sh){ var v = mid(sh.x0, sh.x1); if(v !== NO) vs.push(v); } });
+                if(!vs.length) return NO;
+                var diff = vs.filter(function(v){ return isNaN(now) || Math.abs(v - now) > 1e-6; });
+                return diff.length ? diff[0] : vs[0];
+            };
+            if(start === NO) start = moved(0, 2, cur('region-start'));
+            if(end   === NO) end   = moved(1, 3, cur('region-end'));
         }
         return [start, end];
     }
@@ -2584,10 +2882,23 @@ app.clientside_callback(
     prevent_initial_call=True)
 
 
+def _subplot_gap(fig):
+    """``(y_lo, y_hi)`` in paper coordinates of the gap between the signal row (yaxis) and the
+    frame-sync row (yaxis2) of a two-row subplot figure; ``(0, 0)`` for a single-axis figure."""
+    try:
+        d1, d2 = fig.layout.yaxis.domain, fig.layout.yaxis2.domain
+        if d1 and d2:
+            return float(d2[1]), float(d1[0])
+    except Exception:
+        pass
+    return 0.0, 0.0
+
+
 def add_region_shapes(fig, rs, re_, t0_full, t1_full, crop=False):
     """The analysis-region overlay of the time graph: ALWAYS-draggable boundary lines = shapes[0]
-    (start) and shapes[1] (end) — a drag repositions one and on release `drag_region` writes its new
-    x back to the start / end box — then, unless cropping, the gray excluded-region shading.
+    (start) and shapes[1] (end), their gap grab-handles = shapes[2] / [3] — a drag repositions one
+    and on release `drag_region` writes its new x back to the start / end box — then, unless
+    cropping, the gray excluded-region shading.
 
     The lines are added FIRST so their indices stay 0 & 1. The graph config's `edits.shapePosition`
     makes EVERY shape draggable (a shape's own `editable=False` has no effect in that mode) and
@@ -2599,6 +2910,15 @@ def add_region_shapes(fig, rs, re_, t0_full, t1_full, crop=False):
     for xb in (rs, re_):
         fig.add_shape(type="line", xref="x", yref="paper", x0=xb, x1=xb, y0=0, y1=1,
                       line=dict(color="#e4604e", width=2.5), editable=True)
+    # shapes[2] / [3]: short THICK grab handles in the gap between the signal and frame-sync rows —
+    # the place James reaches for a boundary; the full-height line's own hit zone there is just its
+    # hit-path (10 px, widened to 24 px by viewer.css). A handle is a line shape too (no resize
+    # ambiguity) and drag_region maps it onto the same start / end box.
+    lo, hi = _subplot_gap(fig)
+    if hi > lo:
+        for xb in (rs, re_):
+            fig.add_shape(type="line", xref="x", yref="paper", x0=xb, x1=xb, y0=lo, y1=hi,
+                          line=dict(color="#e4604e", width=9), opacity=0.85, editable=True)
     if crop:
         return fig
     for (a, b, lbl, pos) in [(t0_full, rs, "excluded (adapting)", "bottom left"),
@@ -2684,7 +3004,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     time_fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
                              row_heights=[0.625, 0.375])     # frame-sync row enlarged ×1.25
     fft_fig = go.Figure()
-    per_file_rates, stim_freqs, isi_all = [], [], []
+    per_file_rates, stim_freqs, isi_all, noise_rates = [], [], [], []
 
     # group mode: incrementally average the ALIGNED analog + TTL onto one common display grid, so
     # ≥3 files collapse to a single mean trace (memory-safe: keep running sum+count, not all arrays).
@@ -2710,7 +3030,14 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
         color = PALETTE[idx % len(PALETTE)]
         name = os.path.basename(path)
         fl = get_flicker(path, ttl_name)
-        stim_freqs.append(fl.freq if fl else None)
+        stim_rec = (_recording_for_path(path) or {}).get("stimulus") or {}
+        if stim_rec.get("type") in sw.SEED_FAMILIES:   # noise: no flicker frequency — its update rate
+            stim_freqs.append(None)
+            upd = (stim_rec.get("params") or {}).get("noise_update_hz")
+            if isinstance(upd, (int, float)):
+                noise_rates.append(float(upd))
+        else:
+            stim_freqs.append(fl.freq if fl else None)
 
         # per-file trial-alignment nudge (s): shifts this file's analog, TTL AND spikes together,
         # so trial starts line up across files. i0/i1 sample the ORIGINAL data for the window that,
@@ -2732,7 +3059,7 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
         det_i = dict(det, abs_threshold=(float(eff_abs) if eff_abs is not None else None))
         st = detect_spikes(y, fs, **det_i)
         at = st.times + off                          # spike times in aligned (display) coordinates
-        in_reg = at[(at >= rs) & (at <= re_)]
+        in_reg = in_region(at, rs, re_)
         if len(in_reg) > 1:
             isi_all.append(np.diff(in_reg) * 1000.0)     # ms, for the ISI histogram (offset cancels)
         y_disp = y
@@ -2916,6 +3243,10 @@ def build_figures(files, chan, ttl_name, polarity, method, k, absth, refr, rstar
     freqs = sorted({round(s, 2) for s in stim_freqs if s})
     freq_txt = (f" · stim {freqs[0]:.2f} Hz" if len(freqs) == 1
                 else f" · stim {min(freqs):.2f}–{max(freqs):.2f} Hz" if freqs else "")
+    upds = sorted({round(u, 2) for u in noise_rates})
+    if upds:
+        freq_txt += (f" · noise update {upds[0]:.2f} Hz" if len(upds) == 1
+                     else f" · noise update {upds[0]:.2f}–{upds[-1]:.2f} Hz")
     label = (f"{len(files)} files · GROUP average" if do_group
              else f"{len(files)} files" if multi else "1 file")
     readout = f"{label} · region {rs:.2f}–{re_:.2f}s · {view} view{freq_txt}"
@@ -3766,27 +4097,30 @@ def _attach_output_files(ds, date, cell, analysis, saved):
 # one-line summary string. `kind` ∈ gaussian_noise | checkerboard | (anything else → flicker).
 def _run_one(ds, s, kind, *, raw_name, user_name, detect, abs_map, checked, chan, ttl,
              n_shuffle, rstart, rend, region_mode, stagger_pct, disp_show, disp_binned, train_bin,
-             fft_bin, align_map, smooth=None, tfilt=None):
+             fft_bin, align_map, smooth=None, tfilt=None, filter_s=1.0):
     tag = f"{s['date']}/{s['cell']}"
     cm = ds.cell(s["date"], s["cell"])
+    cmdir = str(cm.dir)
+    # the CHECKED files of this cell are the run's epochs (every family); none checked → all
+    sub = [f for f in (checked or []) if f.startswith(cmdir) and f.endswith(".abf")]
     try:
         if kind == "gaussian_noise":                     # temporal STA (seed → reverse correlation)
             nm = user_name or "sta"
             r = run_cell_noise(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
-                               chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
+                               chan=chan, ttl=ttl, detect=detect, abs_map=abs_map,
+                               include=(sub or None), filter_s=float(filter_s or 1.0))
             sm = r.summary[0]
             return f"{tag} [{nm}]: STA {sm['n_epochs']} epochs, peak {sm['peak_ms']:.1f} ms {sm['peak_sign']}"
         if kind == "checkerboard":                       # spatiotemporal STRF (seed → reverse corr.)
             nm = user_name or "strf"
             r = run_cell_checkerboard(ds, s["date"], s["cell"], name=nm, run_label=raw_name or None,
-                                      chan=chan, ttl=ttl, detect=detect, abs_map=abs_map)
+                                      chan=chan, ttl=ttl, detect=detect, abs_map=abs_map,
+                                      include=(sub or None))
             sm = r.summary[0]
             return (f"{tag} [{nm}]: STRF {sm['n_epochs']} epochs, "
                     f"peak (y{sm['peak_y']},x{sm['peak_x']}) {sm['peak_time_ms']:.1f} ms")
         # default: square-wave (flicker) ON/OFF
         nm = user_name or "flicker"
-        cmdir = str(cm.dir)
-        sub = [f for f in (checked or []) if f.startswith(cmdir) and f.endswith(".abf")]
         r = run_cell_flicker(ds, s["date"], s["cell"], n_shuffle=int(n_shuffle or 500),
                              name=nm, include=(sub or None),
                              detect=detect, abs_map=abs_map, run_label=raw_name or None)
@@ -3888,7 +4222,8 @@ def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, abst
     checked = [c for c in (checked or []) if c]
     sel_pipe = pipe.load_pipeline(run_pipeline) if run_pipeline else None
     pipe_name = (sel_pipe.get("name") if sel_pipe else "") or ""
-    n_shuffle = pipe.run_kwargs(sel_pipe)["n_shuffle"] if sel_pipe else 500
+    rk = pipe.run_kwargs(sel_pipe) if sel_pipe else {}
+    n_shuffle, filter_s = rk.get("n_shuffle", 500), rk.get("filter_s", 1.0)
     # pre-FFT conditioning: a chosen pipeline's Smooth / Temporal-filter NODES win (the graph is
     # what's being run); otherwise the live sidebar controls apply.
     live_sm, live_tf = _cond_dicts(smooth_win, smooth_method, smooth_poly, tfilt_mode, tfilt_cut,
@@ -3906,7 +4241,8 @@ def run_cell(_n, sel, checked, run_name, run_pipeline, polarity, method, k, abst
                              abs_map=abs_map, checked=checked, chan=chan, ttl=ttl, n_shuffle=n_shuffle,
                              rstart=rstart, rend=rend, region_mode=region_mode, stagger_pct=stagger_pct,
                              disp_show=disp_show, disp_binned=disp_binned, train_bin=train_bin,
-                             fft_bin=fft_bin, align_map=align_map, smooth=smooth, tfilt=tfilt))
+                             fft_bin=fft_bin, align_map=align_map, smooth=smooth, tfilt=tfilt,
+                             filter_s=filter_s))
     return _run_banner(msgs), (_n or 1)
 
 
@@ -3945,7 +4281,8 @@ def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr
     raw_name = (run_name or "").strip()
     pipe_name = graph.get("name") or ""
     detect = _live_detect(polarity, method, k, absth, refr)
-    n_shuffle = pipe.run_kwargs(graph)["n_shuffle"]
+    rk = pipe.run_kwargs(graph)
+    n_shuffle, filter_s = rk["n_shuffle"], rk["filter_s"]
     # the EDITED graph's Smooth / Temporal-filter nodes drive this run; live sidebar controls
     # fill in whichever node the graph doesn't contain.
     live_sm, live_tf = _cond_dicts(smooth_win, smooth_method, smooth_poly, tfilt_mode, tfilt_cut,
@@ -3961,7 +4298,7 @@ def pipe_run(_n, graph, sel, checked, run_name, polarity, method, k, absth, refr
                              chan=chan, ttl=ttl, n_shuffle=n_shuffle, rstart=rstart, rend=rend,
                              region_mode=region_mode, stagger_pct=stagger_pct, disp_show=disp_show,
                              disp_binned=disp_binned, train_bin=train_bin, fft_bin=fft_bin,
-                             align_map=align_map, smooth=smooth, tfilt=tfilt))
+                             align_map=align_map, smooth=smooth, tfilt=tfilt, filter_s=filter_s))
     return "✓ " + " · ".join(msgs), (_n or 1)
 
 
@@ -4433,29 +4770,83 @@ def pipe_edit_param_modal(_values, graph):
     return g
 
 
-# ---- LIVE signal-flow evaluation: run the DSP pathway on the current cell's spikes and draw each
-#      display sink into the results strip. Recomputes on any pathway edit (pipe-graph) or change to
-#      the live selection / region, so it's "live as you edit". Detection settings ride as State. ----
+# ---- STEP-THROUGH: click a node's body to select it (pipe-selected); the results strip then shows
+#      THAT component's output for the current selection (neitz.stepwise). ✕ / the header button
+#      clears it; ⓘ opens the breakout (math + the code that runs). The highlight is clientside. ----
+@app.callback(Output("pipe-selected", "data"),
+              Input({"type": "pnode", "node": ALL}, "n_clicks"), prevent_initial_call=True)
+def pipe_select_node(_clicks):
+    t = ctx.triggered_id
+    if not isinstance(t, dict) or not (ctx.triggered and ctx.triggered[0].get("value")):
+        return no_update                      # a re-render resets n_clicks → ignore
+    return t["node"]
+
+
+@app.callback(Output("pipe-selected", "data", allow_duplicate=True),
+              Input("pipe-unselect", "n_clicks"), prevent_initial_call=True)
+def pipe_unselect(n):
+    return None if n else no_update
+
+
+@app.callback(Output("pnode-detail", "data", allow_duplicate=True),
+              Input("pipe-step-info", "n_clicks"), State("pipe-selected", "data"),
+              prevent_initial_call=True)
+def pipe_step_info(n, selected):
+    return selected if (n and selected) else no_update
+
+
+app.clientside_callback(
+    """function(sel, _children){
+        document.querySelectorAll('#pipe-nodes .pnode').forEach(function(n){
+            n.classList.toggle('selected', !!sel && n.getAttribute('data-node') === sel);
+        });
+        return '';
+    }""",
+    Output("pipe-sel-tick", "data"), Input("pipe-selected", "data"), Input("pipe-nodes", "children"))
+
+
+# ---- LIVE evaluation strip. With a node selected: that component's step-through output. Else: the
+#      DSP pathway's display sinks (FFT Power / Time trace / ISI). Recomputes on any pathway edit
+#      (pipe-graph) or change to the live selection / region — but only while the pipelines view is
+#      showing (a region drag in the Analysis View must not re-run an STA). ----
 _PIPE_HINT = {"fontSize": "12px", "color": "#8a90a0", "padding": "14px 16px", "lineHeight": "1.5",
               "alignSelf": "center"}
 
 
 @app.callback(Output("pipe-results", "children"),
-              Input("pipe-graph", "data"), Input("sel-cell", "data"), Input("file", "value"),
-              Input("region-start", "value"), Input("region-end", "value"), Input("align-map", "data"),
-              State("chan", "value"), State("polarity", "value"), State("method", "value"),
-              State("k", "value"), State("absth", "value"), State("refr", "value"),
-              State("absth-map", "data"), prevent_initial_call=False)
-def pipe_eval(graph, sel, files, rstart, rend, align_map, chan, polarity, method, k, absth, refr,
-              absth_map):
-    sinks = [n for n in (graph or {}).get("nodes", []) if n.get("type") in sf.SINKS]
+              Input("pipe-graph", "data"), Input("pipe-selected", "data"), Input("sel-cell", "data"),
+              Input("file", "value"), Input("region-start", "value"), Input("region-end", "value"),
+              Input("align-map", "data"), Input("pipelines-modal", "style"),
+              State("chan", "value"), State("ttl", "value"), State("polarity", "value"),
+              State("method", "value"), State("k", "value"), State("absth", "value"),
+              State("refr", "value"), State("absth-map", "data"), State("region-mode", "value"),
+              State("fft-bin", "value"), prevent_initial_call=False)
+def pipe_eval(graph, selected, sel, files, rstart, rend, align_map, pm_style, chan, ttl, polarity,
+              method, k, absth, refr, absth_map, region_mode, fft_bin):
+    if not pm_style or pm_style.get("display") == "none":
+        return no_update                      # pipelines view hidden: nothing to draw (yet)
+    nodes = (graph or {}).get("nodes", [])
+    detect = _live_detect(polarity, method, k, absth, refr)
+    if selected and any(n["id"] == selected for n in nodes):
+        if not _sel_first(sel):
+            return html.Div("Pick a cell in the Analysis View to step through the pipeline.",
+                            style=_PIPE_HINT)
+        ctx_ = _step_ctx(files, chan, ttl, detect, absth_map, rstart, rend, region_mode, align_map,
+                         fft_bin)
+        try:
+            panel = _step_panel(graph, selected, ctx_)
+        except Exception as e:
+            panel = [html.Div(f"step-through error: {e}", style=_PIPE_HINT)]
+        if panel:
+            return panel
+    sinks = [n for n in nodes if n.get("type") in sf.SINKS]
     if not sinks:
-        return html.Div("Add a display block — FFT Power / Time trace / ISI histogram — and wire a "
-                        "pathway into it (e.g. Select-region → Spike binning → Smooth → FFT Power). "
-                        "Its live output appears here.", style=_PIPE_HINT)
+        return html.Div("Click a component to STEP THROUGH it (its output for the checked files shows "
+                        "here), or add a display block — FFT Power / Time trace / ISI histogram — "
+                        "and wire a pathway into it (e.g. Select-region → Spike binning → Smooth → "
+                        "FFT Power) for a live display.", style=_PIPE_HINT)
     if not _sel_first(sel):
         return html.Div("Pick a cell in the Analysis View to feed the pathway.", style=_PIPE_HINT)
-    detect = _live_detect(polarity, method, k, absth, refr)
     try:
         spikes, t0, t1 = _pipeline_spikes(files, chan, detect, absth_map, rstart, rend, align_map)
     except Exception as e:
@@ -4479,7 +4870,8 @@ def pipe_eval(graph, sel, files, rstart, rend, align_map, chan, polarity, method
                       style={"height": "212px"}),
             style={"flex": "0 0 360px", "minWidth": "360px", "background": "#12141a",
                    "border": "1px solid #23262f", "borderRadius": "6px"}))
-    return cols
+    return html.Div(cols, style={"display": "flex", "gap": "8px", "alignItems": "stretch",
+                                 "overflowX": "auto", "padding": "4px"})
 
 
 @app.callback(Output("exp-date", "data"), Output("exp-cell", "data", allow_duplicate=True),

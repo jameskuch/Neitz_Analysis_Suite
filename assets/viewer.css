@@ -246,7 +246,10 @@ html, body { margin: 0; }
 /* region start/end boundary lines (#time editable shapes): Plotly gives their transparent 10px
    hit-path an inline `cursor: move`; the lines only move horizontally, so show an ↔ resize cursor
    instead (clearer "drag me left/right" cue). Falls back to `move` if the selector ever misses. */
-#time .shapelayer path[style*="cursor: move"] { cursor: ew-resize !important; }
+#time .shapelayer path[style*="cursor: move"] { cursor: ew-resize !important;
+    stroke-width: 24px !important; }   /* 24 px grab zone (Plotly's 10 was easy to miss, esp. in
+                                          the gap between the graphs — which also has the thick
+                                          handles, shapes[2]/[3] of add_region_shapes) */
 /* The excluded-region shading (gray vrects, drawn AFTER the lines) must never take the pointer:
    edits.shapePosition makes every shape draggable (a shape's own editable=False is ignored) and
    gives each one an inline `pointer-events: all`, so a grab at a boundary line landed on the vrect
@@ -313,3 +316,18 @@ html, body { margin: 0; }
     position: sticky; top: 0; z-index: 1; background: #fff; padding-top: 2px;
 }
 #file-box.grouped label.grp-hidden { display: none !important; }
+
+/* ---- step-through: the selected node + the code / table blocks ---- */
+.pnode { cursor: pointer; }
+.pnode.selected { box-shadow: 0 0 0 2px #ffd020, 0 2px 10px rgba(0,0,0,0.5) !important; }
+.pcode { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    line-height: 1.4; color: #d7dbe6; background: #0f1116; border: 1px solid #23262f;
+    border-radius: 6px; padding: 8px 10px; margin: 4px 0 8px; max-height: 320px; overflow: auto;
+    white-space: pre; tab-size: 4; }
+.pcode-item > summary { cursor: pointer; font-size: 12px; color: #e3e7ef; padding: 4px 0;
+    list-style: revert; }
+.pcode-item > summary code { color: #ffd98a; font-size: 12px; }
+.pstep-table { border-collapse: collapse; font-size: 10.5px; color: #d7dbe6; }
+.pstep-table th, .pstep-table td { border: 1px solid #2a2f3a; padding: 2px 6px; text-align: left;
+    white-space: nowrap; }
+.pstep-table th { background: #1c2029; color: #aab2c5; font-weight: 600; }

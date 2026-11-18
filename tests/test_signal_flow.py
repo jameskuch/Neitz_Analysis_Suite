@@ -159,3 +159,27 @@ def test_evaluate_cycle_is_reported():
     g["connections"].append({"from_node": "b", "from_port": "x", "to_node": "t", "to_port": "y"})
     res = sf.evaluate(g, {"spikes": [np.array([0.1, 0.5])], "t0": 0, "t1": 1})
     assert res["t"]["kind"] == "error"
+
+
+# ---------------------------------------------------------------------------------------------
+# signal_at — one block's output (the pipelines view's step-through)
+# ---------------------------------------------------------------------------------------------
+def test_signal_at_returns_each_blocks_output():
+    graph = {"nodes": [{"id": "r", "type": "region", "params": {}},
+                       {"id": "b", "type": "sf_bin", "params": {"bin_ms": 100, "unit": "count"}},
+                       {"id": "s", "type": "sf_smooth", "params": {"window": 3, "method": "moving"}},
+                       {"id": "f", "type": "sf_fft", "params": {}}],
+             "connections": [{"from_node": "r", "from_port": "spikes", "to_node": "b", "to_port": "spikes"},
+                             {"from_node": "b", "from_port": "signal", "to_node": "s", "to_port": "signal"},
+                             {"from_node": "s", "from_port": "signal", "to_node": "f", "to_port": "signal"}]}
+    ctx = {"spikes": [[0.05, 0.15, 0.25]], "t0": 0.0, "t1": 0.3}
+    b = sf.signal_at(graph, "b", ctx)
+    assert b.kind == "series" and np.allclose(b.epochs[0], [1, 1, 1]) and b.fs == pytest.approx(10.0)
+    s = sf.signal_at(graph, "s", ctx)
+    assert s.kind == "series" and s.label.endswith("smooth")
+    f_in = sf.signal_at(graph, "f", ctx)             # a sink: the signal ENTERING it
+    assert f_in.label == s.label
+    with pytest.raises(KeyError):
+        sf.signal_at(graph, "nope", ctx)
+    with pytest.raises(ValueError):
+        sf.signal_at(graph, "b", {"spikes": None})

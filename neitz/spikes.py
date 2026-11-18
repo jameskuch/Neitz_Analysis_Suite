@@ -45,6 +45,19 @@ class SpikeTrain:
         return train
 
 
+def in_region(times, start, end) -> np.ndarray:
+    """The spike times inside the analysis window: ``start <= t <= end`` (both inclusive). This is
+    the 'Select region' step — the Analysis View, the signal-flow blocks and the square-wave
+    export all mask with it. (The seeded STA / STRF do NOT use it: each epoch is binned on the
+    stimulus-update grid measured from the sync bar instead.)"""
+    t = np.asarray(times, dtype=float)
+    if start is None and end is None:
+        return t
+    lo = -np.inf if start is None else float(start)
+    hi = np.inf if end is None else float(end)
+    return t[(t >= lo) & (t <= hi)]
+
+
 # --- Sara's MATLAB detector (spikeDetectorOnline.m, MHT/AIW), ported faithfully -----
 HIGHPASS_SPIKES_HZ = 500.0     # spikeDetectorOnline: high-pass to keep only spikes
 NOISE_SIGMA_FACTOR = 4.0       # AIW noise gate: mean spike must clear mean+4σ of non-spikes

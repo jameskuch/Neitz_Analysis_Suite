@@ -309,7 +309,7 @@ def run_cell_flicker(store, date, cell, *, paradigm=None, n_shuffle=1000,
 
 def run_cell_noise(store, date, cell, *, name="sta", save=True, run_label=None,
                    formats=("png", "pdf", "svg"), chan="Im_prime", ttl="TTL", detect=None,
-                   abs_map=None, bins_per_update=6, include=None, **noise_kw) -> Result:
+                   abs_map=None, bins_per_update=6, include=None, filter_s=1.0, **noise_kw) -> Result:
     """
     Gaussian-noise temporal STA on a stored cell. DISPATCH: if the cell has seed-based
     gaussian_noise `.abf` recordings (June2026 Stage rig), regenerate each epoch's stimulus from its
@@ -329,7 +329,8 @@ def run_cell_noise(store, date, cell, *, name="sta", save=True, run_label=None,
     if seed_recs:
         return _run_cell_noise_seed(store, cm, date, cell, name=name, save=save, run_label=run_label,
                                     formats=formats, chan=chan, ttl=ttl, detect=detect,
-                                    abs_map=abs_map, bins_per_update=bins_per_update, include=include)
+                                    abs_map=abs_map, bins_per_update=bins_per_update, include=include,
+                                    filter_s=filter_s)
 
     csvs = [str(cm.dir / r["file"]) for r in cm.data.get("recordings", [])
             if str(r.get("file", "")).endswith(".csv")]
@@ -403,16 +404,18 @@ def _save_seed_run(cm, store, name, run_label, formats, fig, result, info, extra
 
 
 def _run_cell_noise_seed(store, cm, date, cell, *, name, save, run_label, formats, chan, ttl,
-                         detect, abs_map, bins_per_update, include) -> Result:
+                         detect, abs_map, bins_per_update, include, filter_s=1.0) -> Result:
     """Seed-based full-field STA: regenerate each epoch's stimulus from its seed, reverse-correlate
-    the abf spikes, average across epochs (see `sta_from_records`)."""
+    the abf spikes, average across epochs (see `sta_from_records`). `filter_s` = the recovered
+    filter's length in seconds (the pipeline's STA node knob)."""
     from . import plots
     records, responses, info = load_seed_epochs(
         cm, chan=chan, ttl=ttl, detect=detect, abs_map=abs_map,
         bins_per_update=bins_per_update, include=include, want=("gaussian_noise",))
     if not records:
         raise SystemExit(f"no loadable seeded gaussian-noise recordings in {date}/{cell}")
-    out = sta_from_records(records, responses, bins_per_update=bins_per_update)
+    out = sta_from_records(records, responses, bins_per_update=bins_per_update,
+                           filter_s=float(filter_s or 1.0))
     pk = int(np.argmax(np.abs(out["average"])))
     summary = [dict(n_epochs=int(out["n_epochs"]), filter_len=len(out["average"]),
                     peak_ms=float(out["time_ms"][pk]),
@@ -421,14 +424,15 @@ def _run_cell_noise_seed(store, cm, date, cell, *, name, save, run_label, format
                   tuning=out["tuning"], per_epoch=out["per_epoch"])
     res = Result("noise", summary=summary, arrays=arrays,
                  meta=dict(source="seed-manifest", n_epochs=len(records),
-                           bins_per_update=bins_per_update, epochs=info))
+                           bins_per_update=bins_per_update, filter_s=float(filter_s or 1.0),
+                           epochs=info))
     if save:
         label = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
         _save_seed_run(cm, store, name, run_label, formats,
                        plots.noise_sta_figure(res.arrays, label=label,
                                               cone_isolation=records[0].get("cone_isolation")),
                        res, info,
-                       {"bins_per_update": bins_per_update})
+                       {"bins_per_update": bins_per_update, "filter_s": float(filter_s or 1.0)})
     return res
 
 

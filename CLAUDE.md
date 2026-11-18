@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (165 tests as of 2026-11-17; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (181 tests as of 2026-11-18; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -111,7 +111,11 @@ neitz/                         tested core (no GUI deps)
   run.py     headless orchestration -> Result; run_cell_flicker(...name=,include=), run_cell_noise(...) (STA),
              run_cell_checkerboard(...) (STRF: peak map + per-location STA grid, one output record)
   pipeline.py  analysis-pipeline model: COMPONENT_REGISTRY (palette), Pipeline dicts, default_*_pipeline,
-               JSON storage (<store>/pipelines/), detect_/region_/run_kwargs extraction, run dispatch
+               JSON storage (<store>/pipelines/), detect_/region_/run_kwargs extraction, run dispatch,
+               CODE_REFS + component_code (the LIVE source of what runs for each node)
+  stepwise.py  step-through: node_output(graph, node_id, ctx) / family_output — ONE node's result for
+               the live selection, computed by the run's own functions (tests/test_stepwise.py)
+  signal_flow.py  the discrete DSP kit (Signal, blocks, sinks, evaluate, signal_at = one block's output)
   plots.py   flicker_onoff_figure, flicker_cycle_grid
   cli.py / __main__.py
 viewer.py                      the Dash GUI (single file, ~1500 lines) — built ON the core
@@ -229,6 +233,17 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   `strf_from_records` also sets the paradigm's `bin_rate` (the `time_ms` / `peak_time_ms` lag axis)
   from the record: update rate (59.94 Hz on the rig) × `bins_per_update`, one tap per response bin —
   it used to sit at a fixed 60 Hz, which was 0.1 % off at one bin per update and 2× off at two.
+- **Reverse-correlation facts worth answering from memory** (asked 2026-11-18): the FFT cross-
+  correlation zero-pads BOTH stimulus and response by 60 response bins (`zero_pad=60`, Sara's
+  MTFanalysis) so there is no circular wrap-around for any lag ≤ 60 bins — the STA's 1 s filter at
+  6 bins × 8.56 Hz = 51 taps and the STRF's 30 taps both fit; a longer `filter_s` (the STA node knob,
+  now threaded through `run_cell_noise(filter_s=)`) picks up a small wrap term beyond 60 bins and the
+  step-through says so. Spikes ↔ frames need NO manual step: `load_seed_epochs` measures every
+  update's onset from the sync bar's middle segment (`I_MTest 3`) and bins the spikes on those edges
+  (`info[i]['clock'] = 'measured:…'`); the region boxes and the frame-sync nudge never enter the STA /
+  STRF — each epoch self-syncs. The stimulus onset in RECORDING time is not in the JSON: `pre_stim_s`
+  2.0 s is stimulus-relative and the Clampex → first-frame latency varies per sweep (0.43–0.69 s on
+  2026-11-12), so it is measured (`stimulus_window`): 0039 = 2.69 s, 0041 = 2.43 s, 0042 = 2.58 s.
 
 ## Sync bar → stimulus timing (2026-11-12 rig convention)
 
@@ -341,10 +356,29 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   double-click reset). On drag-release Plotly fires a `shapes[i].x` relayout; the `drag_region` callback
   (Input `#time.relayoutData`, no mode gating) averages `shapes[i].x0`/`x1` back into
   `region-start` / `region-end` so the analysis window follows (converges, no loop; region boxes are
-  in `UNDO_TRACK`). The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the
+  in `UNDO_TRACK`). **Grab handles (2026-11-18):** `shapes[2]` / `[3]` are short THICK line shapes
+  spanning the GAP between the two subplots (`_subplot_gap` reads the yaxis domains) — James reaches
+  for a boundary there; `drag_region` maps them onto the same boxes (format B picks whichever twin
+  differs from the box's current value). Every hit-path is widened to 24 px by viewer.css
+  (`stroke-width: 24px !important` on the `cursor: move` paths) — Plotly's 10 px was easy to miss. The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the
   live drag isn't redrawn with the stale region and snapped back. Editing the region reverts the view
   to the full window (region-start/end are in the `uirevision` hash) — a zoom-preserving drag would
   need a separate zoom-tracking store (known follow-up).
+- **Region default = the stimulus window** (`stim_window(path, ttl)`, 2026-11-18): a seeded noise /
+  checkerboard file opens with the sync-bar ENVELOPE (`analysis.sync.stimulus_window`: first → last
+  light = exactly the stimulus frames; 2.69–195.0 s on 0039) — the old `detect_flicker` default sat
+  ~150 ms late (2.83 s) because it latched onto bit-plane pulses on a noise file. Square waves keep
+  the flicker steady region. The meta line names the source and notes that the manifest's
+  pre-/post-stim seconds are stimulus-relative. The readout shows `noise update 8.56 Hz` for noise
+  files instead of a bogus `stim 20 Hz`.
+- **Lower panels follow the pipeline** (`render` → `lower_family` → `seed_panels`, 2026-11-18): the
+  `#run-pipeline` dropdown's terminal family, else the checked files' manifest stimulus type, decides
+  what the bottom pair shows — square wave: the spike-power spectrum + ISI (overlays apply); STA /
+  STRF: the LIVE result of the checked files (`live_family_output` → `stepwise.family_output`, the
+  same engine as ▶ Run: measured clock, the run's bins per update; cached in `_SEED_CACHE` on files /
+  channels / detection / filter_s, so zoom, region and nudge never recompute it; overlays hidden). A
+  zoom (`trig == "time"`) returns `no_update` for the lower pair; a pipeline change leaves the time
+  graph alone. The time graph (spikes + frame-sync) is unchanged.
 - **ISI histogram** honors the "bin (ms)" box (`train-bin`): `xbins` size = the ms value; 0 → auto
   (60 bins). (That box also drives the spike-train row-1 view when "show binned spikes" is on.)
 - **Group → one average** (files panel checkbox `#group-avg`, needs 3+ checked): `build_figures`
@@ -684,11 +718,30 @@ is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes
   cell's stimulus type dispatches). The pipelines view has its own "▶ Run on current cell". BOTH go
   through one shared `_run_one(ds, s, kind, …)` using the **LIVE Analysis-View settings** (region /
   detection / alignment / channels / files) — so the current manipulation is what runs (James's
-  ask); the pipeline supplies the kind + knobs (`n_shuffle`, 4K export). Both are `background=True`.
+  ask); the pipeline supplies the kind + knobs (`n_shuffle`, 4K export, the STA node's `filter_s`).
+  Since 2026-11-18 the CHECKED files of the cell are the epochs for the seeded runs too
+  (`include=`; none checked → all), as they always were for the square wave. Both are `background=True`.
+- **Step-through + the code that runs (2026-11-18, James's ask).** Click a node's BODY → `pipe-selected`
+  (pattern `{pnode}` `n_clicks`; the header still drags, ports still connect) → the results strip
+  (`pipe_eval` → `_step_panel`) shows THAT component's output for the checked files, computed by
+  `neitz/stepwise.py` with the run's own functions: source = the recordings table; align = the
+  nudge offsets; detect = per-file counts / thresholds + a raster; region = kept / dropped + the
+  window; smooth / tfilter = the binned rate before and after; the signal-flow blocks = the Signal
+  leaving them (`signal_flow.signal_at`); sq wave = per-file VS + the pooled ON / OFF PSTHs
+  (`n_shuffle` 100 preview); STA / STRF = the live result (shared cache with the Analysis View) +
+  the per-epoch **sync table** (t₀, `measured:<chan>`, updates recorded, dup frames, spikes); figures
+  = what ▶ Run would write. The strip header has **ⓘ math & code** (opens the breakout) and ✕
+  (`pipe-unselect`). `pipe_eval` is gated on the pipelines modal being visible, so a region drag in
+  the Analysis View never re-runs an STA. The breakout panel's **"Code that runs"** section lists
+  `pipeline.CODE_REFS[type]` — the functions that actually execute, in call order — as
+  `inspect.getsource` blocks (`component_code`, `viewer:` refs resolved through `extra`), so it can
+  never drift from the code; keep CODE_REFS current when a run path changes
+  (`test_component_code_is_the_live_source_of_what_runs` resolves every ref).
 - **Follow-ups:** the pipeline's own detect/region node params are the editable representation but do
-  NOT yet override the live Analysis-View state at run time (live state wins by design); execution is
-  dispatch-to-`run_cell_*`, not a true per-node graph interpreter; drag-to-add-from-palette (we have
-  click-to-add) and drag-to-connect (we have click-to-connect) are the obvious next polish.
+  NOT yet override the live Analysis-View state at run time (live state wins by design); ▶ Run still
+  dispatches to `run_cell_*` (the step-through evaluates per node, the run does not); drag-to-add-
+  from-palette (we have click-to-add) and drag-to-connect (we have click-to-connect) are the obvious
+  next polish.
 
 ## How to work here
 
@@ -712,9 +765,10 @@ is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes
 - **Desktop app: the KILL+REBUILD-on-launch + Dock-icon fix are macOS-only.** `neitz_app.py` on
   Windows is still a plain fresh-restart (no `_rebuild()`, no icon-identity call) — parity is TODO.
 - **Analysis Pipelines:** a pipeline's own detect/region node params don't OVERRIDE the live
-  Analysis-View state at run time (live state wins by design); execution dispatches to `run_cell_*`,
-  not a true per-node graph interpreter; the editor has click-to-add / click-to-connect (drag-to-add
-  from the palette + drag-to-connect are the next polish).
+  Analysis-View state at run time (live state wins by design); ▶ Run dispatches to `run_cell_*` (the
+  per-node step-through is a VIEW of each stage, not the executor); the editor has click-to-add /
+  click-to-connect (drag-to-add from the palette + drag-to-connect are the next polish). The
+  square-wave step-through preview uses 100 shuffles, so its p-values are coarser than a run's.
 - 6 session cells (2025-12 → 2026-02) have blank stimulus metadata; those days predate the nested
   manifest, so re-importing won't help — tag them by hand or via the Explorer re-categorization tool.
 - **Stimulus-side (`June2026StageMATLAB`) — the per-block "protocol complete" dialog is untested live.**

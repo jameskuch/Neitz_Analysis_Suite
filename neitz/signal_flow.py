@@ -284,18 +284,11 @@ def _param(node, key, default=None):
     return node.get("params", {}).get(key, default)
 
 
-def evaluate(graph: dict, context: dict) -> dict:
-    """Run every signal-flow pathway in `graph` and return ``{sink_node_id: plot_spec}``.
-
-    `context` keys: ``spikes`` (list of per-epoch spike-time arrays, REQUIRED for spike pathways),
-    ``t0``/``t1`` (window seconds), ``analog`` (optional list of per-epoch (trace, fs) for an analog
-    tap), ``epoch_mode`` (default overlay/average for sinks that don't set their own).
-
-    Nodes upstream of the signal layer (source/align/detect/region) are treated as the spike
-    source: any signal-flow node whose input is fed by a non-signal node receives the context
-    spikes as an events Signal. Blocks are pure; a bad block drops that pathway to an error spec
-    rather than killing the whole evaluation.
-    """
+def _build(graph: dict, context: dict):
+    """The evaluator's working parts: ``(nodes, signal_of, upstream_signal)`` for `graph` under
+    `context` (see :func:`evaluate`). `signal_of(nid, seen)` is the Signal LEAVING a transform
+    block; `upstream_signal(nid, seen)` the Signal ENTERING any node (the context spikes when the
+    node is fed by source/align/detect/region or by nothing)."""
     nodes = {n["id"]: n for n in graph.get("nodes", [])}
     conns = graph.get("connections", [])
     incoming = {}                                     # node_id -> upstream node_id feeding it
@@ -305,7 +298,6 @@ def evaluate(graph: dict, context: dict) -> dict:
     spikes = context.get("spikes")
     t0 = float(context.get("t0", 0.0) or 0.0)
     t1 = context.get("t1")
-    default_mode = context.get("epoch_mode", "overlay")
     seed = (events_signal(spikes, t0=t0, t1=t1) if spikes is not None else None)
 
     memo: dict = {}                                   # node_id -> Signal (cached)
@@ -333,6 +325,36 @@ def evaluate(graph: dict, context: dict) -> dict:
         memo[nid] = out
         return out
 
+    return nodes, signal_of, upstream_signal
+
+
+def signal_at(graph: dict, node_id: str, context: dict) -> Signal:
+    """The Signal LEAVING transform block `node_id` (or ENTERING a sink) — the pipelines view's
+    step-through uses it to show what one block produces. Raises on a broken pathway."""
+    nodes, signal_of, upstream_signal = _build(graph, context)
+    node = nodes[node_id]
+    if node["type"] in TRANSFORMS:
+        return signal_of(node_id, set())
+    sig = upstream_signal(node_id, set())
+    if sig is None:
+        raise ValueError("connect a spike source (region → … → this block)")
+    return sig
+
+
+def evaluate(graph: dict, context: dict) -> dict:
+    """Run every signal-flow pathway in `graph` and return ``{sink_node_id: plot_spec}``.
+
+    `context` keys: ``spikes`` (list of per-epoch spike-time arrays, REQUIRED for spike pathways),
+    ``t0``/``t1`` (window seconds), ``analog`` (optional list of per-epoch (trace, fs) for an analog
+    tap), ``epoch_mode`` (default overlay/average for sinks that don't set their own).
+
+    Nodes upstream of the signal layer (source/align/detect/region) are treated as the spike
+    source: any signal-flow node whose input is fed by a non-signal node receives the context
+    spikes as an events Signal. Blocks are pure; a bad block drops that pathway to an error spec
+    rather than killing the whole evaluation.
+    """
+    nodes, signal_of, upstream_signal = _build(graph, context)
+    default_mode = context.get("epoch_mode", "overlay")
     results = {}
     for nid, node in nodes.items():
         if node["type"] not in SINKS:
