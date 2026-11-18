@@ -374,18 +374,25 @@ def run_cell_noise(store, date, cell, *, name="sta", save=True, run_label=None,
     return res
 
 
-def _save_seed_run(cm, store, name, run_label, formats, fig, result, info, extra_params):
+def _save_seed_run(cm, store, name, run_label, formats, fig, result, info, extra_params,
+                   extra_figs=None):
     """Common save for a seed-based run: figure (PNG/PDF/SVG) + result.json → outputs/<name>/,
-    recorded in the manifest (one record, all files) per the store-integrity rules."""
+    recorded in the manifest (one record, all files) per the store-integrity rules.
+    `extra_figs` ({suffix: figure}) are companion figures of the SAME run, saved as
+    ``<name>_<suffix>.<fmt>`` and listed in the same record (``figure_<suffix>_<fmt>``)."""
     import os as _os
     from .io.figures import save_figure
     out = cm.output_dir(name)
     figpaths = save_figure(fig, out, name, formats=formats)
+    extra_paths = {suffix: save_figure(f, out, f"{name}_{suffix}", formats=formats)
+                   for suffix, f in (extra_figs or {}).items()}
     result.save(out / "result")
     import matplotlib.pyplot as _plt
     _plt.close("all")
     rel = lambda p: _os.path.relpath(p, cm.dir)
     files = {f"figure_{k}": rel(v) for k, v in figpaths.items()}
+    for suffix, paths in extra_paths.items():
+        files.update({f"figure_{suffix}_{k}": rel(v) for k, v in paths.items()})
     files["result_json"] = rel(out / "result.json")
     cm.record_output(name, files=files, label=run_label,
                      params={"source": "seed-manifest", "epochs": info, **extra_params},
@@ -429,8 +436,9 @@ def run_cell_checkerboard(store, date, cell, *, name="strf", save=True, run_labe
                           formats=("png", "pdf", "svg"), chan="Im_prime", ttl="TTL", detect=None,
                           abs_map=None, bins_per_update=1, filter_len=30, include=None) -> Result:
     """Checkerboard STRF on a stored cell: regenerate each epoch's spatiotemporal stimulus from its
-    seed, reverse-correlate the abf spikes (pooled in time), and save the STRF figure + result.json.
-    (June2026 Stage rig; the abf TTL→epoch-start binding is validated on real seeded-noise data.)"""
+    per-check seeds, reverse-correlate the abf spikes (pooled in time), and save the STRF figure
+    (peak-lag map + peak kernel), the per-location STA grid (``<name>_grid``) and result.json —
+    one output record. (June2026 Stage rig; timing from the sync bar, see analysis/sync.py.)"""
     from . import plots
     cm = store.cell(date, cell)
     records, responses, info = load_seed_epochs(
@@ -450,7 +458,8 @@ def run_cell_checkerboard(store, date, cell, *, name="strf", save=True, run_labe
     if save:
         label = f"{date}/{cell} {cm.data.get('label') or ''} [{name}]".strip()
         _save_seed_run(cm, store, name, run_label, formats, plots.strf_figure(strf, label=label),
-                       res, info, {"bins_per_update": bins_per_update, "filter_len": filter_len})
+                       res, info, {"bins_per_update": bins_per_update, "filter_len": filter_len},
+                       extra_figs={"grid": plots.strf_grid_figure(strf, label=label)})
     return res
 
 

@@ -141,3 +141,94 @@ def test_epoch_response_bins_from_t0():
     r = epoch_response(spikes, t0, n_bins=5, bin_dt=bin_dt)
     assert r.shape == (5,)
     assert r[0] == 2 / bin_dt and r[2] == 1 / bin_dt and r[1] == 0 and r[3] == 0
+
+
+def test_strf_grid_figure_renders():
+    """The per-location STA grid draws one panel per check, laid out like the stimulus."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from neitz import plots
+    records = [{"stim_type": "checkerboard", "seed": s, "checks_y": 2, "checks_x": 3,
+                "n_updates": 1500, "update_every_n_frames": 1, "refresh_rate_hz": 60,
+                "mu": 0.5, "sigma": 0.3} for s in (4, 5)]
+    responses = []
+    for rec in records:
+        v = noise_from_record(rec)
+        h = np.zeros(20); h[4] = 1.0
+        responses.append(np.convolve(v[0, 2, :], h)[:v.shape[-1]])
+    res = strf_from_records(records, responses, bins_per_update=1, filter_len=20)
+    fig = plots.strf_grid_figure(res, label="synthetic")
+    assert len(fig.axes) == 2 * 3
+    assert res.peak_yx == (0, 2)
+    plt.close(fig)
+
+
+def _synthetic_checkerboard_cell(tmp_path, monkeypatch, *, n_updates=400, drive_yx=(1, 2), lag=2):
+    """A stored cell with ONE per-check-seeded 2x3 checkerboard epoch whose .abf is mocked: an
+    inverted middle-segment sync trace (lit one update, dark the next) on 'I_MTest 3' and a
+    current channel whose spikes follow check `drive_yx` with a delay of `lag` updates."""
+    from neitz import run
+    from neitz.dataio import DataStore
+    fs, refresh = 20000.0, 59.9435
+    t_frame = 1.0 / refresh
+    seeds = [[11, 12, 13], [21, 22, 23]]
+    rec = {"stim_type": "checkerboard", "seed": 9, "checks_y": 2, "checks_x": 3, "n_updates": n_updates,
+           "check_seeds": seeds, "seed_scheme": "gaussCheckSeeds/1", "update_every_n_frames": 1,
+           "refresh_rate_hz": refresh, "mu": 0.5, "sigma": 0.3}
+    v = noise_from_record(rec)                                        # (2, 3, n_updates)
+    t_on = 2.0
+    edges = t_on + np.arange(n_updates + 1) * t_frame
+    n = int((edges[-1] + 1.5) * fs)
+    sync = np.full(n, 4.9)
+    for k in range(0, n_updates, 2):                                  # lit updates: 4 pulses each
+        for off in (0.0005, 0.0045, 0.0085, 0.0125):
+            a, b = int((edges[k] + off) * fs), int((edges[k] + off + 0.0025) * fs)
+            sync[a:b] = 0.1
+    im = np.random.RandomState(1).randn(n) * 0.5
+    dy, dx = drive_yx
+    for k in range(lag, n_updates):                                   # spike when the driving check was bright
+        if v[dy, dx, k - lag] > 0.65:
+            im[int((edges[k] + 0.002) * fs)] = -60.0
+
+    class FakeRec:
+        channel_names = ["Im_prime", "TTL", "I_MTest 3"]
+        def __init__(self): self.fs = fs
+        def channel(self, name):
+            nm = str(name).lower()
+            return im if "im_" in nm else np.full(n, 4.9) if nm == "ttl" else sync
+    monkeypatch.setattr(run.Recording, "load", staticmethod(lambda p: FakeRec()))
+    monkeypatch.setattr(run, "_auto_mirror", lambda: None)           # never touch a real mirror from a test
+    ds = DataStore(root=tmp_path)
+    cm = ds.new_cell("2026-11-12", label="synthetic")
+    (cm.dir / "raw").mkdir(parents=True, exist_ok=True)
+    (cm.dir / "raw" / "2026_11_12_0001.abf").write_bytes(b"ABF2 dummy")
+    cm.data["recordings"] = [{"id": "2026_11_12_0001", "file": "raw/2026_11_12_0001.abf",
+                              "stimulus": {"type": "checkerboard", "source": "stim-manifest",
+                                           "params": {k: val for k, val in rec.items() if k != "stim_type"}}}]
+    cm.save()
+    return ds, cm, (dy, dx), lag * t_frame * 1000.0
+
+
+def test_run_cell_checkerboard_saves_strf_and_grid(tmp_path, monkeypatch):
+    """End to end through the store: per-check seeds -> measured sync clock -> STRF; the run writes
+    BOTH figures (strf + strf_grid) and result.json under outputs/strf/ and records every file in
+    ONE output record (store-integrity rules), with no orphan files in the folder."""
+    import os
+    from neitz.run import run_cell_checkerboard
+    ds, cm, (dy, dx), lag_ms = _synthetic_checkerboard_cell(tmp_path, monkeypatch)
+    res = run_cell_checkerboard(ds, "2026-11-12", cm.data["cell"], name="strf", save=True)
+    sm = res.summary[0]
+    assert (sm["peak_y"], sm["peak_x"]) == (dy, dx)
+    assert abs(sm["peak_time_ms"] - lag_ms) < 1000.0 / 59.9435 + 1e-6
+    assert res.meta["epochs"][0]["clock"] == "measured:I_MTest 3"
+
+    cm = ds.cell("2026-11-12", cm.data["cell"])
+    outs = [o for o in cm.data["outputs"] if o["analysis"] == "strf"]
+    assert len(outs) == 1, "one record per analysis"
+    files = outs[0]["files"]
+    for key in ("figure_png", "figure_grid_png", "figure_grid_pdf", "figure_grid_svg", "result_json"):
+        assert key in files and (cm.dir / files[key]).exists(), key
+    assert all(v.startswith("outputs/strf/") for v in files.values())
+    on_disk = {f for f in os.listdir(cm.dir / "outputs" / "strf") if f.endswith(".png")}
+    assert on_disk == {"strf.png", "strf_grid.png"}, "no orphan / missing PNGs"

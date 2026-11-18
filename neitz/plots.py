@@ -125,3 +125,51 @@ def strf_figure(res, label=""):
     fig.suptitle(f"{label} — checkerboard STRF ({spatial.shape[0]}×{spatial.shape[1]} checks)")
     fig.tight_layout()
     return fig
+
+
+def strf_grid_figure(res, label="", strong=4.0, moderate=2.5):
+    """Checkerboard STRF as a GRID of per-location spike-triggered averages: one small panel per
+    check laid out like the stimulus (row 0 at the top, column 0 at the left), every panel on the
+    same scale (the cube is ÷ its global max). The peak check is boxed in red; a check whose
+    |peak| exceeds `strong` × the median check is drawn red, `moderate` × blue, the rest grey.
+    `res` is a CheckerboardParadigm STRFResult (strf (n_y, n_x, flen), time_ms, peak_yx)."""
+    cube = np.asarray(res.strf, float)
+    t = np.asarray(res.time_ms, float)
+    n_y, n_x, _ = cube.shape
+    flat = cube.reshape(-1, cube.shape[-1])
+    strength = np.abs(flat).max(axis=1)
+    med = float(np.median(strength)) or 1.0
+    vmax = float(np.abs(cube).max()) or 1.0
+    py, px = res.peak_yx
+    cw = max(0.45, min(1.15, 18.0 / n_x))                 # panel size: readable, but bounded for big grids
+    ch = max(0.4, min(0.95, 11.0 / n_y))
+    fig, axes = plt.subplots(n_y, n_x, figsize=(n_x * cw + 0.6, n_y * ch + 0.8),
+                             sharex=True, sharey=True, squeeze=False)
+    small = cw < 0.7
+    for y in range(n_y):
+        for x in range(n_x):
+            ax = axes[y, x]
+            k = cube[y, x]
+            s = float(np.abs(k).max()) / med
+            ax.plot(t, k, lw=0.9 if not small else 0.6,
+                    color=("tab:red" if s > strong else "tab:blue" if s > moderate else "0.55"))
+            ax.axhline(0, color="k", lw=0.3)
+            ax.axvline(res.peak_time_ms, color="0.85", lw=0.4)
+            ax.set_xticks([]); ax.set_yticks([])
+            ax.set_ylim(-vmax * 1.05, vmax * 1.05)
+            for sp in ax.spines.values():
+                sp.set_linewidth(0.4)
+            if (y, x) == (py, px):
+                for sp in ax.spines.values():
+                    sp.set_color("tab:red"); sp.set_linewidth(1.8)
+            if not small:
+                ax.text(0.03, 0.78, f"{y},{x}", transform=ax.transAxes, fontsize=5.5, color="0.4")
+    for x in range(n_x):
+        axes[-1, x].set_xlabel(f"x{x}", fontsize=7 if not small else 5)
+    for y in range(n_y):
+        axes[y, 0].set_ylabel(f"y{y}", fontsize=7 if not small else 5)
+    fig.suptitle(f"{label} — STA at every checkerboard location ({n_y}×{n_x} checks, lags "
+                 f"0–{t[-1]:.0f} ms, shared scale); red > {strong:g}× median check, blue > "
+                 f"{moderate:g}×, box = peak check ({py},{px}) @ {res.peak_time_ms:.0f} ms", fontsize=9)
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    return fig

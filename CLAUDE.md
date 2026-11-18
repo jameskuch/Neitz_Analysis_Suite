@@ -108,7 +108,8 @@ neitz/                         tested core (no GUI deps)
              reproduce.py: reproduce_noise (legacy one-stream fill) + reproduce_noise_per_check
                       (rig seed_scheme gaussCheckSeeds/1: one mt19937ar stream PER CHECK)
   dataio/    DataStore, CellManifest, config (mirror), mirror_store  (the managed store)
-  run.py     headless orchestration -> Result; run_cell_flicker(...name=,include=), run_cell_noise(...) (STA)
+  run.py     headless orchestration -> Result; run_cell_flicker(...name=,include=), run_cell_noise(...) (STA),
+             run_cell_checkerboard(...) (STRF: peak map + per-location STA grid, one output record)
   pipeline.py  analysis-pipeline model: COMPONENT_REGISTRY (palette), Pipeline dicts, default_*_pipeline,
                JSON storage (<store>/pipelines/), detect_/region_/run_kwargs extraction, run dispatch
   plots.py   flicker_onoff_figure, flicker_cycle_grid
@@ -189,7 +190,9 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   check (y=5, x=7)** spilling into (6,7) .84, (6,6) .37, (5,6) .27; biphasic filter peaking at
   **50 ms** with an undershoot ~85 ms; peak check 9× the median check. **Full-field STA: ON, peak
   20–39 ms**, per-epoch filter correlation .92, raw peak 21× the late-lag noise. Both saved under
-  the cell as `strf` and `sta`. Discarded-epoch abfs (23) were skipped at import; `0037` (no
+  the cell as `strf` and `sta`. The `strf` run also writes `strf_grid.{png,pdf,svg}` — the STA at EVERY
+  location as a panel grid laid out like the stimulus (`plots.strf_grid_figure`), listed in the
+  same output record via `_save_seed_run(extra_figs=…)`. Discarded-epoch abfs (23) were skipped at import; `0037` (no
   manifest epoch, an aborted gaussian) sits in the day's `(unsorted)` cell.
 - **Rig caveat**: across otherwise-identical flicker trials the pre-flicker adapting block is
   driven inconsistently — e.g. 0040's frame sync is flat (0 Hz carrier) where 0041 runs the
