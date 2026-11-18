@@ -142,3 +142,48 @@ def test_run_kwargs_carries_the_sta_filter_length():
     pl.node_of_type(p, "sta")["params"]["filter_s"] = "junk"
     assert pl.run_kwargs(p)["filter_s"] == 1.0
     assert pl.run_kwargs(pl.default_flicker_pipeline())["filter_s"] == 1.0
+
+
+def test_ordered_nodes_follows_the_connections():
+    p = pl.default_sta_pipeline()
+    p["nodes"].reverse()                                   # storage order scrambled
+    assert [n["id"] for n in pl.ordered_nodes(p)] == ["source0", "detect1", "region2", "sta3", "figures4"]
+    # an unconnected node comes last; a missing-node connection is ignored
+    p["nodes"].append(pl.new_node("sf_isi", "lonely"))
+    p["connections"].append({"from_node": "ghost", "from_port": "x", "to_node": "sta3", "to_port": "spikes"})
+    assert [n["id"] for n in pl.ordered_nodes(p)][-1] == "lonely"
+
+
+def test_pipeline_script_is_one_listing_in_execution_order_each_function_once():
+    import viewer
+    p = pl.default_sta_pipeline()
+    pl.node_of_type(p, "sta")["params"]["filter_s"] = 0.5
+    ctx = {"date": "2026-11-12", "cell": "c04", "files": ["2026_11_12_0039.abf"], "chan": "Im_prime",
+           "ttl": "TTL", "detect": {"polarity": "neg", "method": "mad", "k": 6.0},
+           "abs_map": {}, "region": {"start": 2.69, "end": 195.0}, "run_name": None}
+    txt = pl.pipeline_script(p, extra={"viewer": viewer}, context=ctx)
+    lines = txt.split("\n")
+    assert lines[0] == '"""' and "Gaussian-noise STA — the whole pipeline as one script" in lines[1]
+    assert "  4. Reverse-correlation STA  [sta]  —  filter_s=0.5" in txt
+    assert "  files: ['2026_11_12_0039.abf']" in txt
+    # the driver is the real run call with the live settings
+    assert "result = run_cell_noise(store, '2026-11-12', 'c04', name='sta'," in txt
+    assert "include=['2026_11_12_0039.abf']" in txt and "filter_s=0.5)" in txt
+    # components in execution order, every function once, listed where first used
+    order = [txt.index(f"# {i}. ") for i in range(1, 6)]
+    assert order == sorted(order)
+    assert txt.count("def reverse_correlation(") == 1 and txt.count("def detect_spikes(") == 1
+    assert txt.index("def detect_spikes(") < txt.index("def run_cell_noise(") < txt.index("def reverse_correlation(")
+    assert "# --- reverse_correlation  (revcorr.py:" in txt
+    # the figures node shares nothing with the sta node, but a reused ref is a pointer, not a copy
+    pl.CODE_REFS["figures"].insert(0, "neitz.run:load_seed_epochs")
+    try:
+        txt2 = pl.pipeline_script(p, extra={"viewer": viewer})
+        assert txt2.count("def load_seed_epochs(") == 1
+        assert "# load_seed_epochs  → already listed under component 4" in txt2
+    finally:
+        pl.CODE_REFS["figures"].pop(0)
+    # no context → placeholders, still valid-looking python
+    bare = pl.pipeline_script(pl.default_flicker_pipeline(), extra={"viewer": viewer})
+    assert "run_cell_flicker(store, '<date>', '<cell>'" in bare and "n_shuffle=500" in bare
+    compile(bare.split("# =====")[0], "<header>", "exec")        # the docstring header parses

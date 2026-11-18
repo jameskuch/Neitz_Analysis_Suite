@@ -518,6 +518,126 @@ CODE_REFS = {
 }
 
 
+def ordered_nodes(pipe) -> list:
+    """The nodes in EXECUTION order: along the connections from the source(s) (a stable Kahn
+    topological sort, original order breaking ties), unconnected / cyclic leftovers last."""
+    nodes = {n["id"]: n for n in pipe.get("nodes", [])}
+    out_edges, indeg, wired = {}, {nid: 0 for nid in nodes}, set()
+    for c in pipe.get("connections", []):
+        if c.get("from_node") in nodes and c.get("to_node") in nodes:
+            out_edges.setdefault(c["from_node"], []).append(c["to_node"])
+            indeg[c["to_node"]] += 1
+            wired.update((c["from_node"], c["to_node"]))
+    order, ready = [], [nid for nid in nodes if indeg[nid] == 0 and nid in wired]
+    while ready:
+        nid = ready.pop(0)
+        order.append(nid)
+        for t in out_edges.get(nid, []):
+            indeg[t] -= 1
+            if indeg[t] == 0:
+                ready.append(t)
+    order += [nid for nid in nodes if nid not in order]
+    return [nodes[nid] for nid in order]
+
+
+def _fmt_params(node) -> str:
+    p = node.get("params") or {}
+    return ", ".join(f"{k}={v!r}" for k, v in p.items()) or "no parameters"
+
+
+def _driver_lines(pipe, fam, context) -> list:
+    """The call ▶ Run makes for this pipeline (viewer._run_one → neitz.run), with the live settings
+    filled in when `context` has them, else placeholders."""
+    c = context or {}
+    rk = run_kwargs(pipe)
+    date, cell = repr(c.get("date") or "<date>"), repr(c.get("cell") or "<cell>")
+    files = c.get("files") or []
+    inc = ("[" + ", ".join(repr(f) for f in files) + "]") if files else "None"
+    det = c.get("detect") or {"polarity": "neg", "method": "mad", "k": 6.0,
+                              "abs_threshold": None, "refractory_s": 0.002}
+    amap = c.get("abs_map") or None
+    chan, ttl = repr(c.get("chan") or "Im_prime"), repr(c.get("ttl") or "TTL")
+    lines = ["from neitz.dataio import DataStore"]
+    if fam == "gaussian_noise":
+        lines += ["from neitz.run import run_cell_noise", "",
+                  "store = DataStore()                      # ~/Documents/ephysdataio (or $EPHYSDATAIO_ROOT)",
+                  f"result = run_cell_noise(store, {date}, {cell}, name={(c.get('run_name') or 'sta')!r},",
+                  f"                        chan={chan}, ttl={ttl},",
+                  f"                        detect={det!r},",
+                  f"                        abs_map={amap!r},",
+                  f"                        include={inc},      # the checked epochs; None = every seeded one",
+                  f"                        filter_s={rk['filter_s']!r})        # the STA node's filter length (s)"]
+    elif fam == "checkerboard":
+        lines += ["from neitz.run import run_cell_checkerboard", "",
+                  "store = DataStore()                      # ~/Documents/ephysdataio (or $EPHYSDATAIO_ROOT)",
+                  f"result = run_cell_checkerboard(store, {date}, {cell}, name={(c.get('run_name') or 'strf')!r},",
+                  f"                               chan={chan}, ttl={ttl},",
+                  f"                               detect={det!r},",
+                  f"                               abs_map={amap!r},",
+                  f"                               include={inc})"]
+    else:
+        lines += ["from neitz.run import run_cell_flicker", "",
+                  "store = DataStore()                      # ~/Documents/ephysdataio (or $EPHYSDATAIO_ROOT)",
+                  f"result = run_cell_flicker(store, {date}, {cell}, name={(c.get('run_name') or 'flicker')!r},",
+                  f"                          n_shuffle={rk['n_shuffle']!r}, include={inc},",
+                  f"                          detect={det!r},",
+                  f"                          abs_map={amap!r})",
+                  "# (the viewer then also writes the 4K window exports from the live Analysis-View graphs)"]
+    lines += ["print(result.summary)"]
+    return lines
+
+
+def pipeline_script(pipe, extra=None, context=None) -> str:
+    """The WHOLE pipeline as ONE readable script: a header (the components in execution order with
+    their canvas parameters, the live settings), the exact driver call ▶ Run makes, then every
+    function that runs, grouped by component in execution order — each function once, at the first
+    component that calls it, copied verbatim from the package sources (`component_code`, with
+    file:line). `context` (optional) carries the live Analysis-View state: date, cell, files
+    (basenames), chan, ttl, detect, abs_map, region, run_name."""
+    nodes = ordered_nodes(pipe)
+    name = pipe.get("name") or "untitled"
+    fam = pipeline_stim_family(pipe)
+    c = context or {}
+    lines = ['"""', f"{name} — the whole pipeline as one script "
+                   f"({datetime.now().strftime('%Y-%m-%d %H:%M')}).", "",
+             "Components in execution order (parameters as set on the canvas):"]
+    for i, n in enumerate(nodes, 1):
+        spec = COMPONENT_REGISTRY.get(n["type"], {})
+        lines.append(f"  {i}. {spec.get('label', n['type'])}  [{n['type']}]  —  {_fmt_params(n)}")
+    if c:
+        lines += ["", "Live Analysis-View settings this would run with:"]
+        for key in ("date", "cell", "files", "chan", "ttl", "detect", "abs_map", "region"):
+            if key in c:
+                lines.append(f"  {key}: {c[key]!r}")
+        if fam in ("gaussian_noise", "checkerboard"):
+            lines.append("  (the region boxes do not enter the STA / STRF: each epoch is binned on the "
+                         "update clock measured from its sync bar)")
+    lines += ["", "Every function below is the code the viewer's ▶ Run executes, copied verbatim from "
+                  "the package", "sources (file:line noted), each listed once at the first component "
+                  "that calls it.", '"""', ""]
+    bar = "# " + "=" * 94
+    lines += [bar, "# HOW THIS PIPELINE IS RUN   (viewer._run_one → neitz.run)", bar]
+    lines += _driver_lines(pipe, fam, c)
+    seen = {}
+    for i, n in enumerate(nodes, 1):
+        spec = COMPONENT_REGISTRY.get(n["type"], {})
+        lines += ["", "", bar, f"# {i}. {spec.get('label', n['type'])}   [{n['type']}]   {_fmt_params(n)}",
+                  f"# {spec.get('help', '')}", bar]
+        code = component_code(n["type"], extra)
+        if not code:
+            lines.append("# (no code listed for this component)")
+        for cc in code:
+            if cc["ref"] in seen:
+                lines.append(f"# {cc['name']}  → already listed under component {seen[cc['ref']]}")
+                continue
+            seen[cc["ref"]] = i
+            where = f"  ({cc['file']}:{cc['line']})" if cc["file"] else ""
+            lines += [f"# --- {cc['name']}{where} ---"]
+            lines += cc["source"].rstrip("\n").split("\n")
+            lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
 def _resolve_ref(ref, extra=None):
     mod_name, _, qual = ref.partition(":")
     mod = (extra or {}).get(mod_name)

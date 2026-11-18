@@ -2369,6 +2369,9 @@ app.layout = html.Div(
             html.Button("🗑 Delete", id="pipe-delete", n_clicks=0, className="pipe-btn"),
             html.Button("▶ Run on current cell", id="pipe-run", n_clicks=0,
                         className="pipe-btn", style={"background": "#1a8c6e", "color": "white"}),
+            html.Button("⟨/⟩ Pipeline code", id="pipe-code-btn", n_clicks=0, className="pipe-btn",
+                        title="the whole pipeline as ONE script: every function it runs, in "
+                              "execution order, line-numbered — and saveable as a .py file"),
             html.Span(id="pipe-msg", style={"fontSize": "12px", "color": "#7fdc9f"}),
         ]),
         # body: palette (left) · canvas (fills)
@@ -2418,6 +2421,35 @@ app.layout = html.Div(
                                "fontSize": "13px", "padding": "4px 10px", "zIndex": 2}),
             html.Div(id="pnode-detail-body", style={"padding": "26px 30px 30px"}),
         ], className="pnode-detail-card", style={"position": "relative", "zIndex": 1}),
+    ]),
+
+    # ===== WHOLE-PIPELINE CODE (one line-numbered script of everything the pipeline runs) =====
+    # Opened by ⟨/⟩ Pipeline code in the pipelines header; closed by ✕ / backdrop / Escape.
+    dcc.Store(id="pipe-code-text"),                       # the generated script (for ⤓ Save .py)
+    html.Div(id="pipe-code-modal", style={"display": "none"}, children=[
+        html.Div(id="pipe-code-backdrop", n_clicks=0,
+                 style={"position": "absolute", "top": 0, "left": 0, "width": "100%",
+                        "height": "100%", "zIndex": 0, "cursor": "zoom-out"}),
+        html.Div([
+            html.Div([
+                html.Div([html.Span("Pipeline code", style={"fontSize": "17px", "fontWeight": "700",
+                                                            "color": "#f0f2f7"}),
+                          html.Span(id="pipe-code-title", style={"fontSize": "13px", "color": "#c8ccd6",
+                                                                 "marginLeft": "10px"}),
+                          html.Div(id="pipe-code-sub", style={"fontSize": "11px", "color": "#8a90a0",
+                                                              "marginTop": "2px"})],
+                         style={"flex": "1"}),
+                html.Button("⤓ Save .py", id="pipe-code-save", n_clicks=0, className="pipe-btn",
+                            title="write this script into the store's pipelines/ folder"),
+                html.Button("✕ close", id="pipe-code-close", n_clicks=0, className="pipe-btn"),
+            ], style={"display": "flex", "alignItems": "flex-start", "gap": "8px",
+                      "padding": "14px 18px 8px", "borderBottom": "1px solid #23262f",
+                      "flex": "0 0 auto"}),
+            html.Div(id="pipe-code-msg", style={"fontSize": "11px", "color": "#7fdc9f",
+                                                "padding": "0 18px", "flex": "0 0 auto"}),
+            html.Div(id="pipe-code-body", style={"flex": "1 1 0", "minHeight": 0, "overflow": "auto",
+                                                 "padding": "6px 12px 14px"}),
+        ], className="pipe-code-card", style={"position": "relative", "zIndex": 1}),
     ]),
 
     # ================= DATA EXPLORER pop-out (dates → cells → files + JSON) =====
@@ -4380,6 +4412,12 @@ app.clientside_callback(
             window._neitzEsc = true;
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' || e.keyCode === 27) {
+                    var pcm = document.getElementById('pipe-code-modal');
+                    if (pcm && pcm.style.display !== 'none') {
+                        var pcc = document.getElementById('pipe-code-close');
+                        if (pcc) { pcc.click(); }
+                        return;
+                    }
                     var nd = document.getElementById('pnode-detail-modal');
                     if (nd && nd.style.display !== 'none') {
                         var ndc = document.getElementById('pnode-detail-close');
@@ -4803,6 +4841,78 @@ app.clientside_callback(
         return '';
     }""",
     Output("pipe-sel-tick", "data"), Input("pipe-selected", "data"), Input("pipe-nodes", "children"))
+
+
+# ---- WHOLE-PIPELINE CODE: one line-numbered script (pipeline.pipeline_script) of everything the
+#      graph runs, in execution order, with the live settings in its header + driver call. ----
+_PCODE_OPEN = {"display": "flex", "position": "fixed", "top": 0, "left": 0, "right": 0,
+               "bottom": 0, "zIndex": 4100, "alignItems": "center", "justifyContent": "center",
+               "padding": "24px", "background": "rgba(6,7,10,0.88)"}
+
+
+def _pipeline_context(sel, files, chan, ttl, detect, absth_map, rstart, rend, run_name):
+    """The live Analysis-View state as `pipeline_script`'s header / driver context."""
+    s = _sel_first(sel) or {}
+    cmdir = None
+    if s:
+        try:
+            cmdir = str(DataStore().cell(s["date"], s["cell"]).dir)
+        except Exception:
+            cmdir = None
+    fl = [os.path.basename(f) for f in (files or [])
+          if f and f.endswith(".abf") and (cmdir is None or f.startswith(cmdir))]
+    return dict(date=s.get("date"), cell=s.get("cell"), files=fl, chan=chan, ttl=ttl,
+                detect=detect, abs_map={os.path.basename(k): v for k, v in (absth_map or {}).items()},
+                region={"start": rstart, "end": rend},
+                run_name=((run_name or "").strip() or None))
+
+
+def _numbered_code(text):
+    """A <pre> with one span per line; viewer.css numbers them with a CSS counter (the numbers are
+    not selectable, so a copy gives clean Python)."""
+    return html.Pre([html.Span(ln + "\n", className="codeline")
+                     for ln in text.rstrip("\n").split("\n")],
+                    className="pcode pcode-numbered")
+
+
+@app.callback(Output("pipe-code-modal", "style"), Output("pipe-code-body", "children"),
+              Output("pipe-code-title", "children"), Output("pipe-code-sub", "children"),
+              Output("pipe-code-text", "data"), Output("pipe-code-msg", "children"),
+              Input("pipe-code-btn", "n_clicks"), Input("pipe-code-close", "n_clicks"),
+              Input("pipe-code-backdrop", "n_clicks"),
+              State("pipe-graph", "data"), State("sel-cell", "data"), State("file", "value"),
+              State("chan", "value"), State("ttl", "value"), State("polarity", "value"),
+              State("method", "value"), State("k", "value"), State("absth", "value"),
+              State("refr", "value"), State("absth-map", "data"), State("region-start", "value"),
+              State("region-end", "value"), State("run-name", "value"), prevent_initial_call=True)
+def pipe_code_toggle(_open, _close, _back, graph, sel, files, chan, ttl, polarity, method, k, absth,
+                     refr, absth_map, rstart, rend, run_name):
+    if ctx.triggered_id != "pipe-code-btn" or not (ctx.triggered and ctx.triggered[0].get("value")):
+        return {"display": "none"}, no_update, no_update, no_update, no_update, ""
+    if not graph or not graph.get("nodes"):
+        return {"display": "none"}, no_update, no_update, no_update, no_update, ""
+    context = _pipeline_context(sel, files, chan, ttl, _live_detect(polarity, method, k, absth, refr),
+                                absth_map, rstart, rend, run_name)
+    text = pipe.pipeline_script(graph, extra={"viewer": sys.modules[__name__]}, context=context)
+    n_fn = sum(1 for ln in text.split("\n") if ln.startswith("# --- "))
+    sub = (f"{len(graph['nodes'])} components in execution order · {n_fn} functions · "
+           f"{len(text.splitlines())} lines · read live from the sources, so this is what ▶ Run executes")
+    return (_PCODE_OPEN, _numbered_code(text), f"— {graph.get('name') or 'untitled'}", sub, text, "")
+
+
+@app.callback(Output("pipe-code-msg", "children", allow_duplicate=True),
+              Input("pipe-code-save", "n_clicks"), State("pipe-code-text", "data"),
+              State("pipe-graph", "data"), prevent_initial_call=True)
+def pipe_code_save(n, text, graph):
+    if not n or not text:
+        return no_update
+    name = (graph or {}).get("name") or "untitled"
+    out = pipe.pipelines_dir() / f"{pipe._slug(name)}_code.py"
+    try:
+        out.write_text(text)
+    except Exception as e:
+        return f"⚠ could not write: {e}"
+    return f"✓ saved {out}"
 
 
 # ---- LIVE evaluation strip. With a node selected: that component's step-through output. Else: the

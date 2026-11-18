@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (181 tests as of 2026-11-18; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (183 tests as of 2026-11-18; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -737,6 +737,17 @@ is Dash + a small JS asset). A pipeline is a saveable graph of **component nodes
   `inspect.getsource` blocks (`component_code`, `viewer:` refs resolved through `extra`), so it can
   never drift from the code; keep CODE_REFS current when a run path changes
   (`test_component_code_is_the_live_source_of_what_runs` resolves every ref).
+- **⟨/⟩ Pipeline code — the WHOLE pipeline as one script** (header button `pipe-code-btn`, James's
+  ask 2026-11-18): `pipeline.pipeline_script(graph, extra, context)` → one line-numbered listing in
+  `#pipe-code-modal` (`_numbered_code`: one span per line, CSS-counter numbers that are not
+  selectable, so a copy pastes clean Python). Layout: a docstring header (components in EXECUTION
+  order via `ordered_nodes` = a stable topological sort along the connections, unconnected nodes
+  last, with their canvas params + the live Analysis-View settings), the exact driver call ▶ Run
+  makes (`_driver_lines`: `run_cell_noise/checkerboard/flicker(...)` with date / cell / checked
+  epochs / detection / filter_s filled in), then every function per component — each ONCE, at the
+  first component that calls it (later uses are a `→ already listed under component k` pointer).
+  `⤓ Save .py` writes `<store>/pipelines/<slug>_code.py` (`pipe-code-text` store holds the text);
+  Escape closes it first in the overlay chain. Tests: `test_pipeline_script_…`, `test_ordered_nodes_…`.
 - **Follow-ups:** the pipeline's own detect/region node params are the editable representation but do
   NOT yet override the live Analysis-View state at run time (live state wins by design); ▶ Run still
   dispatches to `run_cell_*` (the step-through evaluates per node, the run does not); drag-to-add-

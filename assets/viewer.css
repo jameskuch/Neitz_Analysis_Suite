@@ -331,3 +331,12 @@ html, body { margin: 0; }
 .pstep-table th, .pstep-table td { border: 1px solid #2a2f3a; padding: 2px 6px; text-align: left;
     white-space: nowrap; }
 .pstep-table th { background: #1c2029; color: #aab2c5; font-weight: 600; }
+/* whole-pipeline code modal: a wide, tall card with a line-numbered listing (CSS counter; the
+   numbers are not selectable so a copy pastes as clean Python) */
+.pipe-code-card { width: 96%; max-width: 1180px; height: 92vh; display: flex; flex-direction: column;
+  background: #1a1d25; border: 1px solid #363b47; border-radius: 10px;
+  box-shadow: 0 12px 48px rgba(0,0,0,0.6); color: #e3e7ef; }
+.pcode-numbered { counter-reset: line; max-height: none; padding-left: 0; margin: 0; }
+.pcode-numbered .codeline::before { counter-increment: line; content: counter(line);
+  display: inline-block; width: 3.4em; margin-right: 1.1em; padding-right: 0.5em; text-align: right;
+  color: #5c6478; border-right: 1px solid #23262f; user-select: none; -webkit-user-select: none; }
