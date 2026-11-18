@@ -477,6 +477,9 @@ def _strf(graph, node, ctx):
     return dict(summary=f"{res['n_epochs']} epoch(s) · peak check (y={py}, x={px}) @ "
                         f"{strf.peak_time_ms:.1f} ms {sign}",
                 clock=f"{n_rec}/{len(info)} epochs on the measured sync-bar clock",
+                # the whole cube, so a viewer can show ANY check's kernel (or a mean of several)
+                cube=np.asarray(strf.strf, float), time_ms=np.asarray(strf.time_ms, float),
+                peak_yx=(int(py), int(px)),
                 notes=[f"{res['filter_len']} taps at {res['bin_rate']:.2f} Hz (one per update); "
                        f"zero-padded by {ZERO_PAD} bins (≥ the filter, so no circular wrap)",
                        "epochs concatenated in time (all frame↔spike pairs pooled), one FFT per check",

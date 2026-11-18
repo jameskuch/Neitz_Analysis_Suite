@@ -59,6 +59,8 @@ def test_css_keeps_the_pointer_off_the_shading_and_the_axis_strips():
     assert '#time .shapelayer path[style*="pointer-events: all"] { pointer-events: none !important; }' in css
     # the lines' hit-paths are widened to a 24 px grab zone
     assert 'stroke-width: 24px !important' in css.split('path[style*="cursor: move"]')[1].split('}')[0]
+    # the endpoint circles of an editable line (a grab on one re-angles the line) are hidden
+    assert '#time .shapelayer circle[data-line-point] { display: none !important; }' in css
     assert '#time .draglayer .ewdrag, #time .draglayer .wdrag, #time .draglayer .edrag { display: none !important; }' in css
 
 

@@ -1,5 +1,7 @@
 """Analysis View: the lower panels follow the pipeline (`lower_family`) and a file's default region
 comes from its stimulus (`stim_window`)."""
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -109,3 +111,64 @@ def test_reveal_in_file_manager_per_platform(monkeypatch):
     assert viewer.reveal_in_file_manager("/s/p/a.py").startswith("open failed")
     # the saved-listing path follows the pipeline name
     assert viewer._pipeline_code_path({"name": "Gaussian-noise STA"}).name == "Gaussian-noise_STA_code.py"
+
+
+def _strf_out():
+    cube = np.zeros((3, 4, 5))
+    cube[1, 2] = [0, 1.0, 0.5, 0, 0]              # the peak check, ON at lag 1
+    cube[0, 0] = [0, 0, -0.8, 0, 0]               # an OFF check at lag 2
+    cube[2, 3] = [0, 0.2, 0, 0, 0]
+    return {"cube": cube, "time_ms": np.array([0, 16.7, 33.4, 50.1, 66.8]), "peak_yx": (1, 2),
+            "summary": "1 epoch(s) · peak check (y=1, x=2) @ 16.7 ms ON", "clock": "1/1 epochs on the clock",
+            "blocks": [{"kind": "heatmap", "title": "spatial RF", "z": cube[:, :, 1], "mark": (1, 2)}]}
+
+
+def test_strf_checks_from_events():
+    f = viewer.strf_checks_from_events
+    # the sink (assets/strfpick.js): a held click → that check; a double-click → [] = the peak
+    assert f("strf-pick-sink.value", "check|1|2|7", None, 3, 4) == [(1, 2)]
+    assert f("strf-pick-sink.value", "check|9|2|8", None, 3, 4) is None                     # off-grid
+    assert f("strf-pick-sink.value", "check|a|b|9", None, 3, 4) is None
+    assert f("strf-pick-sink.value", "peak|3", None, 3, 4) == []
+    assert f("strf-pick-sink.value", "", None, 3, 4) is None
+    # a box selection → every check inside; an EMPTY one (Plotly re-emits those) → no change
+    sel = {"points": [{"x": 0, "y": 0}, {"x": 3, "y": 2}, {"x": 3, "y": 2}, {"curveNumber": 1}]}
+    assert f("fft.selectedData", None, sel, 3, 4) == [(0, 0), (2, 3)]
+    assert f("fft.selectedData", None, {"points": [{"x": 2.4, "y": 0.6}]}, 3, 4) == [(1, 2)]  # rounds
+    assert f("fft.selectedData", None, {"points": []}, 3, 4) is None
+    assert f("fft.selectedData", None, None, 3, 4) is None
+    assert f("fft.clickData", "check|1|2|0", None, 3, 4) is None                              # not wired
+    js = (Path(viewer.__file__).parent / "assets" / "strfpick.js").read_text()
+    assert "plotly_deselect" in js and "plotly_click" in js and "strf-pick-sink" in js
+    # both fired in one tick (a double-click that also clears a box selection): the sink wins
+    g = viewer.strf_pick_checks
+    assert g(["fft.selectedData", "strf-pick-sink.value"], "peak|4", None, 3, 4) == []
+    assert g(["strf-pick-sink.value", "fft.selectedData"], "check|1|2|5", {"points": []}, 3, 4) == [(1, 2)]
+    assert g(["fft.selectedData"], "peak|4", sel, 3, 4) == [(0, 0), (2, 3)]                   # a box alone
+    assert g(["fft.selectedData"], "peak|4", {"points": []}, 3, 4) is None
+    assert g(["strf-pick-sink.value"], "", None, 3, 4) is None
+    assert g([], "peak|1", None, 3, 4) is None
+
+
+def test_strf_panels_single_check_mean_and_peak_fallback():
+    out = _strf_out()
+    left, right = viewer._strf_panels(out)                          # no choice → the peak check
+    assert "(y=1, x=2) = peak check" in right.layout.title.text and "[ON]" in right.layout.title.text
+    assert "peak 16.7 ms" in right.layout.title.text
+    assert left.layout.dragmode == "select" and "double-click" in left.layout.xaxis.title.text
+    kinds = [tr.type for tr in left.data]
+    assert kinds == ["heatmap", "scatter", "scatter"]                # map · pickable grid · the X mark(s)
+    assert len(left.data[1].x) == 12 and left.data[1].marker.opacity == 0
+    assert list(left.data[2].x) == [2] and list(left.data[2].y) == [1]
+    # one chosen check → its own kernel, its own peak and sign
+    _, r1 = viewer._strf_panels(out, [(0, 0)])
+    assert "(y=0, x=0)" in r1.layout.title.text and "[OFF]" in r1.layout.title.text
+    assert "peak 33.4 ms" in r1.layout.title.text and len(r1.data) >= 1
+    # several → the mean, each one faint behind it, every mark on the map
+    l2, r2 = viewer._strf_panels(out, [(0, 0), (1, 2), (2, 3), (9, 9)])
+    assert "mean of 3 checks (y 0–2, x 0–3)" in r2.layout.title.text
+    named = [tr.name for tr in r2.data if tr.name]
+    assert named[-1] == "mean" and len(named) == 4
+    mean_y = np.asarray(r2.data[-1].y)
+    assert np.allclose(mean_y, (out["cube"][0, 0] + out["cube"][1, 2] + out["cube"][2, 3]) / 3)
+    assert sorted(zip(l2.data[2].y, l2.data[2].x)) == [(0, 0), (1, 2), (2, 3)]

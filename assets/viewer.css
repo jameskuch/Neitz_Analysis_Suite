@@ -262,6 +262,11 @@ html, body { margin: 0; }
    below the line panned the whole view instead of moving the boundary. Hide them: zooming stays on
    the plot area (drag box, wheel) + double-click reset; the y strips are no-ops (fixedrange). */
 #time .draglayer .ewdrag, #time .draglayer .wdrag, #time .draglayer .edrag { display: none !important; }
+/* An editable LINE shape also gets two endpoint circles (data-line-point="start-point" / "end-point");
+   a grab on one of them RE-ANGLES the line ("the connector goes diagonal", James 2026-11-18) instead
+   of moving it — and the short gap handles are nearly all endpoint. Hide the circles: every grab then
+   lands on the hit-path, which Plotly treats as "move", so a boundary only ever slides sideways. */
+#time .shapelayer circle[data-line-point] { display: none !important; }
 
 /* ============ Analysis Pipelines editor ============ */
 .pipe-btn { font-size: 12px; padding: 3px 9px; cursor: pointer; border: 1px solid #3a3f4c;

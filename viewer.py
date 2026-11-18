@@ -1711,10 +1711,23 @@ def _block_figure(block, title=None, dark=False, height=None):
         z = np.asarray(block["z"], float)
         vmax = float(np.max(np.abs(z))) if z.size else 1.0
         fig.add_trace(go.Heatmap(z=z, colorscale="RdBu", reversescale=True, zmin=-(vmax or 1.0),
-                                 zmax=(vmax or 1.0), colorbar=dict(thickness=10)))
-        if block.get("mark"):
-            py, px = block["mark"]
-            fig.add_trace(go.Scatter(x=[px], y=[py], mode="markers", showlegend=False,
+                                 zmax=(vmax or 1.0), colorbar=dict(thickness=10),
+                                 hovertemplate="y=%{y} x=%{x}<br>%{z:.3f}<extra></extra>"))
+        if block.get("pickable") and z.ndim == 2:
+            # an invisible marker on every check: clicks / box-selections land on these points
+            # (a heatmap cell has no selection events), hover stays with the heatmap
+            n_y, n_x = z.shape
+            gy, gx = np.mgrid[0:n_y, 0:n_x]
+            fig.add_trace(go.Scatter(x=gx.ravel(), y=gy.ravel(), mode="markers", showlegend=False,
+                                     hoverinfo="skip", name="checks",
+                                     marker=dict(size=16, opacity=0, symbol="square"),
+                                     selected=dict(marker=dict(opacity=0)),
+                                     unselected=dict(marker=dict(opacity=0))))
+            fig.update_layout(dragmode="select")
+        marks = list(block.get("marks") or ([block["mark"]] if block.get("mark") else []))
+        if marks:
+            fig.add_trace(go.Scatter(x=[m[1] for m in marks], y=[m[0] for m in marks], mode="markers",
+                                     showlegend=False, hoverinfo="skip",
                                      marker=dict(symbol="x", size=13, color="black",
                                                  line=dict(width=2, color="black"))))
         fig.update_yaxes(autorange="reversed", title_text="y check", scaleanchor="x")
@@ -2346,6 +2359,7 @@ app.layout = html.Div(
     dcc.Store(id="pipe-armed"),                           # {node,port} of a "clicked output" awaiting a target
     dcc.Store(id="pnode-detail"),                         # node id whose breakout panel is open (None = closed)
     dcc.Store(id="pipe-selected"),                        # node id being stepped through (None = show sinks)
+    dcc.Input(id="strf-pick-sink", value="", style={"display": "none"}),  # JS: "check|y|x|n" / "peak|n" (STRF map)
     dcc.Store(id="pipe-sel-tick"),                        # clientside selected-node highlight sink
     dcc.Input(id="pipe-drag-sink", value="", style={"display": "none"}),     # JS: "node|x|y" on drag-end
     dcc.Input(id="pipe-connect-sink", value="", style={"display": "none"}),  # JS: "fromN|fromP|toN|toP" on connect
@@ -2809,6 +2823,97 @@ def lower_family(run_pipeline, files):
     return "sq_wave"
 
 
+def strf_checks_from_events(prop, sink, selected, n_y, n_x):
+    """Which checks a map event picked, or ``None`` for "leave the choice alone". A box / lasso
+    selection (`selectedData`) = every check inside it — an EMPTY selection is ignored, because
+    Plotly re-emits one each time the callback hands back a new figure. The sink written by
+    assets/strfpick.js carries a click (``check|y|x|nonce`` → that one check) or a double-click
+    (``peak|nonce`` → ``[]`` = back to the peak check)."""
+    prop = str(prop)
+    if prop.endswith("selectedData"):
+        out = []
+        for pt in (selected or {}).get("points") or []:
+            try:
+                y, x = int(round(float(pt["y"]))), int(round(float(pt["x"])))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if 0 <= y < n_y and 0 <= x < n_x and (y, x) not in out:
+                out.append((y, x))
+        return out or None
+    if prop.startswith("strf-pick-sink"):
+        parts = str(sink or "").split("|")
+        if parts[0] == "peak":
+            return []
+        if parts[0] == "check" and len(parts) >= 3:
+            try:
+                y, x = int(parts[1]), int(parts[2])
+            except ValueError:
+                return None
+            return [(y, x)] if (0 <= y < n_y and 0 <= x < n_x) else None
+    return None
+
+
+def strf_pick_checks(triggered_props, sink, selected, n_y, n_x):
+    """`strf_checks_from_events` over EVERYTHING that fired at once. A double-click with a box
+    selection active changes `selectedData` (→ null) AND writes the sink in the same tick, and Dash
+    then runs the callback once with both in `ctx.triggered` — the sink (a click or the
+    double-click) is the user's intent, so it wins whenever it is among the triggers."""
+    props = [str(p) for p in (triggered_props or [])]
+    if sink and any(p.startswith("strf-pick-sink") for p in props):
+        return strf_checks_from_events("strf-pick-sink.value", sink, None, n_y, n_x)
+    if any(p.endswith("selectedData") for p in props):
+        return strf_checks_from_events("fft.selectedData", None, selected, n_y, n_x)
+    return None
+
+
+def _strf_panels(out, checks=None):
+    """The Analysis View's STRF pair from a live `checkerboard` output: LEFT the peak-lag spatial map
+    (pickable: click a check, drag a box for several, double-click = back to the peak) with an X
+    on every chosen check; RIGHT the chosen check's temporal kernel, or the mean of several (each
+    one faint behind it)."""
+    cube, t = np.asarray(out["cube"], float), np.asarray(out["time_ms"], float)
+    n_y, n_x = cube.shape[:2]
+    peak = tuple(int(v) for v in out["peak_yx"])
+    sel = sorted({(int(y), int(x)) for y, x in (checks or []) if 0 <= y < n_y and 0 <= x < n_x}) or [peak]
+    kernels = np.array([cube[y, x] for y, x in sel])
+    mean = kernels.mean(axis=0)
+    pk = int(np.argmax(np.abs(mean)))
+    sign = "OFF" if mean[pk] < 0 else "ON"
+    if len(sel) == 1:
+        where = f"(y={sel[0][0]}, x={sel[0][1]})" + (" = peak check" if sel[0] == peak else "")
+    else:
+        ys, xs = sorted({y for y, _ in sel}), sorted({x for _, x in sel})
+        where = f"mean of {len(sel)} checks (y {ys[0]}–{ys[-1]}, x {xs[0]}–{xs[-1]})"
+    traces = []
+    if len(sel) > 1:
+        traces += [{"x": t, "y": kernels[i], "name": f"y{y} x{x}", "width": 0.7, "color": "#b8c2d6"}
+                   for i, (y, x) in enumerate(sel)]
+    traces.append({"x": t, "y": mean, "name": ("mean" if len(sel) > 1 else where), "width": 2.0,
+                   "color": "#1f77b4"})
+    right = _block_figure({"kind": "traces", "x_title": "lag (ms)", "y_title": "filter",
+                           "traces": traces, "vlines": [float(t[pk])]},
+                          title=f"temporal filter @ {where} — peak {t[pk]:.1f} ms [{sign}]"
+                                + (f"  ·  {out['clock']}" if out.get("clock") else ""))
+    hm = next((b for b in out.get("blocks", []) if b.get("kind") == "heatmap"), None)
+    if hm is None:
+        return blank_fig("no spatial map"), right
+    left = _block_figure(dict(hm, marks=sel, mark=None, pickable=True),
+                         title=f"live STRF · {out.get('summary', '')}")
+    left.update_xaxes(title_text="x check     (click a check · drag a box for several · "
+                                 "double-click = back to the peak)")
+    return left, right
+
+
+def _pipeline_filter_s(run_pipeline):
+    """The STA filter length the chosen pipeline carries (1.0 s without one)."""
+    if run_pipeline:
+        try:
+            return pipe.run_kwargs(pipe.load_pipeline(run_pipeline) or {}).get("filter_s", 1.0)
+        except Exception:
+            pass
+    return 1.0
+
+
 def seed_panels(fam, files, chan, ttl_name, detect, abs_map, run_pipeline=None):
     """The Analysis View's lower panels for an STA / STRF pipeline: the LIVE result of the checked
     files (what ▶ Run would save) — STA: the linear filter (per-epoch faint, average bold) | its
@@ -2816,13 +2921,9 @@ def seed_panels(fam, files, chan, ttl_name, detect, abs_map, run_pipeline=None):
     The second title carries the spikes↔frames evidence (how many epochs sit on a measured clock)."""
     if not files:
         return blank_fig("check seeded files"), blank_fig("")
-    filter_s = 1.0
-    if run_pipeline:
-        try:
-            filter_s = pipe.run_kwargs(pipe.load_pipeline(run_pipeline) or {}).get("filter_s", 1.0)
-        except Exception:
-            pass
-    out = live_family_output(fam, files, chan, ttl_name, detect, abs_map, filter_s)
+    out = live_family_output(fam, files, chan, ttl_name, detect, abs_map, _pipeline_filter_s(run_pipeline))
+    if fam == "checkerboard" and "cube" in out:
+        return _strf_panels(out)
     figs = [b for b in out["blocks"] if b.get("kind") in ("traces", "heatmap")]
     if not figs:
         err = next((b.get("error") for b in out["blocks"] if b.get("kind") == "error"), "no result")
@@ -2891,6 +2992,40 @@ def render(files, chan, ttl_name, polarity, method, k, absth, refr, rstart, rend
         tf = no_update if ctx.triggered_id == "run-pipeline" else time_fig
         return tf, left, right, readout, _HIDDEN, _HIDDEN, _HIDDEN
     return time_fig, fft_fig, isi_fig, readout, _FFT_OV_BIN, _FFT_OV_INPUT, _ISI_OV_BIN
+
+
+# ---- STRF map interaction: click a check / box-select several / double-click to clear → the right
+#      panel shows that kernel (or the mean) and the map marks the choice. Uses the cached live
+#      result, so nothing is recomputed. Only acts while the lower panels show a checkerboard.
+#      (Clicks and the double-click arrive through #strf-pick-sink from assets/strfpick.js — see
+#      there for why Dash's clickData is not used.) ----
+@app.callback(Output("fft", "figure", allow_duplicate=True), Output("isi", "figure", allow_duplicate=True),
+              Input("fft", "selectedData"), Input("strf-pick-sink", "value"),
+              State("run-pipeline", "value"), State("file", "value"), State("chan", "value"),
+              State("ttl", "value"), State("polarity", "value"), State("method", "value"),
+              State("k", "value"), State("absth", "value"), State("refr", "value"),
+              State("absth-map", "data"), prevent_initial_call=True)
+def strf_pick(selected, sink, run_pipeline, files, chan, ttl_name, polarity, method, k, absth, refr,
+              absth_map):
+    props = [t.get("prop_id", "") for t in (ctx.triggered or [])]
+    if all(p.startswith("strf-pick-sink") for p in props) and not sink:
+        return no_update, no_update                  # the sink's initial empty value
+    files = [f for f in (files or []) if f and loadable(f)]
+    if not files or lower_family(run_pipeline, files) != "checkerboard":
+        return no_update, no_update
+    try:
+        out = live_family_output("checkerboard", files, chan, ttl_name,
+                                 _live_detect(polarity, method, k, absth, refr), absth_map,
+                                 _pipeline_filter_s(run_pipeline))
+    except Exception:
+        return no_update, no_update
+    if "cube" not in out:
+        return no_update, no_update
+    n_y, n_x = np.asarray(out["cube"]).shape[:2]
+    checks = strf_pick_checks(props, sink, selected, n_y, n_x)            # [] = the peak, None = no change
+    if checks is None:
+        return no_update, no_update
+    return _strf_panels(out, checks)
 
 
 # Dragging a start/end boundary line (shapes[0]=start, shapes[1]=end, both editable) writes the new x

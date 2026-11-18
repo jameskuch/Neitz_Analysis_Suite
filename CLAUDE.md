@@ -13,7 +13,7 @@ productive immediately. Keep it current when the architecture changes.
 - **GUI**: `/Users/j/miniconda3/bin/python viewer.py` → http://127.0.0.1:8050
 - **Desktop app** (double-click → native window, NOT a browser tab): `NeitzAnalysisSuite.app`
   (macOS) / a Desktop shortcut (Windows 11) launches `neitz_app.py`. See **Desktop app** below.
-- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (184 tests as of 2026-11-18; synthetic
+- **Tests**: `/Users/j/miniconda3/bin/python -m pytest -q` (186 tests as of 2026-11-18; synthetic
   tests run anywhere, real-`.abf` tests skip if store data is absent).
 - **CLI**: `neitz cell <date> <cell>` | `neitz flicker|spikes|noise|mirror …`
   (after `pip install -e ".[gui]"`).
@@ -360,7 +360,12 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   spanning the GAP between the two subplots (`_subplot_gap` reads the yaxis domains) — James reaches
   for a boundary there; `drag_region` maps them onto the same boxes (format B picks whichever twin
   differs from the box's current value). Every hit-path is widened to 24 px by viewer.css
-  (`stroke-width: 24px !important` on the `cursor: move` paths) — Plotly's 10 px was easy to miss. The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the
+  (`stroke-width: 24px !important` on the `cursor: move` paths) — Plotly's 10 px was easy to miss.
+  TRAP 3 (James, in the .app, 2026-11-18): an editable line shape also gets two endpoint CIRCLES
+  (`circle[data-line-point]`); Plotly's `updateDragMode` turns a grab on one into
+  `resize-over-start/end-point`, which RE-ANGLES the line ("the connector goes diagonal") — and a
+  short gap handle is nearly all endpoint. viewer.css hides the circles on `#time`, so every grab
+  lands on the hit-path = "move" (a boundary only ever slides sideways). The `render` callback ignores a `shapes[…]` relayout (returns `no_update`) so the
   live drag isn't redrawn with the stale region and snapped back. Editing the region reverts the view
   to the full window (region-start/end are in the `uirevision` hash) — a zoom-preserving drag would
   need a separate zoom-tracking store (known follow-up).
@@ -378,7 +383,22 @@ deletion, or store code, preserve these invariants — and run `pytest -k integr
   same engine as ▶ Run: measured clock, the run's bins per update; cached in `_SEED_CACHE` on files /
   channels / detection / filter_s, so zoom, region and nudge never recompute it; overlays hidden). A
   zoom (`trig == "time"`) returns `no_update` for the lower pair; a pipeline change leaves the time
-  graph alone. The time graph (spikes + frame-sync) is unchanged.
+  graph alone. The time graph (spikes + frame-sync) is unchanged. **STRF map is interactive**
+  (`strf_pick`, 2026-11-18): the live checkerboard output carries the whole kernel cube
+  (`stepwise._strf` → `cube`, `time_ms`, `peak_yx`); `_strf_panels(out, checks)` draws the peak-lag
+  map with an invisible marker grid (`pickable`, `dragmode="select"`) and an X on every chosen
+  check, and the right panel shows that check's kernel or the MEAN of several (each faint behind
+  it). Click = one check, drag a box = several, double-click = back to the peak
+  (`strf_checks_from_events`: box = `selectedData`; a click and the double-click come through
+  `#strf-pick-sink` from `assets/strfpick.js`, NOT Dash's clickData). Why the detour (2026-11-18):
+  a double-click in select drag-mode emits click · deselect · click, so the trailing clickData
+  overrode the reset; Dash's `selectedData = null` fires no callback when nothing was selected; and
+  every figure the callback returns makes Plotly re-emit an EMPTY `plotly_selected`, which read as
+  "clear" — so the JS holds a click for 350 ms (Plotly's double-click window), a deselect writes
+  `peak|n` and ignores the clicks around it, and the Python side ignores empty selections (`None`
+  = leave the choice alone). The box must be DRAGGED (mouse moves). What the right
+  panel shows by default: the kernel of the peak check from ALL epochs POOLED (concatenated in
+  time, one reverse correlation) — not an average of per-epoch filters.
 - **ISI histogram** honors the "bin (ms)" box (`train-bin`): `xbins` size = the ms value; 0 → auto
   (60 bins). (That box also drives the spike-train row-1 view when "show binned spikes" is on.)
 - **Group → one average** (files panel checkbox `#group-avg`, needs 3+ checked): `build_figures`
